@@ -220,7 +220,7 @@ class profileHMM(pg.HiddenMarkovModel):
         super().bake(*args, **kwargs)
 
     def viterbi(self, sequence, **kwargs):
-        p, path = super().viterbi(sequence, **kwargs)
+        p, path = super().viterbi(np.clip(sequence, self.pm_base.model_min, self.pm_base.model_max), **kwargs)
         if path is not None:
             path = [x[1].name for x in path if x[0] < self.silent_start]
             p_nrm = p / len(path)
@@ -261,9 +261,11 @@ class signal_alignment():
         return dist, begin, end
 
     def map(self, querry, nrm_signal):
+        algn_dist, algn_begin, algn_end = self.pos(querry, nrm_signal)
+        if algn_end - algn_begin > (len(querry) * 15):
+            return None
         pHMM = profileHMM(querry, self.pm, std_scale=2.0)
         pHMM.bake(merge='None')
-        algn_dist, algn_begin, algn_end = self.pos(querry, nrm_signal)
         hmm_dist, path = pHMM.viterbi(nrm_signal[algn_begin:algn_end])
         event_means = self.pm.generate_signal(querry, samples=1)
         event_length = np.zeros(len(querry), dtype=np.int32)
@@ -286,7 +288,10 @@ class signal_alignment():
         for i, (slice_begin, slice_end) in enumerate(zip(range(0,len(sequence)-slice_width, slice_width),
                                           range(slice_width, len(sequence), slice_width))):
             slice_sequence = sequence[slice_begin:slice_end]
-            hmm_dist, event_dist, event_lengths, event_values = self.map(slice_sequence, nrm_signal)
+            mapping = self.map(slice_sequence, nrm_signal)
+            if not mapping:
+                continue
+            hmm_dist, event_dist, event_lengths, event_values = mapping
             slices.append((id + '_' + str(i).rjust(4,'0'),
                            slice_sequence,
                            event_lengths, event_values,
@@ -439,12 +444,15 @@ Available commands are:
         def fa_parser(iterable):
             fa_iter = iter(iterable)
             while True:
-                name = next(fa_iter).strip()
-                ID = name[1:].split()[0]
-                sequence = next(fa_iter).upper()
-                yield ID, sequence
+                try:
+                    name = next(fa_iter).strip()
+                    ID = name[1:].split()[0]
+                    sequence = next(fa_iter).upper()
+                    yield ID, sequence
+                except StopIteration:
+                    return
         with open(args.sequences, 'r') as fp_fa:
-            for ID, sequence in tqdm(fa_parser(fp_fa), desc='Processing ', unit='read', ncols=0):
+            for ID, sequence in tqdm(fa_parser(fp_fa), desc='Processing:', ncols=0, unit='read'):
                 seq_queue.put((ID, sequence))
         for _ in range(args.t):
             seq_queue.put(None)

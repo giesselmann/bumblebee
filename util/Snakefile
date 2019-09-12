@@ -64,9 +64,7 @@ rule segmentation:
     shadow: 'minimal'
     shell:
         """
-        if [ $(pwd) = "/project/minionmethyl/bumblebee/J1_TKOlike" ]; then exit -1; fi
         /project/minion/bin/samtools view -bF 2308 {input.bam} | /project/minion/bin/bedtools bamtobed -i stdin | /project/minion/bin/bedtools getfasta -fi {input.genome} -bed stdin -name -s | sed -r 's/\(.\)//' > sequences.fa
-        (cat sequences.fa | paste - - | cut -f1 | head) || true
         {config[py_env]}/bin/python3 {config[segmentation_script]} align {config[pore_model]} sequences.fa {input.raw} {output.hdf5} --t {threads}
         """
 
