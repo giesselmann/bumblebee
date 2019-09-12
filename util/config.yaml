@@ -1,0 +1,10 @@
+# Raw sequencing data parent directory containing one folder per flow cell
+storage_data_raw : /project/miniondata/raw
+segmentation_script : /project/miniondev/src/bumblebee/util/segmentation.py
+pore_model : /project/miniondev/src/bumblebee/util/r9_4_450bps.mpi.model
+py_env : /project/miniondev/virtual/tf_gpu
+
+references:
+    mm9:
+        genome: /project/bioinf_meissner/references/mm9/mm9.fa
+        chr_sizes: /project/bioinf_meissner/references/mm9/mm9.chrom.sizes

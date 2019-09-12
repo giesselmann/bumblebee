@@ -25,3 +25,73 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
+import os, sys
+from snakemake.io import glob_wildcards
+from snakemake.utils import min_version
+
+
+min_version("5.4.0")
+configfile: "config.yaml"
+localrules: merge_segments
+
+
+
+
+# append username to shadow prefix if not present
+if hasattr(workflow, "shadow_prefix") and workflow.shadow_prefix:
+    shadow_prefix = workflow.shadow_prefix
+    if not os.environ['USER'] in shadow_prefix:
+        shadow_prefix = os.path.join(shadow_prefix, os.environ['USER'])
+        print("[INFO] Shadow prefix is changed from {p1} to {p2} to be user-specific".format(
+            p1=workflow.shadow_prefix, p2=shadow_prefix), file=sys.stderr)
+    workflow.shadow_prefix = shadow_prefix
+    print("Shadow prefix: " + shadow_prefix, file=sys.stderr)
+
+
+
+rule segmentation:
+    input:
+        raw = lambda wildcards : '{}/{{runname}}/reads/{{batch}}.fast5'.format(config['storage_data_raw']),
+        bam = "alignments/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.bam",
+        bai = "alignments/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.bam.bai",
+        genome = lambda wildcards: config['references'][wildcards.reference]['genome']
+    output:
+        hdf5 = "events/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.hdf5"
+    threads: 32
+    resources:
+        mem_mb = lambda wildcards, threads, attempt : int(threads * 2000),
+        time_min = lambda wildcards, threads, attempt : int((7680 / threads) * attempt)
+    shadow: 'minimal'
+    shell:
+        """
+        if [ $(pwd) = "/project/minionmethyl/bumblebee/J1_TKOlike" ]; then exit -1; fi
+        /project/minion/bin/samtools view -bF 2308 {input.bam} | /project/minion/bin/bedtools bamtobed -i stdin | /project/minion/bin/bedtools getfasta -fi {input.genome} -bed stdin -name -s | sed -r 's/\(.\)//' > sequences.fa
+        (cat sequences.fa | paste - - | cut -f1 | head) || true
+        {config[py_env]}/bin/python3 {config[segmentation_script]} align {config[pore_model]} sequences.fa {input.raw} {output.hdf5} --t {threads}
+        """
+
+
+rule merge_segments:
+    input:
+        hdf5 = lambda wildcards : expand("events/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.hdf5",
+                        aligner = wildcards.aligner,
+                        sequence_workflow = wildcards.sequence_workflow,
+                        tag = wildcards.tag,
+                        runname = wildcards.runname,
+                        batch = glob_wildcards(
+                            "alignments/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{{batch}}.{reference}.bam".format(
+                                aligner = wildcards.aligner,
+                                sequence_workflow = wildcards.sequence_workflow,
+                                tag = wildcards.tag,
+                                runname = wildcards.runname,
+                                reference = wildcards.reference))[0],
+                        reference = wildcards.reference)
+    output:
+        hdf5 = "events/{aligner}/{sequence_workflow}/batches/{tag, [^\/]*}/{runname, [^\/]*}.{reference}.hdf5"
+    params:
+        input_dir = lambda wildcards, input : os.path.dirname(input.hdf5[0])
+    shell:
+        """
+        source {config[py_env]}/bin/activate
+        python3 {config[segmentation_script]} merge {params.input_dir} {output.hdf5}
+        """
