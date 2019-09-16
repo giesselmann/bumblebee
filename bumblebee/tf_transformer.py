@@ -47,8 +47,7 @@ def positional_encoding(seq_len, depth, d_model, max_timescale=10000):
     # apply cos to odd indices in the array; 2i+1
     rads[:,:, 1::2] = np.cos(pos_rads[:, :, 1::2]) + np.cos(depth_rads[:, :, 1::2])
     pos_encoding = rads[np.newaxis, ...]
-    # (1, depth, seq_len, d_model)
-    return tf.cast(pos_encoding, dtype=tf.float32)
+    return tf.cast(pos_encoding, dtype=tf.float32) # (1, depth, seq_len, d_model)
 
 
 
@@ -208,36 +207,159 @@ class DecoderLayer(tf.keras.layers.Layer):
 
 
 
+class ACT(tf.keras.layers.Layer):
+    def __init__(self, ffn_preprocess, ffn_transformation,
+                 max_iterations=10, halt_epsilon=0.01):
+        super(ACT, self).__init__()
+        self.ffn_preprocess = ffn_preprocess
+        self.ffn_transformation = ffn_transformation
+        self.max_iterations = max_iterations
+        self.halt_epsilon = halt_epsilon
+
+    def call(self, state, training, mask):
+        threshold = 1.0 - self.halt_epsilon
+        state_shape_static = state.get_shape()
+        state_slice = slice(0, 2)
+        update_shape = tf.shape(state)[state_slice]
+        halting_probability = tf.zeros(update_shape, name="halting_probability")
+        remainders = tf.zeros(update_shape, name="remainder")
+        n_updates = tf.zeros(update_shape, name="n_updates")
+        previous_state = tf.zeros_like(state, name="previous_state")
+        step = tf.constant(0, dtype=tf.int32)
+
+        def ut_function(state, step, halting_probability, remainders, n_updates, previous_state):
+            """implements act (position-wise halting).
+            Args:
+              state: 3-D Tensor: [batch_size, length, channel]
+              step: indicates number of steps taken so far
+              halting_probability: halting probability
+              remainders: act remainders
+              n_updates: act n_updates
+              previous_state: previous state
+            Returns:
+              transformed_state: transformed state
+              step: step+1
+              halting_probability: halting probability
+              remainders: act remainders
+              n_updates: act n_updates
+              new_state: new state
+            """
+            # add time and depth encoding
+            state = self.ffn_preprocess(state, step)
+            with tf.variable_scope("sigmoid_activation_for_pondering"):
+                p = tf.keras.layers.Dense(1,
+                activation=tf.nn.sigmoid,
+                use_bias=True,
+                bias_initializer=tf.constant_initializer(0.1))(state)
+                # maintain position-wise probabilities
+                p = tf.squeeze(p, axis=-1)
+
+            # Mask for inputs which have not halted yet
+            still_running = tf.cast(tf.less(halting_probability, 1.0), tf.float32)
+            # Mask of inputs which halted at this step
+            new_halted = tf.cast(
+                tf.greater(halting_probability + p * still_running, threshold),
+                tf.float32) * still_running
+            # Mask of inputs which haven't halted, and didn't halt this step
+            still_running = tf.cast(
+                tf.less_equal(halting_probability + p * still_running, threshold),
+                tf.float32) * still_running
+            # Add the halting probability for this step to the halting
+            # probabilities for those input which haven't halted yet
+            halting_probability += p * still_running
+            # Compute remainders for the inputs which halted at this step
+            remainders += new_halted * (1 - halting_probability)
+            # Add the remainders to those inputs which halted at this step
+            halting_probability += new_halted * remainders
+            # Increment n_updates for all inputs which are still running
+            n_updates += still_running + new_halted
+            # Compute the weight to be applied to the new state and output
+            # 0 when the input has already halted
+            # p when the input hasn't halted yet
+            # the remainders when it halted this step
+            update_weights = tf.expand_dims(
+                p * still_running + new_halted * remainders, -1)
+            # apply transformation on the state
+            transformed_state = self.ffn_transformation(state, training, mask)
+            # update running part in the weighted state and keep the rest
+            new_state = ((transformed_state * update_weights) +
+                         (previous_state * (1 - update_weights)))
+            # Add in the weighted state
+            new_state = (transformed_state * update_weights) + previous_state
+
+            # remind TensorFlow of everything's shape
+            transformed_state.set_shape(state_shape_static)
+            for x in [halting_probability, remainders, n_updates]:
+              x.set_shape(state_shape_static[state_slice])
+            new_state.set_shape(state_shape_static)
+            step += 1
+            return (transformed_state, step, halting_probability, remainders, n_updates,
+                    new_state)
+
+        # While loop stops when this predicate is FALSE.
+        # Ie all (probability < 1-eps AND counter < N) are false.
+        def should_continue(u0, u1, halting_probability, u2, n_updates, u3):
+            del u0, u1, u2, u3
+            return tf.reduce_any(
+                    tf.logical_and(
+                        tf.less(halting_probability, threshold),
+                        tf.less(n_updates, self.max_iterations)))
+
+        # Do while loop iterations until predicate above is false.
+        (_, _, _, remainder, n_updates, new_state) = tf.while_loop(
+          should_continue, ut_function,
+          (state, step, halting_probability, remainders, n_updates, previous_state),
+          maximum_iterations=self.max_iterations + 1,
+          parallel_iterations=1,
+          swap_memory=training,
+          back_prop=training)
+
+        ponder_times = n_updates
+        remainders = remainder
+        return new_state, (ponder_times, remainders)
+
+
+
+
+
 class Encoder(tf.keras.layers.Layer):
-    def __init__(self, num_layers, d_model, num_heads, dff, input_vocab_size,
+    def __init__(self, max_iterations, d_model, num_heads, dff,
+                 halt_epsilon=0.01, time_penalty=0.01,
                  rate=0.1):
         super(Encoder, self).__init__()
         self.d_model = d_model
-        self.num_layers = num_layers
-        self.pos_encoding = positional_encoding(input_vocab_size, self.d_model)
-        self.enc_layers = [EncoderLayer(d_model, num_heads, dff, rate)
-                           for _ in range(num_layers)]
+        self.max_iterations = max_iterations
+        self.halt_epsilon = halt_epsilon
+        self.time_penalty = time_penalty
+        self.enc_layer = EncoderLayer(d_model, num_heads, dff, rate)
         self.dropout = tf.keras.layers.Dropout(rate)
 
+    def build(self, input_shape):
+        _, sequence_length, input_dim = input_shape
+        self.pos_encoding = positional_encoding(int(sequence_length), self.max_iterations, int(input_dim))
+        ffn_preprocess = lambda x, step, self=self : x + self.pos_encoding[:,step,:,:]
+        ffn_transform = lambda x, training, mask : self.enc_layer(x, training, mask)
+        self.act = ACT(ffn_preprocess, ffn_transform,
+                        max_iterations=self.max_iterations, halt_epsilon=self.halt_epsilon)
+
     def call(self, x, training, mask):
-        seq_len = tf.shape(x)[1]
-        # adding position and depth encoding.
-        x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
-        x += self.pos_encoding[:, :seq_len, :]
-        x = self.dropout(x, training=training)
-        for i in range(self.num_layers):
-          x = self.enc_layers[i](x, training, mask)
-        return x  # (batch_size, input_seq_len, d_model)
+        state = x
+        state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+        new_state, (ponder_times, remainders) = self.act(state, training, mask)
+        tf.contrib.summary.scalar("ponder_times_encoder", tf.reduce_mean(ponder_times))
+        return new_state, (ponder_times, remainders)
+
 
 
 
 
 if __name__ == '__main__':
     tf.InteractiveSession()
-    d_model = 32
+    d_model = 512
     seq_len = 50
     max_timescale = 50
-    temp_mha = MultiHeadAttention(d_model=512, num_heads=8)
-    y = tf.random.uniform((1, 60, 512))  # (batch_size, encoder_sequence, d_model)
-    out, attn = temp_mha(y, k=y, q=y, mask=None)
-    print(out.shape, attn.shape)
+    sample_encoder = Encoder(max_iterations=2, d_model=d_model, num_heads=8,
+                             dff=2048)
+    sample_encoder_output, _ = sample_encoder(tf.random.uniform((64, seq_len, 512)),
+                                            training=False, mask=None)
+    print(sample_encoder_output.shape)
