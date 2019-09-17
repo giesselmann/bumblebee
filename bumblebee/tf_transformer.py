@@ -100,8 +100,8 @@ def scaled_dot_product_attention(q, k, v, mask):
 
 
 class MultiHeadAttention(tf.keras.layers.Layer):
-    def __init__(self, d_model, num_heads):
-        super(MultiHeadAttention, self).__init__()
+    def __init__(self, d_model, num_heads, **kwargs):
+        super(MultiHeadAttention, self).__init__(**kwargs)
         self.num_heads = num_heads
         self.d_model = d_model
         assert d_model % self.num_heads == 0
@@ -118,7 +118,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         x = tf.reshape(x, (batch_size, -1, self.num_heads, self.depth))
         return tf.transpose(x, perm=[0, 2, 1, 3], name='transpose_mha_split')
 
-    def call(self, v, k, q, mask):
+    def call(self, vkq, training=True, mask=None):
+        v, k, q = vkq
         batch_size = tf.shape(q)[0]
         # (batch_size, seq_len, d_model)
         q = self.wq(q)
@@ -138,7 +139,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         concat_attention = tf.reshape(scaled_attention, (batch_size, -1, self.d_model))
         # (batch_size, seq_len_q, d_model)
         output = self.dense(concat_attention)
-        return output, attention_weights
+        return [output, attention_weights]
 
 
 
@@ -153,8 +154,8 @@ def point_wise_feed_forward_network(d_model, dff):
 
 
 class EncoderLayer(tf.keras.layers.Layer):
-    def __init__(self, d_model, num_heads, dff, rate=0.1):
-        super(EncoderLayer, self).__init__()
+    def __init__(self, d_model, num_heads, dff, rate=0.1, **kwargs):
+        super(EncoderLayer, self).__init__(**kwargs)
         self.mha = MultiHeadAttention(d_model, num_heads)
         self.ffn = point_wise_feed_forward_network(d_model, dff)
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -162,9 +163,9 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.dropout1 = tf.keras.layers.Dropout(rate)
         self.dropout2 = tf.keras.layers.Dropout(rate)
 
-    def call(self, x, training, mask):
+    def call(self, x, training=True, mask=None):
         # attn_output == (batch_size, input_seq_len, d_model)
-        attn_output, _ = self.mha(x, x, x, mask)
+        attn_output, _ = self.mha([x, x, x], mask=mask)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(x + attn_output)  # (batch_size, input_seq_len, d_model)
         ffn_output = self.ffn(out1)  # (batch_size, input_seq_len, d_model)
@@ -176,8 +177,8 @@ class EncoderLayer(tf.keras.layers.Layer):
 
 
 class DecoderLayer(tf.keras.layers.Layer):
-    def __init__(self, d_model, num_heads, dff, rate=0.1):
-        super(DecoderLayer, self).__init__()
+    def __init__(self, d_model, num_heads, dff, rate=0.1, **kwargs):
+        super(DecoderLayer, self).__init__(**kwargs)
         self.mha1 = MultiHeadAttention(d_model, num_heads)
         self.mha2 = MultiHeadAttention(d_model, num_heads)
         self.ffn = point_wise_feed_forward_network(d_model, dff)
@@ -188,14 +189,15 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(rate)
         self.dropout3 = tf.keras.layers.Dropout(rate)
 
-    def call(self, x, enc_output, training, look_ahead_mask, padding_mask):
+    def call(self, input, training=True, mask=None):
+        x, enc_output, look_ahead_mask, padding_mask = input
         # enc_output.shape == (batch_size, input_seq_len, d_model)
         # attn_weights_block1 == (batch_size, target_seq_len, d_model)
-        attn1, attn_weights_block1 = self.mha1(x, x, x, look_ahead_mask)
+        attn1, attn_weights_block1 = self.mha1([x, x, x], mask=look_ahead_mask)
         attn1 = self.dropout1(attn1, training=training)
         out1 = self.layernorm1(attn1 + x)
         # attn_weights_block2 == (batch_size, target_seq_len, d_model)
-        attn2, attn_weights_block2 = self.mha2(enc_output, enc_output, out1, padding_mask)
+        attn2, attn_weights_block2 = self.mha2([enc_output, enc_output, out1], mask=padding_mask)
         attn2 = self.dropout2(attn2, training=training)
         out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
         ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, d_model)
@@ -206,7 +208,7 @@ class DecoderLayer(tf.keras.layers.Layer):
 
 
 
-class ACT(tf.keras.layers.Layer):
+class ACT():
     def __init__(self, fn_preprocess, fn_transform,
                  max_iterations=10, halt_epsilon=0.01):
         super(ACT, self).__init__()
@@ -214,8 +216,12 @@ class ACT(tf.keras.layers.Layer):
         self.fn_transform = fn_transform
         self.max_iterations = max_iterations
         self.halt_epsilon = halt_epsilon
+        self.ponder_kernel = tf.keras.layers.Dense(1,
+                activation=tf.nn.sigmoid,
+                use_bias=True,
+                bias_initializer=tf.constant_initializer(0.1))
 
-    def call(self, state, training, mask, preprocess_kwargs={}, transform_kwargs={}):
+    def __call__(self, state, training, mask, preprocess_kwargs={}, transform_args=[], transform_kwargs={}):
         threshold = 1.0 - self.halt_epsilon
         state_shape_static = state.get_shape()
         state_slice = slice(0, 2)
@@ -245,13 +251,10 @@ class ACT(tf.keras.layers.Layer):
             """
             # add time and depth encoding
             state = self.fn_preprocess(state, step, **preprocess_kwargs)
-            with tf.variable_scope("sigmoid_activation_for_pondering"):
-                p = tf.keras.layers.Dense(1,
-                activation=tf.nn.sigmoid,
-                use_bias=True,
-                bias_initializer=tf.constant_initializer(0.1))(state)
-                # maintain position-wise probabilities
-                p = tf.squeeze(p, axis=-1)
+            #with tf.variable_scope("sigmoid_activation_for_pondering", reuse=True):
+            p = self.ponder_kernel(state)
+            # maintain position-wise probabilities
+            p = tf.squeeze(p, axis=-1)
             # Mask for inputs which have not halted yet
             still_running = tf.cast(tf.less(halting_probability, 1.0), tf.float32)
             # Mask of inputs which halted at this step
@@ -278,7 +281,7 @@ class ACT(tf.keras.layers.Layer):
             update_weights = tf.expand_dims(
                 p * still_running + new_halted * remainders, -1)
             # apply transformation on the state
-            transformed_state = self.fn_transform(state, step, **transform_kwargs)
+            transformed_state = self.fn_transform(state, step, *transform_args, **transform_kwargs)
             # update running part in the weighted state and keep the rest
             new_state = ((transformed_state * update_weights) +
                          (previous_state * (1 - update_weights)))
@@ -313,15 +316,15 @@ class ACT(tf.keras.layers.Layer):
 
         ponder_times = n_updates
         remainders = remainder
-        return new_state, (ponder_times, remainders)
+        return [new_state, ponder_times, remainders]
 
 
 
 
 class Encoder(tf.keras.layers.Layer):
     def __init__(self, d_input, d_model, max_iterations, num_heads, dff,
-                 halt_epsilon=0.01, time_penalty=0.01, rate=0.1):
-        super(Encoder, self).__init__()
+                 halt_epsilon=0.01, time_penalty=0.01, rate=0.1, **kwargs):
+        super(Encoder, self).__init__(**kwargs)
         self.d_model = d_model
         self.max_iterations = max_iterations
         self.halt_epsilon = halt_epsilon
@@ -340,23 +343,23 @@ class Encoder(tf.keras.layers.Layer):
         self.act = ACT(fn_preprocess, fn_transform,
                         max_iterations=self.max_iterations, halt_epsilon=self.halt_epsilon)
 
-    def call(self, x, training, mask):
-        state = self.embedding(x)
+    def call(self, x, training=True, mask=None):
+        state = self.embedding(tf.cast(x, tf.int32))
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         transform_kwargs = {'training' : training, 'mask' : mask}
-        new_state, (ponder_times, remainders) = self.act(state, training, mask,  transform_kwargs=transform_kwargs)
+        new_state, ponder_times, remainders = self.act(state, training, mask, transform_kwargs=transform_kwargs)
         self.add_loss(self.time_penalty * tf.math.reduce_mean(remainders + ponder_times, axis=1))
         tf.contrib.summary.scalar("ponder_times_encoder", tf.reduce_mean(ponder_times))
         # x.shape == (batch_size, seq_len, d_model)
-        return new_state, (ponder_times, remainders)
+        return [new_state, ponder_times, remainders]
 
 
 
 
 class Decoder(tf.keras.layers.Layer):
     def __init__(self, d_output, d_model, max_iterations, num_heads, dff,
-                 halt_epsilon=0.01, time_penalty=0.01, rate=0.1):
-        super(Decoder, self).__init__()
+                 halt_epsilon=0.01, time_penalty=0.01, rate=0.1, **kwargs):
+        super(Decoder, self).__init__(**kwargs)
         self.d_model = d_model
         self.max_iterations = max_iterations
         self.halt_epsilon = halt_epsilon
@@ -366,41 +369,61 @@ class Decoder(tf.keras.layers.Layer):
         self.dropout = tf.keras.layers.Dropout(rate)
 
     def build(self, input_shape):
-        _, sequence_length = input_shape
+        _, sequence_length = input_shape[0]
         self.pos_encoding = positional_encoding(int(sequence_length), self.max_iterations, int(self.d_model))
         def fn_preprocess(x, step):
             return x + self.pos_encoding[:,step,:,:]
-        def fn_transform(x, step, **kwargs):
-            return self.dec_layer(x, **kwargs)
+        def fn_transform(x, step, enc_output, look_ahead_mask, padding_mask, **kwargs):
+            return self.dec_layer([x, enc_output, look_ahead_mask, padding_mask], **kwargs)
         self.act = ACT(fn_preprocess, fn_transform,
                         max_iterations=self.max_iterations, halt_epsilon=self.halt_epsilon)
 
-    def call(self, x, enc_output, training, look_ahead_mask, padding_mask):
+    def call(self, input, training=True, mask=None):
+        x, enc_output, look_ahead_mask, padding_mask = input
         seq_len = tf.shape(x)[1]
-        state = self.embedding(x)
+        state = self.embedding(tf.cast(x, tf.int32))
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         # enc_output, training, look_ahead_mask, padding_mask):
-        transform_kwargs = {'enc_output' : enc_output,
-                            'training' : training,
-                            'look_ahead_mask' : look_ahead_mask,
-                            'padding_mask' : padding_mask}
-        new_state, (ponder_times, remainders) = self.act(state, training, padding_mask, transform_kwargs=transform_kwargs)
+        transform_args = [enc_output, look_ahead_mask, padding_mask]
+        new_state, ponder_times, remainders = self.act(state, training, padding_mask, transform_args=transform_args)
         self.add_loss(self.time_penalty * tf.math.reduce_mean(remainders + ponder_times, axis=1))
         tf.contrib.summary.scalar("ponder_times_decoder", tf.reduce_mean(ponder_times))
         # x.shape == (batch_size, target_seq_len, d_model)
-        return new_state, (ponder_times, remainders)
+        return [new_state, ponder_times, remainders]
 
 
 
 
-class Transformer(tf.keras.Model):
-    def __init__(self, d_input ,d_model, d_output, max_iterations, num_heads, dff,
-                 rate=0.1):
-        super(Transformer, self).__init__()
+class TransformerLayer(tf.keras.layers.Layer):
+    def __init__(self, d_input=1 ,d_model=128, d_output=6,
+                 max_iterations=6, num_heads=8, dff=2048,
+                 rate=0.1, **kwargs):
+        super(TransformerLayer, self).__init__(**kwargs)
+        self.d_input = d_input
         self.d_model = d_model
-        self.encoder = Encoder(d_input, d_model, max_iterations, num_heads, dff, rate=rate)
-        self.decoder = Decoder(d_output, d_model, max_iterations, num_heads, dff, rate=rate)
-        self.final_layer = tf.keras.layers.Dense(d_output)
+        self.d_output = d_output
+        self.max_iterations = max_iterations
+        self.num_heads = num_heads
+        self.dff = dff
+        self.rate = rate
+
+    def get_config(self):
+        config = super(TransformerLayer, self).get_config()
+        config['d_input'] = self.d_input
+        config['d_model'] = self.d_model
+        config['d_output'] = self.d_output
+        config['max_iterations'] = self.max_iterations
+        config['num_heads'] = self.num_heads
+        config['dff'] = self.dff
+        config['rate'] = self.rate
+        return config
+
+    def build(self, input_shape):
+        self.encoder = Encoder(self.d_input, self.d_model,
+            self.max_iterations, self.num_heads, self.dff, rate=self.rate)
+        self.decoder = Decoder(self.d_output, self.d_model,
+            self.max_iterations, self.num_heads, self.dff, rate=self.rate)
+        self.final_layer = tf.keras.layers.Dense(self.d_output)
 
     def create_masks(self, input_lengths, target_lengths, input_max, target_max):
         # Encoder padding mask
@@ -416,17 +439,33 @@ class Transformer(tf.keras.Model):
         combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
         return enc_padding_mask, combined_mask, dec_padding_mask
 
-    def call(self, input, target, input_lengths, target_lengths, training):
+    def call(self, x, training=True, mask=False):
+        input, target, input_lengths, target_lengths = x
         enc_padding_mask, combined_mask, dec_padding_mask = self.create_masks(
                 input_lengths, target_lengths, input.shape[1], target.shape[1])
         # enc_output.shape == # (batch_size, inp_seq_len, d_model)
-        enc_output, (ponder_times_encoder, remainders_encoder) = self.encoder(input, training, enc_padding_mask)
+        enc_output, ponder_times_encoder, remainders_encoder = self.encoder(
+            input, training=training, mask=enc_padding_mask)
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
-        dec_output, (ponder_times_encoder, remainders_encoder) = self.decoder(
-            target, enc_output, training, combined_mask, dec_padding_mask)
+        dec_output, ponder_times_encoder, remainders_encoder = self.decoder(
+            [target, enc_output, combined_mask, dec_padding_mask], training=training, mask=None)
         final_output = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
         return final_output
 
+
+
+
+class Transformer(tf.keras.Model):
+    def __init__(self, d_input, d_model, d_output,
+                max_input_length, max_target_length,
+                max_iterations=2, num_heads=8, dff=2048,
+                rate=0.1):
+        super(Transformer, self).__init__()
+        self.transformer_layer = TransformerLayer(d_input, d_model, d_output,
+                                max_iterations, num_heads, dff, rate)
+
+    def call(self, inputs, training):
+        return self.transformer_layer(inputs, training=training)
 
 
 
@@ -441,8 +480,8 @@ if __name__ == '__main__':
     max_timescale = 50
     sample_transformer = Transformer(d_input, d_model, d_output,
                                 max_iterations=2, num_heads=8, dff=2048,)
-    temp_input = tf.random.uniform((64, sig_len))
-    temp_target = tf.random.uniform((64, seq_len))
+    temp_input = tf.random.uniform((64, sig_len, 1))
+    temp_target = tf.random.uniform((64, seq_len, 1))
     temp_input_len = tf.random.uniform((64, 1))
     temp_target_len = tf.random.uniform((64, 1))
     tf_out = sample_transformer(temp_input, temp_target, temp_input_len, temp_target_len, training=False)
