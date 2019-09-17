@@ -77,25 +77,25 @@ class pore_model():
 
 
 if __name__ == '__main__':
-    config = tf.ConfigProto()
+    config = tf.compat.v1.ConfigProto()
     gpus = [0,1]
     config.gpu_options.allow_growth=True
     config.allow_soft_placement=True
-    config.gpu_options.visible_device_list = ','.join([str(n) for n in gpus])
-    config.intra_op_parallelism_threads  = 8
+    #config.gpu_options.visible_device_list = ','.join([str(n) for n in gpus])
+    config.intra_op_parallelism_threads = 8
     config.inter_op_parallelism_threads = 8
-    session = tf.Session(config=config)
+    tf.compat.v1.Session(config=config)
     d_input = 4096
     d_output = 6
-    d_model = 128
-    sig_len = 2000
-    seq_len = 200
-    batch_size = 32
+    d_model = 64
+    dff = 512
+    max_iterations = 8
+    num_heads = 8
+    sig_len = 1000
+    seq_len = 100
+    batch_size = 4
     max_timescale = 50
-    #with tf.device('/gpu:0'):
-    transformer = Transformer(d_input, d_model, d_output,
-                                sig_len, seq_len,
-                                max_iterations=1, num_heads=1, dff=2048)
+
     temp_input = tf.random.uniform((batch_size, sig_len), 0, d_input-2, dtype=tf.int64)
     temp_target = tf.random.uniform((batch_size, seq_len+1), 0, d_output-2, dtype=tf.int64)
     temp_input_len = tf.random.uniform((batch_size, 1), 0, sig_len - 1, dtype=tf.int64)
@@ -106,7 +106,7 @@ if __name__ == '__main__':
     #transformer = tf.keras.utils.multi_gpu_model(transformer, 2, cpu_relocation=True)
 
     learning_rate = TransformerLRS(d_model)
-    optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
+    optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9,amsgrad=True)
     loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True, reduction='none')
 
@@ -120,7 +120,9 @@ if __name__ == '__main__':
     train_loss = tf.keras.metrics.Mean(name='train_loss')
     train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
     checkpoint_path = "./checkpoints/train"
-
+    transformer = Transformer(d_input, d_model, d_output,
+                                sig_len, seq_len,
+                                max_iterations=max_iterations, num_heads=num_heads, dff=dff)
     ckpt = tf.train.Checkpoint(transformer=transformer,
                                optimizer=optimizer)
     ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
@@ -136,12 +138,12 @@ if __name__ == '__main__':
         tf.TensorSpec(shape=(None, 1), dtype=tf.int64)
         ]
 
-    #@tf.function(input_signature=train_step_signature)
+    @tf.function(input_signature=train_step_signature)
     def train_step(inp, tar, inp_len, tar_len):
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
         with tf.GradientTape() as tape:
-            predictions = transformer([inp, tar_inp, inp_len, tar_len], training=True)
+            predictions = transformer(inp, tar_inp, inp_len, tar_len, training=True)
             loss = loss_function(tar_real, predictions)
         gradients = tape.gradient(loss, transformer.trainable_variables)
         optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
@@ -153,12 +155,12 @@ if __name__ == '__main__':
         train_loss.reset_states()
         train_accuracy.reset_states()
         # inp -> portuguese, tar -> english
-        for batch in range(100):
+        for batch in range(10000):
             train_step(temp_input, temp_target, temp_input_len, temp_target_len)
-            print("batch {}".format(batch))
+            #print("batch {}".format(batch))
             if batch % 50 == 0:
-                #print('Epoch {} Batch {} Loss {:.4f} Accuracy {:.4f}'.format(
-                #    epoch + 1, batch, train_loss.result(), train_accuracy.result()))
+                print('Epoch {} Batch {} Loss {:.4f} Accuracy {:.4f}'.format(
+                    epoch + 1, batch, train_loss.result(), train_accuracy.result()))
                 pass
             if (epoch + 1) % 5 == 0:
                 ckpt_save_path = ckpt_manager.save()
