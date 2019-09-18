@@ -81,19 +81,19 @@ if __name__ == '__main__':
     gpus = [0,1]
     config.gpu_options.allow_growth=True
     config.allow_soft_placement=True
-    #config.gpu_options.visible_device_list = ','.join([str(n) for n in gpus])
+    config.gpu_options.visible_device_list = ','.join([str(n) for n in gpus])
     config.intra_op_parallelism_threads = 8
     config.inter_op_parallelism_threads = 8
     tf.compat.v1.Session(config=config)
     d_input = 4096
     d_output = 6
-    d_model = 64
-    dff = 512
-    max_iterations = 8
+    d_model = 512
+    dff = 4096
+    max_iterations = 16
     num_heads = 8
     sig_len = 1000
     seq_len = 100
-    batch_size = 4
+    batch_size = 16
     max_timescale = 50
 
     temp_input = tf.random.uniform((batch_size, sig_len), 0, d_input-2, dtype=tf.int64)
@@ -105,7 +105,7 @@ if __name__ == '__main__':
     #transformer.summary()
     #transformer = tf.keras.utils.multi_gpu_model(transformer, 2, cpu_relocation=True)
 
-    learning_rate = TransformerLRS(d_model)
+    learning_rate = TransformerLRS(d_model, warmup_steps=2000)
     optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9,amsgrad=True)
     loss_object = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True, reduction='none')
@@ -120,9 +120,11 @@ if __name__ == '__main__':
     train_loss = tf.keras.metrics.Mean(name='train_loss')
     train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
     checkpoint_path = "./checkpoints/train"
-    transformer = Transformer(d_input, d_model, d_output,
+    with tf.device("cpu:0"):
+        transformer = Transformer(d_input, d_model, d_output,
                                 sig_len, seq_len,
                                 max_iterations=max_iterations, num_heads=num_heads, dff=dff)
+    #transformer = tf.keras.utils.multi_gpu_model(transformer, 2)
     ckpt = tf.train.Checkpoint(transformer=transformer,
                                optimizer=optimizer)
     ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
@@ -143,26 +145,26 @@ if __name__ == '__main__':
         tar_inp = tar[:, :-1]
         tar_real = tar[:, 1:]
         with tf.GradientTape() as tape:
-            predictions = transformer(inp, tar_inp, inp_len, tar_len, training=True)
+            predictions = transformer([inp, tar_inp, inp_len, tar_len], training=True)
             loss = loss_function(tar_real, predictions)
         gradients = tape.gradient(loss, transformer.trainable_variables)
         optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
         train_loss(loss)
         train_accuracy(tar_real, predictions)
 
-    for epoch in range(1):
+    for epoch in range(50):
         start = time.time()
         train_loss.reset_states()
         train_accuracy.reset_states()
         # inp -> portuguese, tar -> english
-        for batch in range(10000):
+        for batch in range(500):
             train_step(temp_input, temp_target, temp_input_len, temp_target_len)
             #print("batch {}".format(batch))
             if batch % 50 == 0:
                 print('Epoch {} Batch {} Loss {:.4f} Accuracy {:.4f}'.format(
                     epoch + 1, batch, train_loss.result(), train_accuracy.result()))
                 pass
-            if (epoch + 1) % 5 == 0:
+            if (epoch + 1) % 5 == 0 and False:
                 ckpt_save_path = ckpt_manager.save()
                 print('Saving checkpoint for epoch {} at {}'.format(epoch+1,
                                                                      ckpt_save_path))
