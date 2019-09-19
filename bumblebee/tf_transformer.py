@@ -53,7 +53,7 @@ def positional_encoding(seq_len, depth, d_model, max_timescale=10000):
 
 
 def create_padding_mask(lengths, max_len):
-    msk = tf.sequence_mask(lengths, max_len, dtype=tf.float32)
+    msk = 1 - tf.sequence_mask(lengths, max_len, dtype=tf.float32)
     # add extra dimensions to add the padding
     # to the attention logits.
     return msk[:, tf.newaxis, :]  # (batch_size, 1, 1, seq_len)
@@ -113,6 +113,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         super(MultiHeadAttention, self).__init__(**kwargs)
         self.d_model = hparams.get('d_model') or 256
         self.num_heads = hparams.get('num_heads') or 4
+        self.memory_comp = hparams.get('memory_comp')
         assert self.d_model % self.num_heads == 0
         self.depth = self.d_model // self.num_heads
         self.hparams = hparams.copy()
@@ -133,6 +134,17 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self.wq = tf.keras.layers.Dense(self.d_model)
         self.wk = tf.keras.layers.Dense(self.d_model)
         self.wv = tf.keras.layers.Dense(self.d_model)
+        if self.memory_comp:
+            self.k_comp = tf.keras.layers.Convolution1D(self.d_model,
+                                kernel_size=(self.memory_comp,),
+                                strides=self.memory_comp,
+                                padding='same',
+                                data_format='channels_last')
+            self.v_comp = tf.keras.layers.Convolution1D(self.d_model,
+                                kernel_size=(self.memory_comp,),
+                                strides=self.memory_comp,
+                                padding='same',
+                                data_format='channels_last')
         self.dense = tf.keras.layers.Dense(self.d_model)
         return super(MultiHeadAttention, self).build(input_shape)
 
@@ -146,11 +158,14 @@ class MultiHeadAttention(tf.keras.layers.Layer):
     def call(self, vkq, **kwargs):
         v, k, q = vkq
         seq_len_q = tf.shape(q)[1]
-        seq_len_k = tf.shape(k)[1]
         # (batch_size, seq_len, d_model)
         q = self.wq(q)
         k = self.wk(k)
         v = self.wv(v)
+        if self.memory_comp:
+            k = self.k_comp(k)
+            v = self.v_comp(v)
+        seq_len_k = tf.shape(k)[1]
         # (batch_size, num_heads, seq_len_q, depth)
         q = self.split_heads(q, seq_len_q)
         k = self.split_heads(k, seq_len_k)
@@ -177,6 +192,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.dff = hparams.get('dff') or 1024
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
+        self.hparams['memory_comp'] = hparams.get('input_memory_comp')
 
     def get_config(self):
         config = super(EncoderLayer, self).get_config()
@@ -228,7 +244,9 @@ class DecoderLayer(tf.keras.layers.Layer):
 
     def build(self, input_shape):
         assert isinstance(input_shape, list)
+        self.hparams['memory_comp'] = self.hparams.get('target_memory_comp')
         self.mha1 = MultiHeadAttention(hparams=self.hparams)
+        self.hparams['memory_comp'] = self.hparams.get('input_memory_comp')
         self.mha2 = MultiHeadAttention(hparams=self.hparams)
         self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -446,7 +464,6 @@ class Decoder(tf.keras.layers.Layer):
         seq_len = tf.shape(x)[1]
         state = self.emb_layer(tf.cast(x, tf.int32))
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
-        #return self.dec_layer([state, enc_output, look_ahead_mask, padding_mask])
         # init ACT
         state_shape_static = state.get_shape() # (batch_size, seq_len, d_model)
         state_slice = slice(0, 2)
@@ -496,6 +513,8 @@ class TransformerLayer(tf.keras.layers.Layer):
     def __init__(self, hparams={}, **kwargs):
         super(TransformerLayer, self).__init__(**kwargs)
         self.d_output = hparams.get('d_output') or 6
+        self.input_memory_comp = hparams.get('input_memory_comp')
+        self.target_memory_comp = hparams.get('target_memory_comp')
         self.hparams = hparams.copy()
 
     def get_config(self):
@@ -515,14 +534,20 @@ class TransformerLayer(tf.keras.layers.Layer):
     def create_masks(self, input_lengths, target_lengths, input_max, target_max):
         # Encoder padding mask
         enc_padding_mask = create_padding_mask(input_lengths, input_max)
+        if self.input_memory_comp:
+            enc_padding_mask = enc_padding_mask[:,:,:,::self.input_memory_comp]
         # Used in the 2nd attention block in the decoder.
         # This padding mask is used to mask the encoder outputs.
-        dec_padding_mask = create_padding_mask(input_lengths, input_max)
+        #dec_padding_mask = create_padding_mask(input_lengths, input_max)
+        dec_padding_mask = enc_padding_mask
         # Used in the 1st attention block in the decoder.
         # It is used to pad and mask future tokens in the input received by
         # the decoder.
         look_ahead_mask = create_look_ahead_mask(target_max)
         dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
+        if self.target_memory_comp:
+            dec_target_padding_mask = dec_target_padding_mask[:,:,:,::self.target_memory_comp]
+            look_ahead_mask = look_ahead_mask[:, ::self.target_memory_comp]
         combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
         return enc_padding_mask, combined_mask, dec_padding_mask
 

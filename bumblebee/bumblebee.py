@@ -78,27 +78,33 @@ class pore_model():
 
 
 if __name__ == '__main__':
-    input_len = 500
-    target_len = 50
-    batch_size = 8
+    input_max_len = 2000
+    target_max_len = 200
+    batch_size = 32
     d_input = 4096
     d_output = 6
-    d_model = 512
+    d_model = 128
+    tf.config.set_soft_device_placement(True)
+    physical_devices = tf.config.experimental.list_physical_devices('GPU')
+    for d in physical_devices:
+        tf.config.experimental.set_memory_growth(d, True)
     transformer_hparams = {'d_input' : d_input,
                            'd_output' : d_output,
                            'd_model' : d_model,
-                           'dff' : 4096,
+                           'dff' : d_model * 4,
                            'num_heads' : 8,
                            'max_iterations' : 16,
                            'encoder_time_scale' : 10000,
-                           'decoder_time_scale' : 1000}
+                           'decoder_time_scale' : 1000,
+                           'input_memory_comp' : 8,
+                           'target_memory_comp' : 4}
 
-    temp_input = tf.random.uniform((batch_size, input_len), 0, d_input-2, dtype=tf.int64)
-    temp_target = tf.random.uniform((batch_size, target_len+1), 1, d_output-2, dtype=tf.int64)
-    temp_input_len = tf.random.uniform((batch_size, 1), 5, input_len - 1, dtype=tf.int64)
-    temp_target_len = tf.random.uniform((batch_size, 1), 5, target_len - 1, dtype=tf.int64)
+    temp_input = tf.random.uniform((batch_size, input_max_len), 0, d_input-2, dtype=tf.int64)
+    temp_target = tf.random.uniform((batch_size, target_max_len+1), 0, d_output-2, dtype=tf.int64)
+    temp_input_len = tf.random.uniform((batch_size, 1), 5, input_max_len - 1, dtype=tf.int64)
+    temp_target_len = tf.random.uniform((batch_size, 1), 5, target_max_len - 1, dtype=tf.int64)
 
-    strategy = tf.distribute.MirroredStrategy(devices=['/gpu:0', '/gpu:1'])
+    strategy = tf.distribute.MirroredStrategy(devices=['/gpu:0'])
     checkpoint_dir = './training_checkpoints'
     checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
 
@@ -106,8 +112,8 @@ if __name__ == '__main__':
         learning_rate = TransformerLRS(d_model, warmup_steps=2000)
         optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9,amsgrad=True)
         loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
-        def loss_function(real, pred):
-            mask = tf.math.logical_not(tf.math.equal(real, 0))
+        def loss_function(real, pred, target_lengths):
+            mask = tf.sequence_mask(target_lengths, target_max_len, dtype=tf.float32)
             loss_ = loss_object(real, pred)
             mask = tf.cast(mask, dtype=loss_.dtype)
             loss_ *= mask
@@ -121,10 +127,10 @@ if __name__ == '__main__':
 
         def train_step(inputs):
             input, target = inputs
+            target_lengths = input[3]
             with tf.GradientTape() as tape:
                 predictions = transformer(input, training=True)
-                loss = loss_function(target, predictions)
-
+                loss = loss_function(target, predictions, target_lengths)
             gradients = tape.gradient(loss, transformer.trainable_variables)
             optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
             train_accuracy.update_state(target, predictions)
@@ -132,8 +138,9 @@ if __name__ == '__main__':
 
         def test_step(inputs):
             input, target = inputs
+            target_lengths = input[3]
             predictions = transformer(input, training=False)
-            t_loss = loss_function(target, predictions)
+            t_loss = loss_function(target, predictions, target_lengths)
             test_loss.update_state(t_loss)
             test_accuracy.update_state(target, predictions)
 
@@ -169,63 +176,3 @@ if __name__ == '__main__':
             test_loss.reset_states()
             train_accuracy.reset_states()
             test_accuracy.reset_states()
-
-    exit(0)
-
-    transformer = tf.keras.utils.multi_gpu_model(transformer, 2)
-    transformer.compile(optimizer=optimizer, loss=loss_function)
-    print(transformer.metrics_names)
-    loss = transformer.train_on_batch([temp_input, temp_target[:,:-1], temp_input_len, temp_target_len],
-                                            temp_target[:,1:])
-    print(loss)
-
-    exit(0)
-    ckpt = tf.train.Checkpoint(transformer=transformer,
-                               optimizer=optimizer)
-    ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
-    # if a checkpoint exists, restore the latest checkpoint.
-    if ckpt_manager.latest_checkpoint:
-        ckpt.restore(ckpt_manager.latest_checkpoint)
-        print('Latest checkpoint restored!!')
-
-    train_step_signature = [
-        tf.TensorSpec(shape=(None, input_len), dtype=tf.int64),
-        tf.TensorSpec(shape=(None, target_len+1), dtype=tf.int64),
-        tf.TensorSpec(shape=(None, 1), dtype=tf.int64),
-        tf.TensorSpec(shape=(None, 1), dtype=tf.int64)
-        ]
-
-    @tf.function(input_signature=train_step_signature)
-    def train_step(inp, tar, inp_len, tar_len):
-        tar_inp = tar[:, :-1]
-        tar_real = tar[:, 1:]
-        with tf.GradientTape() as tape:
-            predictions = transformer([inp, tar_inp, inp_len, tar_len], training=True)
-            loss = loss_function(tar_real, predictions)
-        gradients = tape.gradient(loss, transformer.trainable_variables)
-        optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
-        train_loss(loss)
-        train_accuracy(tar_real, predictions)
-
-    for epoch in range(50):
-        start = time.time()
-        #train_loss.reset_states()
-        train_accuracy.reset_states()
-        # inp -> portuguese, tar -> english
-        for batch in range(1000):
-            train_step(temp_input, temp_target, temp_input_len, temp_target_len)
-            #print("batch {}".format(batch))
-            if batch % 50 == 0:
-                print('Epoch {} Batch {} Loss {:.4f} Accuracy {:.4f}'.format(
-                    epoch + 1, batch, train_loss.result(), train_accuracy.result()))
-                pass
-            if (epoch + 1) % 5 == 0 and False:
-                ckpt_save_path = ckpt_manager.save()
-                print('Saving checkpoint for epoch {} at {}'.format(epoch+1,
-                                                                     ckpt_save_path))
-
-                print('Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1,
-                                                            train_loss.result(),
-                                                            train_accuracy.result()))
-
-                print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start))
