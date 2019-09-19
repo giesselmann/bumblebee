@@ -109,17 +109,17 @@ def point_wise_feed_forward_network(d_model, dff):
 
 
 class MultiHeadAttention(tf.keras.layers.Layer):
-    def __init__(self, d_model=256, num_heads=4, **kwargs):
+    def __init__(self, hparams={}, **kwargs):
         super(MultiHeadAttention, self).__init__(**kwargs)
-        self.num_heads = num_heads
-        self.d_model = d_model
-        assert d_model % self.num_heads == 0
-        self.depth = d_model // self.num_heads
+        self.d_model = hparams.get('d_model') or 256
+        self.num_heads = hparams.get('num_heads') or 4
+        assert self.d_model % self.num_heads == 0
+        self.depth = self.d_model // self.num_heads
+        self.hparams = hparams.copy()
 
     def get_config(self):
         config = super(MultiHeadAttention, self).get_config()
-        config['num_heads'] = self.num_heads
-        config['d_model'] = self.d_model
+        config['hparams'] = self.hparams
         return config
 
     def compute_output_shape(self, input_shape):
@@ -171,19 +171,16 @@ class MultiHeadAttention(tf.keras.layers.Layer):
 
 
 class EncoderLayer(tf.keras.layers.Layer):
-    def __init__(self, d_model=128, num_heads=4, dff=1024, rate=0.1, **kwargs):
+    def __init__(self, hparams={}, **kwargs):
         super(EncoderLayer, self).__init__(**kwargs)
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.dff = dff
-        self.rate = rate
+        self.d_model = hparams.get('d_model') or 256
+        self.dff = hparams.get('dff') or 1024
+        self.rate = hparams.get('rate') or 0.1
+        self.hparams = hparams.copy()
 
     def get_config(self):
         config = super(EncoderLayer, self).get_config()
-        config['num_heads'] = self.num_heads
-        config['d_model'] = self.d_model
-        config['dff'] = self.dff
-        config['rate'] = self.rate
+        config['hparams'] = self.hparams
         return config
 
     def compute_output_shape(self, input_shape):
@@ -191,7 +188,7 @@ class EncoderLayer(tf.keras.layers.Layer):
 
     def build(self, input_shape):
         assert len(input_shape) == 3
-        self.mha = MultiHeadAttention(d_model=self.d_model, num_heads=self.num_heads)
+        self.mha = MultiHeadAttention(hparams=self.hparams)
         self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -213,19 +210,16 @@ class EncoderLayer(tf.keras.layers.Layer):
 
 
 class DecoderLayer(tf.keras.layers.Layer):
-    def __init__(self, d_model=512, num_heads=4, dff=1024, rate=0.1, **kwargs):
+    def __init__(self, hparams={}, **kwargs):
         super(DecoderLayer, self).__init__(**kwargs)
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.dff = dff
-        self.rate = rate
+        self.d_model = hparams.get('d_model') or 256
+        self.dff = hparams.get('dff') or 1024
+        self.rate = hparams.get('rate') or 0.1
+        self.hparams = hparams.copy()
 
     def get_config(self):
         config = super(DecoderLayer, self).get_config()
-        config['num_heads'] = self.num_heads
-        config['d_model'] = self.d_model
-        config['dff'] = self.dff
-        config['rate'] = self.rate
+        config['hparams'] = self.hparams
         return config
 
     def compute_output_shape(self, input_shape):
@@ -234,8 +228,8 @@ class DecoderLayer(tf.keras.layers.Layer):
 
     def build(self, input_shape):
         assert isinstance(input_shape, list)
-        self.mha1 = MultiHeadAttention(self.d_model, self.num_heads)
-        self.mha2 = MultiHeadAttention(self.d_model, self.num_heads)
+        self.mha1 = MultiHeadAttention(hparams=self.hparams)
+        self.mha2 = MultiHeadAttention(hparams=self.hparams)
         self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -271,15 +265,15 @@ class DecoderLayer(tf.keras.layers.Layer):
 
 
 class ACT(tf.keras.layers.Layer):
-    def __init__(self, halt_epsilon=0.01, ponder_bias_init=0.1, **kwargs):
-        self.halt_epsilon = halt_epsilon
-        self.ponder_bias_init = ponder_bias_init
+    def __init__(self, hparams={}, **kwargs):
         super(ACT, self).__init__(**kwargs)
+        self.halt_epsilon = hparams.get('halt_epsilon') or 0.01
+        self.ponder_bias_init = hparams.get('ponder_bias_init') or 1.0
+        self.hparams = hparams.copy()
 
     def get_config(self):
         config = super(ACT, self).get_config()
-        config['halt_epsilon'] = self.halt_epsilon
-        config['ponder_bias_init'] = self.ponder_bias_init
+        config['hparams'] = self.hparams
         return config
 
     def compute_output_shape(self, input_shape):
@@ -289,7 +283,7 @@ class ACT(tf.keras.layers.Layer):
         return (input_shape[-1],) + input_shape[1:]
 
     def build(self, input_shape):
-        self.halt_threshold = tf.constant(self.halt_epsilon, dtype=tf.float32)
+
         self.ponder_kernel = tf.keras.layers.Dense(1,
                 activation=tf.nn.sigmoid,
                 use_bias=True,
@@ -299,6 +293,7 @@ class ACT(tf.keras.layers.Layer):
     def call(self, inputs, **kwargs):
         assert isinstance(inputs, list) and len(inputs) == 4
         state, halting_probability, remainders, n_updates = inputs
+        self.halt_threshold = tf.constant(self.halt_epsilon, dtype=tf.float32)
         p = self.ponder_kernel(state) # (batch_size, seq_len, 1)
         p = tf.squeeze(p, axis=-1) # (batch_size, seq_len)
         still_running = tf.cast(tf.less(halting_probability, 1.0), tf.float32)
@@ -330,27 +325,19 @@ class ACT(tf.keras.layers.Layer):
 
 
 class Encoder(tf.keras.layers.Layer):
-    def __init__(self, d_input=4096, d_model=64, max_iterations=4, num_heads=8, dff=1024,
-                 halt_epsilon=0.01, time_penalty=0.01, rate=0.1, **kwargs):
+    def __init__(self, hparams={}, **kwargs):
         super(Encoder, self).__init__(**kwargs)
-        self.d_input = d_input
-        self.d_model = d_model
-        self.max_iterations = max_iterations
-        self.num_heads = num_heads
-        self.dff = dff
-        self.halt_epsilon = halt_epsilon
-        self.time_penalty = time_penalty
-        self.rate = rate
+        self.d_input = hparams.get('d_input') or 4096
+        self.d_model = hparams.get('d_model') or 256
+        self.max_iterations = hparams.get('max_iterations') or 8
+        self.max_timescale = hparams.get('encoder_time_scale') or 10000
+        self.halt_epsilon = hparams.get('halt_epsilon') or 0.01
+        self.time_penalty = hparams.get('act_time_penalty') or 0.01
+        self.hparams = hparams.copy()
 
     def get_config(self):
         config = super(Encoder, self).get_config()
-        config['d_input'] = self.d_input
-        config['d_model'] = self.d_model
-        config['max_iterations'] = self.max_iterations
-        config['num_heads'] = self.num_heads
-        config['halt_epsilon'] = self.halt_epsilon
-        config['time_penalty'] = self.time_penalty
-        config['rate'] = self.rate
+        config['hparams'] = self.hparams
         return config
 
     def compute_output_shape(self, input_shape):
@@ -361,15 +348,13 @@ class Encoder(tf.keras.layers.Layer):
     def build(self, input_shape):
         assert len(input_shape) == 2
         _, sequence_length = input_shape
-        self.pos_encoding = tf.constant(positional_encoding(int(sequence_length),
+        self.pos_encoding = positional_encoding(int(sequence_length),
                                                             self.max_iterations,
-                                                            int(self.d_model)))
-        self.emb_layer = tf.keras.layers.Embedding(self.d_input, self.d_model)
-        self.enc_layer = EncoderLayer(d_model=self.d_model,
-                                      num_heads=self.num_heads,
-                                      dff=self.dff,
-                                      rate=self.rate)
-        self.act_layer = ACT(halt_epsilon=self.halt_epsilon)
+                                                            int(self.d_model),
+                                                            max_timescale=self.max_timescale)
+        self.emb_layer = tf.keras.layers.Embedding(self.d_input, self.d_model, name='Encoder_Embedding')
+        self.enc_layer = EncoderLayer(hparams=self.hparams)
+        self.act_layer = ACT(hparams=self.hparams)
         return super(Encoder, self).build(input_shape)
 
     def call(self, x, **kwargs):
@@ -383,7 +368,7 @@ class Encoder(tf.keras.layers.Layer):
         remainders = tf.zeros(update_shape, name="remainder")
         n_updates = tf.zeros(update_shape, name="n_updates")
         previous_state = tf.zeros_like(state, name="previous_state")
-        step = tf.constant(0, dtype=tf.int32)
+        step = tf.cast(0, dtype=tf.int32)
         # define update and halt-condition
         def update_state(state, step, halting_probability, remainders, n_updates):
             transformed_state = state + self.pos_encoding[:,step,:,:]
@@ -421,40 +406,39 @@ class Encoder(tf.keras.layers.Layer):
 
 
 class Decoder(tf.keras.layers.Layer):
-    def __init__(self, d_output=6, d_model=256, max_iterations=8, num_heads=8, dff=1024,
-                 halt_epsilon=0.01, time_penalty=0.01, rate=0.1, **kwargs):
+    def __init__(self, hparams={}, **kwargs):
         super(Decoder, self).__init__(**kwargs)
-        self.d_output = d_output
-        self.d_model = d_model
-        self.max_iterations = max_iterations
-        self.num_heads = num_heads
-        self.dff = dff
-        self.halt_epsilon = halt_epsilon
-        self.time_penalty = time_penalty
-        self.rate = rate
+        self.d_output = hparams.get('d_output') or 6
+        self.d_model = hparams.get('d_model') or 256
+        self.max_iterations = hparams.get('max_iterations') or 8
+        self.num_heads = hparams.get('num_heads') or 8
+        self.dff = hparams.get('dff') or 1024
+        self.max_timescale = hparams.get('decoder_time_scale') or 1000
+        self.halt_epsilon = hparams.get('halt_epsilon') or 0.01
+        self.time_penalty = hparams.get('time_penalty') or 0.01
+        self.rate = hparams.get('rate') or 0.1
+        self.hparams = hparams.copy()
 
     def get_config(self):
         config = super(Decoder, self).get_config()
-        config['d_output'] = self.d_output
-        config['d_model'] = self.d_model
-        config['max_iterations'] = self.max_iterations
-        config['num_heads'] = self.num_heads
-        config['dff'] = self.dff
-        config['halt_epsilon'] = self.halt_epsilon
-        config['time_penalty'] = self.time_penalty
-        config['rate'] = self.rate
+        config['hparams'] = self.hparams
         return config
+
+    def compute_output_shape(self, input_shape):
+        # (batch_size, seq_len)
+        assert len(input_shape) == 2
+        return input_shape + (self.d_model,)
 
     def build(self, input_shape):
         assert isinstance(input_shape, list) and len(input_shape) == 4
         _, sequence_length = input_shape[0]
-        self.pos_encoding = positional_encoding(int(sequence_length), self.max_iterations, int(self.d_model))
+        self.pos_encoding = positional_encoding(int(sequence_length),
+                                                self.max_iterations,
+                                                int(self.d_model),
+                                                max_timescale=self.max_timescale)
         self.emb_layer = tf.keras.layers.Embedding(self.d_output, self.d_model)
-        self.dec_layer = DecoderLayer(d_model=self.d_model,
-                                      num_heads=self.num_heads,
-                                      dff=self.dff,
-                                      rate=self.rate)
-        self.act_layer = ACT(self.halt_epsilon)
+        self.dec_layer = DecoderLayer(hparams=self.hparams)
+        self.act_layer = ACT(hparams=self.hparams)
         return super(Decoder, self).build(input_shape)
 
     def call(self, input, **kwargs):
@@ -471,7 +455,7 @@ class Decoder(tf.keras.layers.Layer):
         remainders = tf.zeros(update_shape, name="remainder")
         n_updates = tf.zeros(update_shape, name="n_updates")
         previous_state = tf.zeros_like(state, name="previous_state")
-        step = tf.constant(0, dtype=tf.int32)
+        step = tf.cast(0, dtype=tf.int32)
         # define update and halt-condition
         def update_state(state, step, halting_probability, remainders, n_updates):
             transformed_state = state + self.pos_encoding[:,step,:,:]
@@ -509,34 +493,23 @@ class Decoder(tf.keras.layers.Layer):
 
 
 class TransformerLayer(tf.keras.layers.Layer):
-    def __init__(self, d_input=1 ,d_model=128, d_output=6,
-                 max_iterations=6, num_heads=8, dff=2048,
-                 rate=0.1, **kwargs):
+    def __init__(self, hparams={}, **kwargs):
         super(TransformerLayer, self).__init__(**kwargs)
-        self.d_input = d_input
-        self.d_model = d_model
-        self.d_output = d_output
-        self.max_iterations = max_iterations
-        self.num_heads = num_heads
-        self.dff = dff
-        self.rate = rate
+        self.d_output = hparams.get('d_output') or 6
+        self.hparams = hparams.copy()
 
     def get_config(self):
         config = super(TransformerLayer, self).get_config()
-        config['d_input'] = self.d_input
-        config['d_model'] = self.d_model
-        config['d_output'] = self.d_output
-        config['max_iterations'] = self.max_iterations
-        config['num_heads'] = self.num_heads
-        config['dff'] = self.dff
-        config['rate'] = self.rate
+        config['hparams'] = self.hparams
         return config
 
+    def compute_output_shape(self, input_shape):
+        assert isinstance(input_shape, list) and len(input_shape) == 4
+        return input_shape[1] # (batch_size, tar_seq_len, d_output)
+
     def build(self, input_shape):
-        self.encoder = Encoder(d_input=self.d_input, d_model=self.d_model,
-            max_iterations=self.max_iterations, num_heads=self.num_heads, dff=self.dff, rate=self.rate)
-        self.decoder = Decoder(d_output=self.d_output, d_model=self.d_model,
-            max_iterations=self.max_iterations, num_heads=self.num_heads, dff=self.dff, rate=self.rate)
+        self.encoder = Encoder(hparams=self.hparams)
+        self.decoder = Decoder(hparams=self.hparams)
         self.final_layer = tf.keras.layers.Dense(self.d_output)
 
     def create_masks(self, input_lengths, target_lengths, input_max, target_max):
@@ -553,7 +526,7 @@ class TransformerLayer(tf.keras.layers.Layer):
         combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
         return enc_padding_mask, combined_mask, dec_padding_mask
 
-    def call(self, inputs, training=False, mask=None):
+    def call(self, inputs, training=True, mask=None):
         input, target, input_lengths, target_lengths = inputs
         enc_padding_mask, combined_mask, dec_padding_mask = self.create_masks(
                 input_lengths, target_lengths, input.shape[1], target.shape[1])
@@ -567,14 +540,24 @@ class TransformerLayer(tf.keras.layers.Layer):
 
 
 
+#def Transformer(input_length, target_length, hparams={}):
+#    input = tf.keras.Input(shape=(input_length,), name='inputs')
+#    target = tf.keras.Input(shape=(target_length,), name='targets')
+#    input_len = tf.keras.Input(shape=(1,), name='input_lengths')
+#    target_len = tf.keras.Input(shape=(1,), name='target_lengths')
+#    output = TransformerLayer(hparams=hparams, name='transformer')(
+#            (input, target, input_len, target_len))
+#    model = tf.keras.models.Model(inputs=[input, target, input_len, target_len],
+#                                  outputs=output)
+#    return model
+
+
+
+
 class Transformer(tf.keras.Model):
-    def __init__(self, d_input, d_model, d_output,
-                max_input_length, max_target_length,
-                max_iterations=2, num_heads=8, dff=2048,
-                rate=0.1):
+    def __init__(self, hparams={}):
         super(Transformer, self).__init__()
-        self.transformer_layer = TransformerLayer(d_input, d_model, d_output,
-                                max_iterations, num_heads, dff, rate)
+        self.transformer_layer = TransformerLayer(hparams)
 
     def call(self, inputs, training=False):
         input, target, input_lengths, target_lengths = inputs
