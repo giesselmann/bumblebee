@@ -32,15 +32,21 @@ import matplotlib.pyplot as plt
 
 
 
-def positional_encoding(seq_len, depth, d_model, max_timescale=10000):
-    def get_angles(pos, j):
+def positional_encoding(seq_len, depth, d_model,
+                        max_timescale=10000, random_shift=False):
+    def get_angles(pos, j, shift=0.0):
         angle_rates = 1 / np.power(max_timescale,
                                    (2 * (j//2)) / np.float32(d_model))
-        return pos * angle_rates
+        return pos * angle_rates + shift
+    if random_shift:
+        pos_shift = np.random.uniform(0, max_timescale, 1)
+    else:
+        pos_shift = 0.0
     pos_rads = get_angles(np.arange(seq_len)[np.newaxis, :, np.newaxis],
-                          np.arange(d_model)[np.newaxis, np.newaxis, :])
+                          np.arange(d_model)[np.newaxis, np.newaxis, :], shift=pos_shift)
     depth_rads = get_angles(np.arange(depth)[:, np.newaxis, np.newaxis],
                             np.arange(d_model)[np.newaxis, np.newaxis, :])
+
     rads = pos_rads + depth_rads
     # apply sin to even indices in the array; 2i
     rads[:,:, 0::2] = np.sin(pos_rads[:, :, 0::2]) + np.sin(depth_rads[:, :, 0::2])
@@ -267,11 +273,13 @@ class DecoderLayer(tf.keras.layers.Layer):
             padding_mask = None
         # enc_output.shape == (batch_size, input_seq_len, d_model)
         # attn_weights_block1 == (batch_size, target_seq_len, d_model)
-        attn1, attn_weights_block1 = self.mha1([x, x, x], training=kwargs.get('training'), mask=look_ahead_mask)
+        attn1, attn_weights_block1 = self.mha1([x, x, x],
+                training=kwargs.get('training'), mask=look_ahead_mask)
         attn1 = self.dropout1(attn1, kwargs.get('training'))
         out1 = self.layernorm1(attn1 + x)
         # attn_weights_block2 == (batch_size, target_seq_len, d_model)
-        attn2, attn_weights_block2 = self.mha2([enc_output, enc_output, out1], training=kwargs.get('training'), mask=padding_mask)
+        attn2, attn_weights_block2 = self.mha2([enc_output, enc_output, out1],
+                training=kwargs.get('training'), mask=padding_mask)
         attn2 = self.dropout2(attn2, kwargs.get('training'))
         out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
         ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, d_model)
@@ -349,6 +357,7 @@ class Encoder(tf.keras.layers.Layer):
         self.d_model = hparams.get('d_model') or 256
         self.max_iterations = hparams.get('max_iterations') or 8
         self.max_timescale = hparams.get('encoder_time_scale') or 10000
+        self.random_shift = hparams.get('random_shift') or False
         self.halt_epsilon = hparams.get('halt_epsilon') or 0.01
         self.time_penalty = hparams.get('act_time_penalty') or 0.01
         self.hparams = hparams.copy()
@@ -369,7 +378,8 @@ class Encoder(tf.keras.layers.Layer):
         self.pos_encoding = positional_encoding(int(sequence_length),
                                                             self.max_iterations,
                                                             int(self.d_model),
-                                                            max_timescale=self.max_timescale)
+                                                            max_timescale=self.max_timescale,
+                                                            random_shift=self.random_shift)
         self.emb_layer = tf.keras.layers.Embedding(self.d_input, self.d_model, name='Encoder_Embedding')
         self.enc_layer = EncoderLayer(hparams=self.hparams)
         self.act_layer = ACT(hparams=self.hparams)
@@ -390,7 +400,8 @@ class Encoder(tf.keras.layers.Layer):
         # define update and halt-condition
         def update_state(state, step, halting_probability, remainders, n_updates):
             transformed_state = state + self.pos_encoding[:,step,:,:]
-            transformed_state = self.enc_layer(transformed_state, training=kwargs.get('training'), mask=kwargs.get('mask'))
+            transformed_state = self.enc_layer(transformed_state,
+                    training=kwargs.get('training'), mask=kwargs.get('mask'))
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
                 [transformed_state, halting_probability, remainders, n_updates], **kwargs)
             transformed_state = ((transformed_state * update_weights) +
@@ -432,6 +443,7 @@ class Decoder(tf.keras.layers.Layer):
         self.num_heads = hparams.get('num_heads') or 8
         self.dff = hparams.get('dff') or 1024
         self.max_timescale = hparams.get('decoder_time_scale') or 1000
+        self.random_shift = hparams.get('random_shift') or False
         self.halt_epsilon = hparams.get('halt_epsilon') or 0.01
         self.time_penalty = hparams.get('time_penalty') or 0.01
         self.rate = hparams.get('rate') or 0.1
@@ -453,7 +465,8 @@ class Decoder(tf.keras.layers.Layer):
         self.pos_encoding = positional_encoding(int(sequence_length),
                                                 self.max_iterations,
                                                 int(self.d_model),
-                                                max_timescale=self.max_timescale)
+                                                max_timescale=self.max_timescale,
+                                                random_shift=self.random_shift)
         self.emb_layer = tf.keras.layers.Embedding(self.d_output, self.d_model)
         self.dec_layer = DecoderLayer(hparams=self.hparams)
         self.act_layer = ACT(hparams=self.hparams)
@@ -558,7 +571,8 @@ class TransformerLayer(tf.keras.layers.Layer):
         ## enc_output.shape == # (batch_size, inp_seq_len, d_model)
         enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
-        dec_output = self.decoder([target, enc_output, combined_mask, dec_padding_mask], training=training, mask=None)
+        dec_output = self.decoder([target, enc_output, combined_mask, dec_padding_mask],
+                training=training, mask=None)
         final_output = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
         return final_output
 

@@ -25,65 +25,32 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-import os
-import time
-import argparse
+import os, argparse
 import tensorflow as tf
-import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 from tf_transformer import Transformer
-from tf_transformer_util import TransformerLRS
-
-
-
-# basic simulation
-class pore_model():
-    def __init__(self, model_file):
-        def model_iter(iterable):
-            for line in iterable:
-                yield line.strip().split('\t')[:3]
-        with open(model_file, 'r') as fp:
-            model_dict = {x[0]:(float(x[1]), float(x[2])) for x in model_iter(fp)}
-        self.kmer = len(next(iter(model_dict.keys())))
-        self.model_median = np.median([x[0] for x in model_dict.values()])
-        self.model_MAD = np.mean(np.absolute(np.subtract([x[0] for x in model_dict.values()], self.model_median)))
-        self.model_values = np.array([x[0] for x in model_dict.values()])
-        self.model_dict = model_dict
-
-    def generate_signal(self, sequence, samples=10, noise=False):
-        signal = []
-        level_means = np.array([self.model_dict[kmer][0] for kmer in
-            [sequence[i:i+self.kmer] for i in range(len(sequence)-self.kmer + 1)]])
-        if samples and not noise:
-            sig = np.repeat(level_means, samples)
-        elif not noise:
-            sig = np.repeat(level_means, np.random.uniform(6, 10, len(level_means)).astype(int))
-        else:
-            level_stdvs = np.array([self.model_dict[kmer][1] for kmer in
-                [sequence[i:i+self.kmer] for i in range(len(sequence)-self.kmer + 1)]])
-            level_samples = np.random.uniform(6, 10, len(level_means)).astype(int)
-            level_means = np.repeat(level_means, level_samples)
-            level_stdvs = np.repeat(level_stdvs, level_samples)
-            sig = np.random.normal(level_means, 3 * level_stdvs)
-        return sig
-
-    def quantile_nrm(self, signal_raw, q=30):
-        base_q = np.quantile(self.model_values, np.linspace(0,1,q))
-        raw_q = np.quantile(signal_raw, np.linspace(0,1,q))
-        p = np.poly1d(np.polyfit(raw_q, base_q, 3))
-        return (p(signal_raw) - self.model_median) / self.model_MAD
+from tf_transformer_util import BatchGeneratorSim, TransformerLRS
 
 
 
 
 if __name__ == '__main__':
-    input_max_len = 2000
-    target_max_len = 200
+    parser = argparse.ArgumentParser(description="BumbleBee basecaller")
+    parser.add_argument("model", help="pore model")
+    args = parser.parse_args()
+
+    input_max_len = 1000
+    target_max_len = 100
+    batches_train = 1000
+    batches_val = 100
     batch_size = 32
-    d_input = 4096
-    d_output = 6
-    d_model = 128
+    batch_gen = BatchGeneratorSim(args.model, target_len=target_max_len,
+                                  batches_train=batches_train, batches_val=batches_val,
+                                  minibatch_size=batch_size)
+
+    d_input = batch_gen.input_dim
+    d_output = batch_gen.target_dim
+    d_model = 64
     tf.config.set_soft_device_placement(True)
     physical_devices = tf.config.experimental.list_physical_devices('GPU')
     for d in physical_devices:
@@ -96,13 +63,9 @@ if __name__ == '__main__':
                            'max_iterations' : 16,
                            'encoder_time_scale' : 10000,
                            'decoder_time_scale' : 1000,
+                           'random_shift' : True,
                            'input_memory_comp' : 8,
-                           'target_memory_comp' : 4}
-
-    temp_input = tf.random.uniform((batch_size, input_max_len), 0, d_input-2, dtype=tf.int64)
-    temp_target = tf.random.uniform((batch_size, target_max_len+1), 0, d_output-2, dtype=tf.int64)
-    temp_input_len = tf.random.uniform((batch_size, 1), 5, input_max_len - 1, dtype=tf.int64)
-    temp_target_len = tf.random.uniform((batch_size, 1), 5, target_max_len - 1, dtype=tf.int64)
+                           'target_memory_comp' : None}
 
     strategy = tf.distribute.MirroredStrategy(devices=['/gpu:0'])
     checkpoint_dir = './training_checkpoints'
@@ -113,7 +76,7 @@ if __name__ == '__main__':
         optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9,amsgrad=True)
         loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
         def loss_function(real, pred, target_lengths):
-            mask = tf.sequence_mask(target_lengths, target_max_len, dtype=tf.float32)
+            mask = tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32)
             loss_ = loss_object(real, pred)
             mask = tf.cast(mask, dtype=loss_.dtype)
             loss_ *= mask
@@ -121,7 +84,8 @@ if __name__ == '__main__':
         test_loss = tf.keras.metrics.Mean(name='test_loss')
         train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
-        transformer = Transformer(hparams=transformer_hparams)
+        with tf.device('/cpu:0'):
+            transformer = Transformer(hparams=transformer_hparams)
         #transformer.summary()
         checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=transformer)
 
@@ -155,20 +119,24 @@ if __name__ == '__main__':
         def distributed_test_step(dataset_inputs):
             return strategy.experimental_run_v2(test_step, args=(dataset_inputs,))
 
-        for epoch in range(10):
+        batch_gen_train = batch_gen.next_train()
+        batch_gen_val = batch_gen.next_val()
+        for epoch in range(20):
             total_loss = 0.0
             num_batches = 0
-            for batch in tqdm(range(100), desc='Training'):
+            batch_gen.on_epoch_begin()
+            for batch in tqdm(range(batches_train), desc='Training'):
+                input_data, target_data, input_len, target_len = next(batch_gen_train)
                 total_loss += distributed_train_step((
-                        [temp_input, temp_target[:,:-1], temp_input_len, temp_target_len],
-                        temp_target[:,1:]))
+                        [input_data, target_data[:,:-1], input_len, target_len],
+                        target_data[:,1:]))
                 num_batches += 1
             train_loss = total_loss / num_batches
-            for batch in tqdm(range(10), desc='Testing'):
+            for batch in tqdm(range(batches_val), desc='Testing'):
+                input_data, target_data, input_len, target_len = next(batch_gen_val)
                 distributed_test_step((
-                        [temp_input, temp_target[:,:-1], temp_input_len, temp_target_len],
-                        temp_target[:,1:]))
-
+                        [input_data, target_data[:,:-1], input_len, target_len],
+                        target_data[:,1:]))
             print("Epoch {}: train loss: {}; test loss: {}; accuracy: {}".format(epoch,
                         train_loss,
                         test_loss.result(),
