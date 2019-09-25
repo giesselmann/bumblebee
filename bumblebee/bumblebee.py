@@ -51,14 +51,14 @@ if __name__ == '__main__':
 
     d_input = batch_gen.input_dim
     d_output = batch_gen.target_dim
-    d_model = 128
+    d_model = 192
 
     transformer_hparams = {'d_input' : d_input,
                            'd_output' : d_output,
                            'd_model' : d_model,
                            'dff' : d_model * 4,
                            'num_heads' : 8,
-                           'max_iterations' : 8,
+                           'max_iterations' : 6,
                            'encoder_time_scale' : 10000,
                            'decoder_time_scale' : 1000,
                            'random_shift' : False,
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     summary_writer = tf.summary.create_file_writer('./training_summaries')
 
     with strategy.scope(), summary_writer.as_default():
-        learning_rate = TransformerLRS(d_model, warmup_steps=4000)
+        learning_rate = TransformerLRS(d_model, warmup_steps=8000)
         optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
         loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
         def loss_function(real, pred, target_lengths):
@@ -140,6 +140,8 @@ if __name__ == '__main__':
                 batch_loss = distributed_train_step((
                         [input_data, target_data[:,:-1], input_len, target_len],
                         target_data[:,1:]))
+                if epoch == 0 and batch == 0:
+                    transformer.summary()
                 num_batches += 1
                 total_loss += batch_loss
                 train_loss = total_loss / num_batches

@@ -32,6 +32,28 @@ import matplotlib.pyplot as plt
 
 
 
+def get_angles(pos, j, max_timescale, d_model):
+    angle_rates = 1 / np.power(max_timescale,
+                               (2 * (j//2)) / np.float32(d_model))
+    return pos * angle_rates
+
+
+
+
+def pos_encoding():
+    pos_rads = get_angles(np.arange(seq_len)[np.newaxis, :, np.newaxis],
+                      np.arange(d_model)[np.newaxis, np.newaxis, :])
+
+
+
+
+def depth_encoding():
+    depth_rads = get_angles(np.arange(depth)[:, np.newaxis, np.newaxis],
+                                np.arange(d_model)[np.newaxis, np.newaxis, :])
+
+
+
+
 def positional_encoding(seq_len, depth, d_model,
                         max_timescale=10000, random_shift=False):
     def get_angles(pos, j, shift=0.0):
@@ -42,16 +64,16 @@ def positional_encoding(seq_len, depth, d_model,
         pos_shift = np.random.uniform(0, max_timescale, 1)
     else:
         pos_shift = 0.0
-    pos_rads = get_angles(np.arange(seq_len)[np.newaxis, :, np.newaxis],
-                          np.arange(d_model)[np.newaxis, np.newaxis, :], shift=pos_shift)
-    depth_rads = get_angles(np.arange(depth)[:, np.newaxis, np.newaxis],
-                            np.arange(d_model)[np.newaxis, np.newaxis, :])
-
+    j = np.arange(d_model)[np.newaxis, np.newaxis, :]
+    pos_rads = get_angles(np.arange(seq_len)[np.newaxis, :, np.newaxis], j)
+    #depth_rads = get_angles(np.arange(depth)[:, np.newaxis, np.newaxis],
+    #                        np.arange(d_model)[np.newaxis, np.newaxis, :])
+    depth_rads = get_angles(np.logspace(0, np.log10(max_timescale), depth)[:, np.newaxis, np.newaxis], j)
     rads = pos_rads + depth_rads
     # apply sin to even indices in the array; 2i
-    rads[:,:, 0::2] = np.sin(pos_rads[:, :, 0::2]) + np.sin(depth_rads[:, :, 0::2])
+    rads[:, 0::2, :] = np.sin(pos_rads[:, 0::2, :]) + np.sin(depth_rads[:, :, :])
     # apply cos to odd indices in the array; 2i+1
-    rads[:,:, 1::2] = np.cos(pos_rads[:, :, 1::2]) + np.cos(depth_rads[:, :, 1::2])
+    rads[:, 1::2, :] = np.cos(pos_rads[:, 1::2, :]) + np.cos(depth_rads[:, :, :])
     pos_encoding = rads[np.newaxis, ...]
     return tf.cast(pos_encoding, dtype=tf.float32) # (1, depth, seq_len, d_model)
 
@@ -384,21 +406,22 @@ class Encoder(tf.keras.layers.Layer):
         return input_shape + (self.d_model,)
 
     def build(self, input_shape):
-        assert len(input_shape) == 2
-        _, sequence_length = input_shape
+        assert len(input_shape) == 3
+        _, sequence_length, d_model = input_shape
         self.pos_encoding = positional_encoding(int(sequence_length),
                                                             self.max_iterations,
                                                             int(self.d_model),
                                                             max_timescale=self.max_timescale,
                                                             random_shift=self.random_shift)
-        self.emb_layer = tf.keras.layers.Embedding(self.d_input, self.d_model, name='Encoder_Embedding')
+        #self.emb_layer = tf.keras.layers.Embedding(self.d_input, self.d_model, name='Encoder_Embedding')
         self.enc_layer = EncoderLayer(hparams=self.hparams)
         self.act_layer = ACT(hparams=self.hparams)
         self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
         return super(Encoder, self).build(input_shape)
 
     def call(self, x, **kwargs):
-        state = self.emb_layer(tf.cast(x, tf.int32))
+        #state = self.emb_layer(tf.cast(x, tf.int32))
+        state = x
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         # init ACT
         state_shape_static = state.get_shape() # (batch_size, seq_len, d_model)
@@ -409,14 +432,15 @@ class Encoder(tf.keras.layers.Layer):
         n_updates = tf.zeros(update_shape, name="n_updates")
         previous_state = tf.zeros_like(state, name="previous_state")
         step = tf.cast(0, dtype=tf.int32)
+        mask = kwargs.get('mask')
         # define update and halt-condition
         def update_state(state, step, halting_probability, remainders, n_updates):
             transformed_state = state + self.pos_encoding[:,step,:,:]
             transformed_state = self.enc_layer(transformed_state,
-                    training=kwargs.get('training'), mask=kwargs.get('mask'))
+                    training=kwargs.get('training'), mask=mask)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
                     [transformed_state, halting_probability, remainders, n_updates],
-                    training=kwargs.get('training'), mask=kwargs.get('mask'))
+                    training=kwargs.get('training'), mask=mask)
             transformed_state = ((transformed_state * update_weights) +
                                 state * (1 - update_weights))
             step += 1
@@ -439,7 +463,10 @@ class Encoder(tf.keras.layers.Layer):
           parallel_iterations=1,
           swap_memory=True,
           back_prop=kwargs.get('training'))
-        act_loss = self.time_penalty_t * tf.math.reduce_mean(remainders + n_updates, axis=1)
+        act_loss = remainders + n_updates
+        if mask is not None:
+            act_loss *= (1-mask)
+        act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
         self.add_loss(act_loss)
         tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates))
         #tf.summary.scalar("ponder_loss_encoder", tf.reduce_mean(act_loss))
@@ -533,7 +560,10 @@ class Decoder(tf.keras.layers.Layer):
           parallel_iterations=1,
           swap_memory=True,
           back_prop=kwargs.get('training'))
-        act_loss = self.time_penalty_t * tf.math.reduce_mean(remainders + n_updates, axis=1)
+        act_loss = remainders + n_updates
+        if target_padding_mask is not None:
+            act_loss *= (1-target_padding_mask)
+        act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
         self.add_loss(act_loss)
         tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates))
         #tf.summary.scalar("ponder_loss_decoder", tf.reduce_mean(act_loss))
@@ -611,28 +641,33 @@ class TransformerLayer(tf.keras.layers.Layer):
 class Transformer(tf.keras.Model):
     def __init__(self, hparams={}):
         super(Transformer, self).__init__()
+        self.cnn = tf.keras.layers.Convolution1D(hparams.get('d_model'),
+                            kernel_size=(8,),
+                            strides=1,
+                            padding='same',
+                            data_format='channels_last')
         self.transformer_layer = TransformerLayer(hparams)
 
     def call(self, inputs, training=False):
         input, target, input_lengths, target_lengths = inputs
-        return self.transformer_layer(inputs, training=training)
+        inner = self.cnn(input)
+        output = self.transformer_layer([inner, target, input_lengths, target_lengths], training=training)
+        return output
 
 
 
 
 if __name__ == '__main__':
-    tf.InteractiveSession()
-    d_input = 4096
-    d_output = 6
-    d_model = 512
-    sig_len = 50000
-    seq_len = 5000
-    max_timescale = 50
-    sample_transformer = Transformer(d_input, d_model, d_output,
-                                max_iterations=2, num_heads=8, dff=2048,)
-    temp_input = tf.random.uniform((64, sig_len, 1))
-    temp_target = tf.random.uniform((64, seq_len, 1))
-    temp_input_len = tf.random.uniform((64, 1))
-    temp_target_len = tf.random.uniform((64, 1))
-    tf_out = sample_transformer(temp_input, temp_target, temp_input_len, temp_target_len, training=False)
-    sample_transformer.summary()
+    d_model = 128
+    depth = 8
+    sig_len = 10000
+    max_timescale = 2500
+    # (1, depth, sig_len, d_model)
+    t = positional_encoding(sig_len, depth, d_model,
+                        max_timescale=max_timescale, random_shift=False)
+    f, ax = plt.subplots(2)
+    ax[0].pcolormesh(t[0, 0], cmap='RdBu')
+    ax[1].pcolormesh(t[0, 1], cmap='RdBu')
+    #ax.plot(t[0, 0, :, -1], 'r-')
+    #ax.plot(t[0, -1, :, -1], 'b-')
+    plt.show()

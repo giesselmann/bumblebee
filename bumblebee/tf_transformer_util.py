@@ -75,13 +75,13 @@ class BatchGenerator():
         raise NotImplementedError
 
     def get_batch(self, index, size):
-        input_data = np.zeros((size, self.input_len), dtype=np.int32)
+        input_data = np.zeros((size, self.input_len, 1), dtype=np.float32)
         target_data = np.zeros((size, self.target_len+3), dtype=np.int32)
         input_lens = np.zeros((size, 1), dtype=np.int32)
         target_lens = np.zeros((size, 1), dtype=np.int32)
         for i in range(size):
             sequence, signal = self.get_sequence_signal_pair(index + i)
-            input_data[i,:len(signal)] = self.__encode_signal__(signal)
+            input_data[i,:len(signal),0] = signal
             target_data[i,:len(sequence)+2] = self.__encode_sequence__(sequence)
             input_lens[i] = len(signal)
             target_lens[i] = len(sequence) + 2
@@ -124,7 +124,7 @@ class BatchGeneratorSim(BatchGenerator):
 
     def __gen_seqs__(self, n, length):
         seqs = [''.join([random.choice('ACGT') for _
-            in range(random.randint(length / 10, length))]) for i
+            in range(random.randint(length / 5, length))]) for i
                 in range(n)]
         return seqs
 
@@ -134,7 +134,8 @@ class BatchGeneratorSim(BatchGenerator):
         else:
             sequence = self.sequences_val[(index - self.val_split) % len(self.sequences_val)]
         sim_signal = self.pm.generate_signal(sequence, samples=None, noise=True)
-        return (sequence, sim_signal)
+        nrm_signal = self.pm.quantile_nrm(sim_signal)
+        return (sequence, nrm_signal)
 
     def on_epoch_begin(self):
         super(BatchGeneratorSim, self).on_epoch_begin()
