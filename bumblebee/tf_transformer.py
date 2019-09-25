@@ -120,6 +120,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self.d_model = hparams.get('d_model') or 256
         self.num_heads = hparams.get('num_heads') or 4
         self.memory_comp = hparams.get('memory_comp')
+        self.memory_comp_pad = hparams.get('memory_comp_pad') or 'same'
         assert self.d_model % self.num_heads == 0
         self.depth = self.d_model // self.num_heads
         self.hparams = hparams.copy()
@@ -144,12 +145,12 @@ class MultiHeadAttention(tf.keras.layers.Layer):
             self.k_comp = tf.keras.layers.Convolution1D(self.d_model,
                                 kernel_size=(self.memory_comp,),
                                 strides=self.memory_comp,
-                                padding='same',
+                                padding=self.memory_comp_pad,
                                 data_format='channels_last')
             self.v_comp = tf.keras.layers.Convolution1D(self.d_model,
                                 kernel_size=(self.memory_comp,),
                                 strides=self.memory_comp,
-                                padding='same',
+                                padding=self.memory_comp_pad,
                                 data_format='channels_last')
         self.dense = tf.keras.layers.Dense(self.d_model)
         return super(MultiHeadAttention, self).build(input_shape)
@@ -164,6 +165,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
     def call(self, vkq, **kwargs):
         v, k, q = vkq
         seq_len_q = tf.shape(q)[1]
+        mask = kwargs.get('mask')
         # (batch_size, seq_len, d_model)
         q = self.wq(q)
         k = self.wk(k)
@@ -171,6 +173,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         if self.memory_comp:
             k = self.k_comp(k)
             v = self.v_comp(v)
+            if mask is not None:
+                mask = mask[...,::self.memory_comp]
         seq_len_k = tf.shape(k)[1]
         # (batch_size, num_heads, seq_len_q, depth)
         q = self.split_heads(q, seq_len_q)
@@ -179,7 +183,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         # scaled_attention.shape == (batch_size, num_heads, seq_len_q, depth)
         # attention_weights.shape == (batch_size, num_heads, seq_len_q, seq_len_k)
         scaled_attention, attention_weights = scaled_dot_product_attention(
-          q, k, v, mask=kwargs.get('mask'))
+          q, k, v, mask=mask)
         # (batch_size, seq_len_q, num_heads, depth)
         scaled_attention = tf.transpose(scaled_attention, perm=[0, 2, 1, 3])
         # (batch_size, seq_len_q, d_model)
@@ -199,6 +203,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
         self.hparams['memory_comp'] = hparams.get('input_memory_comp')
+        self.hparams['memory_comp_pad'] = hparams.get('input_memory_comp_pad')
 
     def get_config(self):
         config = super(EncoderLayer, self).get_config()
@@ -251,8 +256,10 @@ class DecoderLayer(tf.keras.layers.Layer):
     def build(self, input_shape):
         assert isinstance(input_shape, list)
         self.hparams['memory_comp'] = self.hparams.get('target_memory_comp')
+        self.hparams['memory_comp_pad'] = self.hparams.get('target_memory_comp_pad')
         self.mha1 = MultiHeadAttention(hparams=self.hparams)
         self.hparams['memory_comp'] = self.hparams.get('input_memory_comp')
+        self.hparams['memory_comp_pad'] = self.hparams.get('input_memory_comp_pad')
         self.mha2 = MultiHeadAttention(hparams=self.hparams)
         self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -309,7 +316,6 @@ class ACT(tf.keras.layers.Layer):
         return (input_shape[-1],) + input_shape[1:]
 
     def build(self, input_shape):
-
         self.ponder_kernel = tf.keras.layers.Dense(1,
                 activation=tf.nn.sigmoid,
                 use_bias=True,
@@ -319,10 +325,15 @@ class ACT(tf.keras.layers.Layer):
     def call(self, inputs, **kwargs):
         assert isinstance(inputs, list) and len(inputs) == 4
         state, halting_probability, remainders, n_updates = inputs
-        self.halt_threshold = tf.constant(self.halt_epsilon, dtype=tf.float32)
+        self.halt_threshold = tf.constant(1 - self.halt_epsilon, dtype=tf.float32)
         p = self.ponder_kernel(state) # (batch_size, seq_len, 1)
         p = tf.squeeze(p, axis=-1) # (batch_size, seq_len)
+        mask = kwargs.get('mask') # (batch_size, 1, 1, seq_len) or None
+        # Mask for inputs which have not halted yet
         still_running = tf.cast(tf.less(halting_probability, 1.0), tf.float32)
+        if mask is not None:
+            mask = tf.squeeze(mask) # (batch_size, seq_len) with 0.0 on valid steps
+            halting_probability += mask
         # Mask of inputs which halted at this step
         new_halted = tf.cast(
             tf.greater(halting_probability + p * still_running, self.halt_threshold),
@@ -383,6 +394,7 @@ class Encoder(tf.keras.layers.Layer):
         self.emb_layer = tf.keras.layers.Embedding(self.d_input, self.d_model, name='Encoder_Embedding')
         self.enc_layer = EncoderLayer(hparams=self.hparams)
         self.act_layer = ACT(hparams=self.hparams)
+        self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
         return super(Encoder, self).build(input_shape)
 
     def call(self, x, **kwargs):
@@ -403,7 +415,8 @@ class Encoder(tf.keras.layers.Layer):
             transformed_state = self.enc_layer(transformed_state,
                     training=kwargs.get('training'), mask=kwargs.get('mask'))
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
-                [transformed_state, halting_probability, remainders, n_updates], **kwargs)
+                    [transformed_state, halting_probability, remainders, n_updates],
+                    training=kwargs.get('training'), mask=kwargs.get('mask'))
             transformed_state = ((transformed_state * update_weights) +
                                 state * (1 - update_weights))
             step += 1
@@ -422,12 +435,14 @@ class Encoder(tf.keras.layers.Layer):
         (new_state, _, _, remainders, n_updates) = tf.while_loop(
           should_continue, update_state,
           (state, step, halting_probability, remainders, n_updates),
-          maximum_iterations=self.max_iterations + 1,
+          maximum_iterations=self.max_iterations,
           parallel_iterations=1,
           swap_memory=True,
           back_prop=kwargs.get('training'))
-        self.add_loss(self.time_penalty * tf.math.reduce_mean(remainders + n_updates, axis=1))
-        #tf.compat.v1.contrib.summary.scalar("ponder_times_encoder", tf.reduce_mean(ponder_times))
+        act_loss = self.time_penalty_t * tf.math.reduce_mean(remainders + n_updates, axis=1)
+        self.add_loss(act_loss)
+        tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates))
+        #tf.summary.scalar("ponder_loss_encoder", tf.reduce_mean(act_loss))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 
@@ -456,8 +471,8 @@ class Decoder(tf.keras.layers.Layer):
 
     def compute_output_shape(self, input_shape):
         # (batch_size, seq_len)
-        assert len(input_shape) == 2
-        return input_shape + (self.d_model,)
+        assert isinstance(input_shape, list) and len(input_shape) == 4
+        return input_shape[0] + (self.d_model,)
 
     def build(self, input_shape):
         assert isinstance(input_shape, list) and len(input_shape) == 4
@@ -470,10 +485,13 @@ class Decoder(tf.keras.layers.Layer):
         self.emb_layer = tf.keras.layers.Embedding(self.d_output, self.d_model)
         self.dec_layer = DecoderLayer(hparams=self.hparams)
         self.act_layer = ACT(hparams=self.hparams)
+        self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
+        self.look_ahead_mask = create_look_ahead_mask(sequence_length)
         return super(Decoder, self).build(input_shape)
 
     def call(self, input, **kwargs):
-        x, enc_output, look_ahead_mask, padding_mask = input
+        x, enc_output, input_padding_mask, target_padding_mask = input
+        look_ahead_mask = tf.maximum(target_padding_mask, self.look_ahead_mask)
         seq_len = tf.shape(x)[1]
         state = self.emb_layer(tf.cast(x, tf.int32))
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
@@ -489,9 +507,10 @@ class Decoder(tf.keras.layers.Layer):
         # define update and halt-condition
         def update_state(state, step, halting_probability, remainders, n_updates):
             transformed_state = state + self.pos_encoding[:,step,:,:]
-            transformed_state = self.dec_layer([transformed_state, enc_output, look_ahead_mask, padding_mask], **kwargs)
+            transformed_state = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask], **kwargs)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
-                [transformed_state, halting_probability, remainders, n_updates], **kwargs)
+                [transformed_state, halting_probability, remainders, n_updates],
+                training=kwargs.get('training'), mask=target_padding_mask)
             transformed_state = ((transformed_state * update_weights) +
                                 state * (1 - update_weights))
             step += 1
@@ -510,12 +529,14 @@ class Decoder(tf.keras.layers.Layer):
         (new_state, _, _, remainders, n_updates) = tf.while_loop(
           should_continue, update_state,
           (state, step, halting_probability, remainders, n_updates),
-          maximum_iterations=self.max_iterations + 1,
+          maximum_iterations=self.max_iterations,
           parallel_iterations=1,
           swap_memory=True,
           back_prop=kwargs.get('training'))
-        self.add_loss(self.time_penalty * tf.math.reduce_mean(remainders + n_updates, axis=1))
-        #tf.compat.v1.contrib.summary.scalar("ponder_times_encoder", tf.reduce_mean(ponder_times))
+        act_loss = self.time_penalty_t * tf.math.reduce_mean(remainders + n_updates, axis=1)
+        self.add_loss(act_loss)
+        tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates))
+        #tf.summary.scalar("ponder_loss_decoder", tf.reduce_mean(act_loss))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 
@@ -546,32 +567,26 @@ class TransformerLayer(tf.keras.layers.Layer):
 
     def create_masks(self, input_lengths, target_lengths, input_max, target_max):
         # Encoder padding mask
+        # Used in encoder self-attention
         enc_padding_mask = create_padding_mask(input_lengths, input_max)
-        if self.input_memory_comp:
-            enc_padding_mask = enc_padding_mask[:,:,:,::self.input_memory_comp]
-        # Used in the 2nd attention block in the decoder.
+        # Decoder input padding mask
         # This padding mask is used to mask the encoder outputs.
-        #dec_padding_mask = create_padding_mask(input_lengths, input_max)
-        dec_padding_mask = enc_padding_mask
+        # Used in the 2nd attention block in the decoder.
+        dec_input_padding_mask = enc_padding_mask
+        # Decoder target padding mask
         # Used in the 1st attention block in the decoder.
-        # It is used to pad and mask future tokens in the input received by
-        # the decoder.
-        look_ahead_mask = create_look_ahead_mask(target_max)
+        # Used in the 1st attention block in the decoder with the look_ahead_mask
         dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
-        if self.target_memory_comp:
-            dec_target_padding_mask = dec_target_padding_mask[:,:,:,::self.target_memory_comp]
-            look_ahead_mask = look_ahead_mask[:, ::self.target_memory_comp]
-        combined_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
-        return enc_padding_mask, combined_mask, dec_padding_mask
+        return enc_padding_mask, dec_input_padding_mask, dec_target_padding_mask
 
     def call(self, inputs, training=True, mask=None):
         input, target, input_lengths, target_lengths = inputs
-        enc_padding_mask, combined_mask, dec_padding_mask = self.create_masks(
+        enc_padding_mask, dec_input_padding_mask, dec_target_padding_mask = self.create_masks(
                 input_lengths, target_lengths, input.shape[1], target.shape[1])
         ## enc_output.shape == # (batch_size, inp_seq_len, d_model)
         enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
-        dec_output = self.decoder([target, enc_output, combined_mask, dec_padding_mask],
+        dec_output = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                 training=training, mask=None)
         final_output = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
         return final_output

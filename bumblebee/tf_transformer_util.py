@@ -28,6 +28,7 @@
 import random
 import numpy as np
 import tensorflow as tf
+import matplotlib.pyplot as plt
 from util import pore_model
 
 
@@ -123,7 +124,7 @@ class BatchGeneratorSim(BatchGenerator):
 
     def __gen_seqs__(self, n, length):
         seqs = [''.join([random.choice('ACGT') for _
-            in range(random.randint(length / 2, length))]) for i
+            in range(random.randint(length / 10, length))]) for i
                 in range(n)]
         return seqs
 

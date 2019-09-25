@@ -26,6 +26,7 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, argparse
+import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
 from tf_transformer import Transformer
@@ -43,37 +44,44 @@ if __name__ == '__main__':
     target_max_len = 100
     batches_train = 1000
     batches_val = 100
-    batch_size = 32
-    batch_gen = BatchGeneratorSim(args.model, target_len=target_max_len,
+    batch_size = 16
+    batch_gen = BatchGeneratorSim(args.model, target_len=target_max_len, input_dim=2048,
                                   batches_train=batches_train, batches_val=batches_val,
                                   minibatch_size=batch_size)
 
     d_input = batch_gen.input_dim
     d_output = batch_gen.target_dim
-    d_model = 64
-    tf.config.set_soft_device_placement(True)
-    physical_devices = tf.config.experimental.list_physical_devices('GPU')
-    for d in physical_devices:
-        tf.config.experimental.set_memory_growth(d, True)
+    d_model = 128
+
     transformer_hparams = {'d_input' : d_input,
                            'd_output' : d_output,
                            'd_model' : d_model,
                            'dff' : d_model * 4,
                            'num_heads' : 8,
-                           'max_iterations' : 16,
+                           'max_iterations' : 8,
                            'encoder_time_scale' : 10000,
                            'decoder_time_scale' : 1000,
-                           'random_shift' : True,
+                           'random_shift' : False,
+                           'ponder_bias_init' : 1.0,
                            'input_memory_comp' : 8,
-                           'target_memory_comp' : None}
+                           'target_memory_comp' : 4,
+                           'input_memory_comp_pad' : 'same',
+                           'target_memory_comp_pad' : 'causal'}
+
+    tf.config.set_soft_device_placement(True)
+    physical_devices = tf.config.experimental.list_physical_devices('GPU')
+    for d in physical_devices:
+        tf.config.experimental.set_memory_growth(d, True)
 
     strategy = tf.distribute.MirroredStrategy(devices=['/gpu:0'])
     checkpoint_dir = './training_checkpoints'
     checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
 
-    with strategy.scope():
-        learning_rate = TransformerLRS(d_model, warmup_steps=2000)
-        optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9,amsgrad=True)
+    summary_writer = tf.summary.create_file_writer('./training_summaries')
+
+    with strategy.scope(), summary_writer.as_default():
+        learning_rate = TransformerLRS(d_model, warmup_steps=4000)
+        optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
         loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
         def loss_function(real, pred, target_lengths):
             mask = tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32)
@@ -84,8 +92,8 @@ if __name__ == '__main__':
         test_loss = tf.keras.metrics.Mean(name='test_loss')
         train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
-        with tf.device('/cpu:0'):
-            transformer = Transformer(hparams=transformer_hparams)
+        #with tf.device('/cpu:0'):
+        transformer = Transformer(hparams=transformer_hparams)
         #transformer.summary()
         checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=transformer)
 
@@ -121,22 +129,30 @@ if __name__ == '__main__':
 
         batch_gen_train = batch_gen.next_train()
         batch_gen_val = batch_gen.next_val()
+
         for epoch in range(20):
             total_loss = 0.0
             num_batches = 0
             batch_gen.on_epoch_begin()
             for batch in tqdm(range(batches_train), desc='Training'):
+                tf.summary.experimental.set_step(optimizer.iterations)
                 input_data, target_data, input_len, target_len = next(batch_gen_train)
-                total_loss += distributed_train_step((
+                batch_loss = distributed_train_step((
                         [input_data, target_data[:,:-1], input_len, target_len],
                         target_data[:,1:]))
                 num_batches += 1
-            train_loss = total_loss / num_batches
+                total_loss += batch_loss
+                train_loss = total_loss / num_batches
+                tf.summary.scalar("loss", batch_loss)
+                tf.summary.scalar("lr", learning_rate(optimizer.iterations.numpy().astype(np.float32)))
             for batch in tqdm(range(batches_val), desc='Testing'):
                 input_data, target_data, input_len, target_len = next(batch_gen_val)
                 distributed_test_step((
                         [input_data, target_data[:,:-1], input_len, target_len],
                         target_data[:,1:]))
+            tf.summary.scalar("val_loss", test_loss.result())
+            tf.summary.scalar('train_accuracy', train_accuracy.result())
+            tf.summary.scalar("val_accuracy", test_accuracy.result())
             print("Epoch {}: train loss: {}; test loss: {}; accuracy: {}".format(epoch,
                         train_loss,
                         test_loss.result(),
