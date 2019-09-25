@@ -37,24 +37,18 @@ from util import pore_model
 class BatchGenerator():
     def __init__(self, pore_model, batches_train=100, batches_val=10,
                  minibatch_size=32,
-                 input_len=1000, input_dim=1024,
-                 target_len=100, target_alphabet='ACGT'):
+                 input_len=1000, target_len=100, target_alphabet='ACGT'):
         self.pm = pore_model
         self.batches_train = batches_train
         self.batches_val = batches_val
         self.minibatch_size = minibatch_size
         self.input_len = input_len
-        self._input_dim = input_dim
         self.target_len = target_len
         self.target_alphabet = '^$' + target_alphabet
         self.val_split = batches_train * minibatch_size
         self.num_sequences = self.val_split + batches_val * minibatch_size
         self.current_train_index = 0
         self.current_val_index = self.val_split
-
-    @property
-    def input_dim(self):
-        return self._input_dim
 
     @property
     def target_dim(self):
@@ -64,12 +58,6 @@ class BatchGenerator():
         ids = {char:self.target_alphabet.find(char) for char in self.target_alphabet}
         ret = [ids[char] for char in '^' + sequence + '$']
         return ret
-
-    def __encode_signal__(self, signal):
-        base_signal = np.clip((signal - self.pm.model_min) /
-                              (self.pm.model_max - self.pm.model_min), 0.0, 1.0)
-        enc_signal = np.round(base_signal * (self.input_dim - 1)).astype(np.int32)
-        return enc_signal
 
     def get_sequence_signal_pair(self, index):
         raise NotImplementedError

@@ -386,9 +386,8 @@ class ACT(tf.keras.layers.Layer):
 class Encoder(tf.keras.layers.Layer):
     def __init__(self, hparams={}, **kwargs):
         super(Encoder, self).__init__(**kwargs)
-        self.d_input = hparams.get('d_input') or 4096
         self.d_model = hparams.get('d_model') or 256
-        self.max_iterations = hparams.get('max_iterations') or 8
+        self.max_iterations = hparams.get('encoder_max_iterations') or 8
         self.max_timescale = hparams.get('encoder_time_scale') or 10000
         self.random_shift = hparams.get('random_shift') or False
         self.halt_epsilon = hparams.get('halt_epsilon') or 0.01
@@ -413,14 +412,12 @@ class Encoder(tf.keras.layers.Layer):
                                                             int(self.d_model),
                                                             max_timescale=self.max_timescale,
                                                             random_shift=self.random_shift)
-        #self.emb_layer = tf.keras.layers.Embedding(self.d_input, self.d_model, name='Encoder_Embedding')
         self.enc_layer = EncoderLayer(hparams=self.hparams)
         self.act_layer = ACT(hparams=self.hparams)
         self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
         return super(Encoder, self).build(input_shape)
 
     def call(self, x, **kwargs):
-        #state = self.emb_layer(tf.cast(x, tf.int32))
         state = x
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         # init ACT
@@ -481,7 +478,7 @@ class Decoder(tf.keras.layers.Layer):
         super(Decoder, self).__init__(**kwargs)
         self.d_output = hparams.get('d_output') or 6
         self.d_model = hparams.get('d_model') or 256
-        self.max_iterations = hparams.get('max_iterations') or 8
+        self.max_iterations = hparams.get('decoder_max_iterations') or 8
         self.num_heads = hparams.get('num_heads') or 8
         self.dff = hparams.get('dff') or 1024
         self.max_timescale = hparams.get('decoder_time_scale') or 1000
@@ -518,8 +515,10 @@ class Decoder(tf.keras.layers.Layer):
 
     def call(self, input, **kwargs):
         x, enc_output, input_padding_mask, target_padding_mask = input
+        # look ahead and dropout masks
         look_ahead_mask = tf.maximum(target_padding_mask, self.look_ahead_mask)
         seq_len = tf.shape(x)[1]
+        # dropout/flip and embedding
         state = self.emb_layer(tf.cast(x, tf.int32))
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         # init ACT
@@ -642,7 +641,7 @@ class Transformer(tf.keras.Model):
     def __init__(self, hparams={}):
         super(Transformer, self).__init__()
         self.cnn = tf.keras.layers.Convolution1D(hparams.get('d_model'),
-                            kernel_size=(8,),
+                            kernel_size=(hparams.get("cnn_kernel") or 8,),
                             strides=1,
                             padding='same',
                             data_format='channels_last')

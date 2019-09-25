@@ -39,26 +39,25 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="BumbleBee basecaller")
     parser.add_argument("model", help="pore model")
     args = parser.parse_args()
-
     input_max_len = 1000
     target_max_len = 100
-    batches_train = 1000
-    batches_val = 100
-    batch_size = 16
-    batch_gen = BatchGeneratorSim(args.model, target_len=target_max_len, input_dim=2048,
+    batches_train = 5000
+    batches_val = 500
+    batch_size = 32
+    batch_gen = BatchGeneratorSim(args.model, target_len=target_max_len,
                                   batches_train=batches_train, batches_val=batches_val,
                                   minibatch_size=batch_size)
 
-    d_input = batch_gen.input_dim
     d_output = batch_gen.target_dim
     d_model = 192
 
-    transformer_hparams = {'d_input' : d_input,
-                           'd_output' : d_output,
+    transformer_hparams = {'d_output' : d_output,
                            'd_model' : d_model,
+                           'cnn_kernel' : 16,
                            'dff' : d_model * 4,
                            'num_heads' : 8,
-                           'max_iterations' : 6,
+                           'encoder_max_iterations' : 4,
+                           'decoder_max_iterations' : 8,
                            'encoder_time_scale' : 10000,
                            'decoder_time_scale' : 1000,
                            'random_shift' : False,
