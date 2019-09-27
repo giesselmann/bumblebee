@@ -600,8 +600,7 @@ class TransformerLayer(tf.keras.layers.Layer):
     def __init__(self, hparams={}, **kwargs):
         super(TransformerLayer, self).__init__(**kwargs)
         self.d_output = hparams.get('d_output') or 6
-        self.input_memory_comp = hparams.get('input_memory_comp')
-        self.target_memory_comp = hparams.get('target_memory_comp')
+        self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
 
     def get_config(self):
@@ -616,6 +615,7 @@ class TransformerLayer(tf.keras.layers.Layer):
     def build(self, input_shape):
         self.encoder = Encoder(hparams=self.hparams)
         self.decoder = Decoder(hparams=self.hparams)
+        self.d_output_t = tf.cast(self.d_output, tf.int32)
         self.final_layer = tf.keras.layers.Dense(self.d_output)
 
     def create_masks(self, input_lengths, target_lengths, input_max, target_max):
@@ -636,8 +636,16 @@ class TransformerLayer(tf.keras.layers.Layer):
         input, target, input_lengths, target_lengths = inputs
         enc_padding_mask, dec_input_padding_mask, dec_target_padding_mask = self.create_masks(
                 input_lengths, target_lengths, input.shape[1], target.shape[1])
-        ## enc_output.shape == # (batch_size, inp_seq_len, d_model)
+        # enc_output.shape == # (batch_size, inp_seq_len, d_model)
         enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
+        # flip random bases in target sequence with dropout rate
+        if training:
+            flp_mask = tf.random.uniform(target.shape, 0.0, 1.0, dtype=tf.float32)
+            flp_mask = tf.cast(tf.less_equal(flp_mask, self.rate), tf.int32)
+            flp_mask = tf.concat([tf.zeros((target.shape[0], 1), dtype=tf.int32), flp_mask[:,1:]],axis=1)  # do not flip SOS character
+            flp_val = tf.random.uniform(target.shape, tf.cast(0, tf.int32), self.d_output_t - 2, dtype=tf.int32)
+            flp_val *= flp_mask
+            target = (target + flp_val) % self.d_output_t
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
         dec_output = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                 training=training, mask=None)
@@ -669,11 +677,13 @@ class Transformer(tf.keras.Model):
                             strides=1,
                             padding='same',
                             data_format='channels_last')
+        self.dropout = tf.keras.layers.SpatialDropout1D(hparams.get('rate') or 0.1)
         self.transformer_layer = TransformerLayer(hparams)
 
     def call(self, inputs, training=False):
         input, target, input_lengths, target_lengths = inputs
         inner = self.cnn(input)
+        inner = self.dropout(inner, training=training)
         output = self.transformer_layer([inner, target, input_lengths, target_lengths], training=training)
         return output
 

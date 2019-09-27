@@ -26,6 +26,7 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, argparse
+import edlib
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
@@ -96,7 +97,12 @@ if __name__ == '__main__':
         with tf.device('/cpu:0'):
             transformer = Transformer(hparams=transformer_hparams)
         #transformer.summary()
+
         checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=transformer)
+        ckpt_manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=5)
+        if ckpt_manager.latest_checkpoint:
+            checkpoint.restore(ckpt_manager.latest_checkpoint)
+            print('Latest checkpoint restored!!')
 
         def train_step(inputs):
             input, target = inputs
@@ -160,6 +166,7 @@ if __name__ == '__main__':
                         train_loss,
                         test_loss.result(),
                         test_accuracy.result()))
+            ckpt_manager.save()
             test_loss.reset_states()
             train_accuracy.reset_states()
             test_accuracy.reset_states()

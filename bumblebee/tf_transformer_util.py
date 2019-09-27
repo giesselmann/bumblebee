@@ -44,7 +44,7 @@ class BatchGenerator():
         self.minibatch_size = minibatch_size
         self.input_len = input_len
         self.target_len = target_len
-        self.target_alphabet = '^$' + target_alphabet
+        self.target_alphabet = target_alphabet + '^$'
         self.val_split = batches_train * minibatch_size
         self.num_sequences = self.val_split + batches_val * minibatch_size
         self.current_train_index = 0
@@ -128,6 +128,14 @@ class BatchGeneratorSim(BatchGenerator):
     def on_epoch_begin(self):
         super(BatchGeneratorSim, self).on_epoch_begin()
         random.shuffle(self.sequences_train)
+
+
+
+
+class BatchGeneratorSig(BatchGenerator):
+    def __init__(self, pore_model_file, **kwargs):
+        self.pm = pore_model(pore_model_file)
+        super(BatchGeneratorSim, self).__init__(self.pm, **kwargs)
 
 
 
