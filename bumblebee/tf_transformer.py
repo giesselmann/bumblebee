@@ -136,6 +136,18 @@ def point_wise_feed_forward_network(d_model, dff):
 
 
 
+def separable_conv_feed_forward_network(d_model, dff, d_filter, padding='same'):
+    return tf.keras.Sequential([
+      tf.keras.layers.SeparableConv1D(dff, d_filter,            # (batch_size, 1, seq_len, dff)
+                padding=padding,
+                data_format='channels_last',
+                activation='relu'),
+      tf.keras.layers.Dense(d_model),                           # (batch_size, 1, seq_len, d_model)
+    ])
+
+
+
+
 class MultiHeadAttention(tf.keras.layers.Layer):
     def __init__(self, hparams={}, **kwargs):
         super(MultiHeadAttention, self).__init__(**kwargs)
@@ -222,6 +234,8 @@ class EncoderLayer(tf.keras.layers.Layer):
         super(EncoderLayer, self).__init__(**kwargs)
         self.d_model = hparams.get('d_model') or 256
         self.dff = hparams.get('dff') or 1024
+        self.dff_type = hparams.get('dff_type') or 'point_wise'
+        self.dff_filter = hparams.get('dff_filter_width') or 8
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
         self.hparams['memory_comp'] = hparams.get('input_memory_comp')
@@ -238,7 +252,10 @@ class EncoderLayer(tf.keras.layers.Layer):
     def build(self, input_shape):
         assert len(input_shape) == 3
         self.mha = MultiHeadAttention(hparams=self.hparams)
-        self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
+        if self.dff_type == 'point_wise':
+            self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
+        elif self.dff_type == 'separable_convolution':
+            self.ffn = separable_conv_feed_forward_network(self.d_model, self.dff, self.dff_filter)
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.dropout1 = tf.keras.layers.Dropout(self.rate)
@@ -263,6 +280,8 @@ class DecoderLayer(tf.keras.layers.Layer):
         super(DecoderLayer, self).__init__(**kwargs)
         self.d_model = hparams.get('d_model') or 256
         self.dff = hparams.get('dff') or 1024
+        self.dff_type = hparams.get('dff_type') or 'point_wise'
+        self.dff_filter = hparams.get('dff_filter_width') or 8
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
 
@@ -283,7 +302,12 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.hparams['memory_comp'] = self.hparams.get('input_memory_comp')
         self.hparams['memory_comp_pad'] = self.hparams.get('input_memory_comp_pad')
         self.mha2 = MultiHeadAttention(hparams=self.hparams)
-        self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
+        if self.dff_type == 'point_wise':
+            self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
+        elif self.dff_type == 'separable_convolution':
+            self.ffn = separable_conv_feed_forward_network(self.d_model, self.dff,
+                    self.dff_filter,
+                    padding='causal')
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.layernorm3 = tf.keras.layers.LayerNormalization(epsilon=1e-6)

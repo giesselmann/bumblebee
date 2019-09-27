@@ -43,18 +43,20 @@ if __name__ == '__main__':
     target_max_len = 100
     batches_train = 5000
     batches_val = 500
-    batch_size = 32
+    batch_size = 20
     batch_gen = BatchGeneratorSim(args.model, target_len=target_max_len,
                                   batches_train=batches_train, batches_val=batches_val,
                                   minibatch_size=batch_size)
 
     d_output = batch_gen.target_dim
-    d_model = 192
+    d_model = 160
 
     transformer_hparams = {'d_output' : d_output,
                            'd_model' : d_model,
                            'cnn_kernel' : 16,
                            'dff' : d_model * 4,
+                           'dff_type' : 'separable_convolution',
+                           'dff_filter_width' : 8,
                            'num_heads' : 8,
                            'encoder_max_iterations' : 4,
                            'decoder_max_iterations' : 8,
@@ -72,7 +74,7 @@ if __name__ == '__main__':
     for d in physical_devices:
         tf.config.experimental.set_memory_growth(d, True)
 
-    strategy = tf.distribute.MirroredStrategy(devices=['/gpu:0'])
+    strategy = tf.distribute.MirroredStrategy(devices=['/gpu:0', '/gpu:1'])
     checkpoint_dir = './training_checkpoints'
     checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
 
@@ -91,8 +93,8 @@ if __name__ == '__main__':
         test_loss = tf.keras.metrics.Mean(name='test_loss')
         train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
-        #with tf.device('/cpu:0'):
-        transformer = Transformer(hparams=transformer_hparams)
+        with tf.device('/cpu:0'):
+            transformer = Transformer(hparams=transformer_hparams)
         #transformer.summary()
         checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=transformer)
 
