@@ -344,13 +344,14 @@ class alignment_file():
         seq_sources = []
         raw_sources = []
         for input_file in input_files:
+            input_file_relative = os.path.relpath(input_file, os.path.commonpath([virtual_file, input_file]))
             print(input_file)
             with h5py.File(input_file, 'r') as fp_h5:
-                summary_sources.append(h5py.VirtualSource(input_file, 'summary', shape=fp_h5['summary'].shape))
+                summary_sources.append(h5py.VirtualSource(input_file_relative, 'summary', shape=fp_h5['summary'].shape))
                 summary_dtype = fp_h5['summary'].dtype
-                seq_sources.append(h5py.VirtualSource(input_file, 'seq', shape=fp_h5['seq'].shape))
+                seq_sources.append(h5py.VirtualSource(input_file_relative, 'seq', shape=fp_h5['seq'].shape))
                 seq_dtype = fp_h5['seq'].dtype
-                raw_sources.append(h5py.VirtualSource(input_file, 'raw', shape=fp_h5['raw'].shape))
+                raw_sources.append(h5py.VirtualSource(input_file_relative, 'raw', shape=fp_h5['raw'].shape))
                 raw_dtype = fp_h5['raw'].dtype
 
         summary_layout = h5py.VirtualLayout(shape=(np.sum([x.shape[0] for x in summary_sources]), ), dtype=summary_dtype)

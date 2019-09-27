@@ -25,10 +25,13 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
+import os, argparse
 import random
+import h5py
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 from util import pore_model
 
 
@@ -133,10 +136,25 @@ class BatchGeneratorSim(BatchGenerator):
 
 
 class BatchGeneratorSig(BatchGenerator):
-    def __init__(self, pore_model_file, **kwargs):
+    def __init__(self, pore_model_file, event_file,
+                discard_quantile=0.8, **kwargs):
         self.pm = pore_model(pore_model_file)
-        super(BatchGeneratorSim, self).__init__(self.pm, **kwargs)
+        super(BatchGeneratorSig, self).__init__(self.pm, **kwargs)
+        self.event_file = event_file
+        with h5py.File(event_file, 'r') as fp_event:
+            summary = fp_event['summary']
+            logp_quantile = np.quantile(summary['logp'], 1-discard_quantile)
+            dist_quantile = np.quantile(summary['dist'], discard_quantile)
+            summary_mask = np.logical_and(summary['logp'] > logp_quantile, summary['dist'] < dist_quantile)
+            signals = [i for i, (row, mask) in tqdm(enumerate(zip(summary, summary_mask)), total=len(summary_mask)) if mask]
 
+            print(len(signals))
+            f, ax = plt.subplots(2)
+            ax[0].hist(summary['logp'], bins=100, range=(-10,0))
+            ax[0].axvline(logp_quantile)
+            ax[1].hist(summary['dist'], bins=100, range=(0,10))
+            ax[1].axvline(dist_quantile)
+            plt.show()
 
 
 
@@ -151,3 +169,13 @@ class TransformerLRS(tf.keras.optimizers.schedules.LearningRateSchedule):
         arg1 = tf.math.rsqrt(step)
         arg2 = step * (self.warmup_steps ** -1.5)
         return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
+
+
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="BumbleBee")
+    parser.add_argument("model", help="Pore model")
+    parser.add_argument("event", help="Event table")
+    args = parser.parse_args()
+    batch_gen = BatchGeneratorSig(args.model, args.event)
