@@ -31,7 +31,7 @@ import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
 from tf_transformer import Transformer
-from tf_transformer_util import BatchGeneratorSim, TransformerLRS
+from tf_transformer_util import BatchGeneratorSim, BatchGeneratorSig, TransformerLRS
 
 
 
@@ -39,28 +39,33 @@ from tf_transformer_util import BatchGeneratorSim, TransformerLRS
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="BumbleBee basecaller")
     parser.add_argument("model", help="pore model")
+    parser.add_argument("event", help="event file")
+    parser.add_argument("--prefix", default="", help="checkpoint and event prefix")
     args = parser.parse_args()
-    input_max_len = 1000
-    target_max_len = 100
-    batches_train = 5000
-    batches_val = 500
-    batch_size = 20
-    batch_gen = BatchGeneratorSim(args.model, target_len=target_max_len,
+    input_max_len = 850
+    target_max_len = 75
+    batches_train = 50000
+    batches_val = 1000
+    val_rate = batches_train // batches_val
+    batch_size = 24
+    batch_gen = BatchGeneratorSig(args.model, args.event, max_input_len=input_max_len,
+                                  min_target_len=50, max_target_len=target_max_len,
                                   batches_train=batches_train, batches_val=batches_val,
                                   minibatch_size=batch_size)
 
     d_output = batch_gen.target_dim
-    d_model = 160
+    d_model = 192
 
     transformer_hparams = {'d_output' : d_output,
                            'd_model' : d_model,
                            'cnn_kernel' : 16,
                            'dff' : d_model * 4,
                            'dff_type' : 'separable_convolution',
-                           'dff_filter_width' : 8,
+                           'encoder_dff_filter_width' : 16,
+                           'decoder_dff_filter_width' : 8,
                            'num_heads' : 8,
-                           'encoder_max_iterations' : 4,
-                           'decoder_max_iterations' : 8,
+                           'encoder_max_iterations' : 6,
+                           'decoder_max_iterations' : 12,
                            'encoder_time_scale' : 10000,
                            'decoder_time_scale' : 1000,
                            'random_shift' : False,
@@ -75,14 +80,13 @@ if __name__ == '__main__':
     for d in physical_devices:
         tf.config.experimental.set_memory_growth(d, True)
 
-    strategy = tf.distribute.MirroredStrategy(devices=['/gpu:0', '/gpu:1'])
-    checkpoint_dir = './training_checkpoints'
-    checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
+    strategy = tf.distribute.MirroredStrategy(devices=['/gpu:0'])
+    checkpoint_dir = os.path.join('./training_checkpoints', args.prefix)
 
-    summary_writer = tf.summary.create_file_writer('./training_summaries')
+    summary_writer = tf.summary.create_file_writer(os.path.join('./training_summaries', args.prefix))
 
     with strategy.scope(), summary_writer.as_default():
-        learning_rate = TransformerLRS(d_model, warmup_steps=8000)
+        learning_rate = TransformerLRS(d_model * 4, warmup_steps=8000)
         optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
         loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
         def loss_function(real, pred, target_lengths):
@@ -91,7 +95,7 @@ if __name__ == '__main__':
             mask = tf.cast(mask, dtype=loss_.dtype)
             loss_ *= mask
             return tf.nn.compute_average_loss(loss_, global_batch_size=batch_size)
-        test_loss = tf.keras.metrics.Mean(name='test_loss')
+        #test_loss = tf.keras.metrics.Mean(name='test_loss')
         train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
         with tf.device('/cpu:0'):
@@ -120,8 +124,9 @@ if __name__ == '__main__':
             target_lengths = input[3]
             predictions = transformer(input, training=False)
             t_loss = loss_function(target, predictions, target_lengths)
-            test_loss.update_state(t_loss)
+            #test_loss.update_state(t_loss)
             test_accuracy.update_state(target, predictions)
+            return t_loss
 
         # `experimental_run_v2` replicates the provided computation and runs it
         # with the distributed input.
@@ -154,19 +159,19 @@ if __name__ == '__main__':
                 train_loss = total_loss / num_batches
                 tf.summary.scalar("loss", batch_loss)
                 tf.summary.scalar("lr", learning_rate(optimizer.iterations.numpy().astype(np.float32)))
-            for batch in tqdm(range(batches_val), desc='Testing'):
-                input_data, target_data, input_len, target_len = next(batch_gen_val)
-                distributed_test_step((
-                        [input_data, target_data[:,:-1], input_len, target_len],
-                        target_data[:,1:]))
-            tf.summary.scalar("val_loss", test_loss.result())
-            tf.summary.scalar('train_accuracy', train_accuracy.result())
-            tf.summary.scalar("val_accuracy", test_accuracy.result())
-            print("Epoch {}: train loss: {}; test loss: {}; accuracy: {}".format(epoch,
+                if batch % val_rate == 0:
+                    input_data, target_data, input_len, target_len = next(batch_gen_val)
+                    batch_loss = distributed_test_step((
+                            [input_data, target_data[:,:-1], input_len, target_len],
+                            target_data[:,1:]))
+                    tf.summary.scalar("val_loss", batch_loss)
+                    tf.summary.scalar('train_accuracy', train_accuracy.result())
+                    tf.summary.scalar("val_accuracy", test_accuracy.result())
+                    train_accuracy.reset_states()
+                    test_accuracy.reset_states()
+
+            print("Epoch {}: train loss: {}; accuracy: {}".format(epoch,
                         train_loss,
-                        test_loss.result(),
                         test_accuracy.result()))
             ckpt_manager.save()
-            test_loss.reset_states()
-            train_accuracy.reset_states()
-            test_accuracy.reset_states()
+            #test_loss.reset_states()

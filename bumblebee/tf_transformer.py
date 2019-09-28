@@ -138,11 +138,11 @@ def point_wise_feed_forward_network(d_model, dff):
 
 def separable_conv_feed_forward_network(d_model, dff, d_filter, padding='same'):
     return tf.keras.Sequential([
-      tf.keras.layers.SeparableConv1D(dff, d_filter,            # (batch_size, 1, seq_len, dff)
+        tf.keras.layers.SeparableConv1D(dff, d_filter, # (batch_size, seq_len, dff)
                 padding=padding,
                 data_format='channels_last',
                 activation='relu'),
-      tf.keras.layers.Dense(d_model),                           # (batch_size, 1, seq_len, d_model)
+        tf.keras.layers.Dense(d_model),                # (batch_size, seq_len, d_model)
     ])
 
 
@@ -235,7 +235,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.d_model = hparams.get('d_model') or 256
         self.dff = hparams.get('dff') or 1024
         self.dff_type = hparams.get('dff_type') or 'point_wise'
-        self.dff_filter = hparams.get('dff_filter_width') or 8
+        self.dff_filter = hparams.get('encoder_dff_filter_width') or 8
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
         self.hparams['memory_comp'] = hparams.get('input_memory_comp')
@@ -281,7 +281,7 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.d_model = hparams.get('d_model') or 256
         self.dff = hparams.get('dff') or 1024
         self.dff_type = hparams.get('dff_type') or 'point_wise'
-        self.dff_filter = hparams.get('dff_filter_width') or 8
+        self.dff_filter = hparams.get('decoder_dff_filter_width') or 8
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
 
@@ -504,7 +504,6 @@ class Decoder(tf.keras.layers.Layer):
         self.d_model = hparams.get('d_model') or 256
         self.max_iterations = hparams.get('decoder_max_iterations') or 8
         self.num_heads = hparams.get('num_heads') or 8
-        self.dff = hparams.get('dff') or 1024
         self.max_timescale = hparams.get('decoder_time_scale') or 1000
         self.random_shift = hparams.get('random_shift') or False
         self.halt_epsilon = hparams.get('halt_epsilon') or 0.01
@@ -618,7 +617,7 @@ class TransformerLayer(tf.keras.layers.Layer):
         self.d_output_t = tf.cast(self.d_output, tf.int32)
         self.final_layer = tf.keras.layers.Dense(self.d_output)
 
-    def create_masks(self, input_lengths, target_lengths, input_max, target_max):
+    def __create_masks__(self, input_lengths, target_lengths, input_max, target_max):
         # Encoder padding mask
         # Used in encoder self-attention
         enc_padding_mask = create_padding_mask(input_lengths, input_max)
@@ -632,39 +631,37 @@ class TransformerLayer(tf.keras.layers.Layer):
         dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
         return enc_padding_mask, dec_input_padding_mask, dec_target_padding_mask
 
+    def __flip_target__(self, target):
+        flp_mask = tf.random.uniform(target.shape, 0.0, 1.0, dtype=tf.float32)
+        flp_mask = tf.cast(tf.less_equal(flp_mask, self.rate), tf.int32)
+        flp_mask = tf.concat([tf.zeros((target.shape[0], 1), dtype=tf.int32), flp_mask[:,1:]],axis=1)  # do not flip SOS character
+        flp_val = tf.random.uniform(target.shape, tf.cast(0, tf.int32), self.d_output_t - 2, dtype=tf.int32)
+        flp_val *= flp_mask
+        target = (target + flp_val) % self.d_output_t
+        return target
+
+    def __create_pos_encoding__(self, n):
+        positional_encoding(int(sequence_length),
+                                                self.max_iterations,
+                                                int(self.d_model),
+                                                max_timescale=self.max_timescale,
+                                                random_shift=self.random_shift)
+
     def call(self, inputs, training=True, mask=None):
         input, target, input_lengths, target_lengths = inputs
-        enc_padding_mask, dec_input_padding_mask, dec_target_padding_mask = self.create_masks(
+        enc_padding_mask, dec_input_padding_mask, dec_target_padding_mask = self.__create_masks__(
                 input_lengths, target_lengths, input.shape[1], target.shape[1])
         # enc_output.shape == # (batch_size, inp_seq_len, d_model)
         enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
         # flip random bases in target sequence with dropout rate
         if training:
-            flp_mask = tf.random.uniform(target.shape, 0.0, 1.0, dtype=tf.float32)
-            flp_mask = tf.cast(tf.less_equal(flp_mask, self.rate), tf.int32)
-            flp_mask = tf.concat([tf.zeros((target.shape[0], 1), dtype=tf.int32), flp_mask[:,1:]],axis=1)  # do not flip SOS character
-            flp_val = tf.random.uniform(target.shape, tf.cast(0, tf.int32), self.d_output_t - 2, dtype=tf.int32)
-            flp_val *= flp_mask
-            target = (target + flp_val) % self.d_output_t
+            target = self.__flip_target__(target)
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
         dec_output = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                 training=training, mask=None)
         final_output = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
         return final_output
 
-
-
-
-#def Transformer(input_length, target_length, hparams={}):
-#    input = tf.keras.Input(shape=(input_length,), name='inputs')
-#    target = tf.keras.Input(shape=(target_length,), name='targets')
-#    input_len = tf.keras.Input(shape=(1,), name='input_lengths')
-#    target_len = tf.keras.Input(shape=(1,), name='target_lengths')
-#    output = TransformerLayer(hparams=hparams, name='transformer')(
-#            (input, target, input_len, target_len))
-#    model = tf.keras.models.Model(inputs=[input, target, input_len, target_len],
-#                                  outputs=output)
-#    return model
 
 
 
