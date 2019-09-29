@@ -187,7 +187,7 @@ class BatchGeneratorSig(BatchGenerator):
             batch, sequence, begin, end = self.segments_val[(index - self.val_split) % len(self.segments_val)]
         signal = self.event_file['raw'][batch,begin:end]
         nrm_signal = (signal - self.pm.model_median) / self.pm.model_MAD
-        sequence = re.sub('N', lambda x : random.choice(self.alphabet[:-2]), sequence)
+        sequence = re.sub('N', lambda x : random.choice(self.target_alphabet[:-2]), sequence)
         return (sequence, nrm_signal)
 
     def on_epoch_begin(self):

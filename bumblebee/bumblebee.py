@@ -47,30 +47,30 @@ if __name__ == '__main__':
     batches_train = 50000
     batches_val = 1000
     val_rate = batches_train // batches_val
-    batch_size = 24
+    batch_size = 32
     batch_gen = BatchGeneratorSig(args.model, args.event, max_input_len=input_max_len,
                                   min_target_len=50, max_target_len=target_max_len,
                                   batches_train=batches_train, batches_val=batches_val,
                                   minibatch_size=batch_size)
 
     d_output = batch_gen.target_dim
-    d_model = 192
+    d_model = 96
 
     transformer_hparams = {'d_output' : d_output,
                            'd_model' : d_model,
                            'cnn_kernel' : 16,
-                           'dff' : d_model * 4,
+                           'dff' : d_model * 8,
                            'dff_type' : 'separable_convolution',
                            'encoder_dff_filter_width' : 16,
                            'decoder_dff_filter_width' : 8,
-                           'num_heads' : 8,
-                           'encoder_max_iterations' : 6,
-                           'decoder_max_iterations' : 12,
+                           'num_heads' : 6,
+                           'encoder_max_iterations' : 8,
+                           'decoder_max_iterations' : 16,
                            'encoder_time_scale' : 10000,
                            'decoder_time_scale' : 1000,
                            'random_shift' : False,
                            'ponder_bias_init' : 1.0,
-                           'input_memory_comp' : 8,
+                           'input_memory_comp' : 16,
                            'target_memory_comp' : 4,
                            'input_memory_comp_pad' : 'same',
                            'target_memory_comp_pad' : 'causal'}
@@ -137,7 +137,8 @@ if __name__ == '__main__':
 
         @tf.function
         def distributed_test_step(dataset_inputs):
-            return strategy.experimental_run_v2(test_step, args=(dataset_inputs,))
+            per_replica_losses = strategy.experimental_run_v2(test_step, args=(dataset_inputs,))
+            return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None)
 
         batch_gen_train = batch_gen.next_train()
         batch_gen_val = batch_gen.next_val()
