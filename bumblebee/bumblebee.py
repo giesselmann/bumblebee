@@ -100,7 +100,7 @@ if __name__ == '__main__':
     summary_writer = tf.summary.create_file_writer(os.path.join('./training_summaries', args.prefix))
 
     with strategy.scope(), summary_writer.as_default():
-        learning_rate = TransformerLRS(transformer_hparams.get('d_model') * 4, warmup_steps=8000)
+        learning_rate = TransformerLRS(transformer_hparams.get('d_model'), warmup_steps=8000)
         optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
         loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
         def loss_function(real, pred, target_lengths):
@@ -159,7 +159,7 @@ if __name__ == '__main__':
             total_loss = 0.0
             num_batches = 0
             batch_gen.on_epoch_begin()
-            for batch in tqdm(range(batches_train), desc='Training'):
+            for batch in tqdm(range(batches_train), desc='Training', ncols=0):
                 tf.summary.experimental.set_step(optimizer.iterations)
                 input_data, target_data, input_len, target_len = next(batch_gen_train)
                 batch_loss = distributed_train_step((

@@ -196,10 +196,9 @@ class MultiHeadAttention(tf.keras.layers.Layer):
           x = tf.reshape(x, (-1, seq_len, self.num_heads, self.depth))
           return tf.transpose(x, perm=[0, 2, 1, 3])
 
-    def call(self, vkq, **kwargs):
+    def call(self, vkq, training, mask):
         v, k, q = vkq
         seq_len_q = tf.shape(q)[1]
-        mask = kwargs.get('mask')
         # (batch_size, seq_len, d_model)
         q = self.wq(q)
         k = self.wk(k)
@@ -262,13 +261,13 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(self.rate)
         return super(EncoderLayer, self).build(input_shape)
 
-    def call(self, input, **kwargs):
+    def call(self, input, training, mask):
         # attn_output == (batch_size, input_seq_len, d_model)
-        attn_output, _ = self.mha([input, input, input], mask=kwargs.get('mask'))
-        attn_output = self.dropout1(attn_output, training=kwargs.get('training'))
+        attn_output, _ = self.mha([input, input, input], training=training, mask=mask)
+        attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(input + attn_output)  # (batch_size, input_seq_len, d_model)
         ffn_output = self.ffn(out1)  # (batch_size, input_seq_len, d_model)
-        ffn_output = self.dropout2(ffn_output, training=kwargs.get('training'))
+        ffn_output = self.dropout2(ffn_output, training=training)
         out2 = self.layernorm2(out1 + ffn_output)  # (batch_size, input_seq_len, d_model)
         return out2
 
@@ -316,7 +315,7 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout3 = tf.keras.layers.Dropout(self.rate)
         return super(DecoderLayer, self).build(input_shape)
 
-    def call(self, inputs, **kwargs):
+    def call(self, inputs, training, mask):
         assert len(inputs) == 4 or len(inputs) == 2
         if len(inputs) == 4:
             x, enc_output, look_ahead_mask, padding_mask = inputs
@@ -327,16 +326,16 @@ class DecoderLayer(tf.keras.layers.Layer):
         # enc_output.shape == (batch_size, input_seq_len, d_model)
         # attn_weights_block1 == (batch_size, target_seq_len, d_model)
         attn1, attn_weights_block1 = self.mha1([x, x, x],
-                training=kwargs.get('training'), mask=look_ahead_mask)
-        attn1 = self.dropout1(attn1, kwargs.get('training'))
+                training=training, mask=look_ahead_mask)
+        attn1 = self.dropout1(attn1, training)
         out1 = self.layernorm1(attn1 + x)
         # attn_weights_block2 == (batch_size, target_seq_len, d_model)
         attn2, attn_weights_block2 = self.mha2([enc_output, enc_output, out1],
-                training=kwargs.get('training'), mask=padding_mask)
-        attn2 = self.dropout2(attn2, kwargs.get('training'))
+                training=training, mask=padding_mask)
+        attn2 = self.dropout2(attn2, training)
         out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
         ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, d_model)
-        ffn_output = self.dropout3(ffn_output, kwargs.get('training'))
+        ffn_output = self.dropout3(ffn_output, training)
         out3 = self.layernorm3(ffn_output + out2)  # (batch_size, target_seq_len, d_model)
         return out3
 
@@ -368,13 +367,12 @@ class ACT(tf.keras.layers.Layer):
                 bias_initializer=tf.constant_initializer(self.ponder_bias_init))
         return super(ACT, self).build(input_shape)
 
-    def call(self, inputs, **kwargs):
+    def call(self, inputs, training, mask):
         assert isinstance(inputs, list) and len(inputs) == 4
         state, halting_probability, remainders, n_updates = inputs
         self.halt_threshold = tf.constant(1 - self.halt_epsilon, dtype=tf.float32)
         p = self.ponder_kernel(state) # (batch_size, seq_len, 1)
         p = tf.squeeze(p, axis=-1) # (batch_size, seq_len)
-        mask = kwargs.get('mask') # (batch_size, 1, 1, seq_len) or None
         # Mask for inputs which have not halted yet
         still_running = tf.cast(tf.less(halting_probability, 1.0), tf.float32)
         if mask is not None:
@@ -443,7 +441,7 @@ class Encoder(tf.keras.layers.Layer):
         self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
         return super(Encoder, self).build(input_shape)
 
-    def call(self, x, **kwargs):
+    def call(self, x, training, mask):
         state = x
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         # init ACT
@@ -455,17 +453,16 @@ class Encoder(tf.keras.layers.Layer):
         n_updates = tf.zeros(update_shape, name="n_updates")
         previous_state = tf.zeros_like(state, name="previous_state")
         step = tf.cast(0, dtype=tf.int32)
-        mask = kwargs.get('mask')
         # define update and halt-condition
         def update_state(state, step, halting_probability, remainders, n_updates):
             transformed_state = state + self.pos_encoding[:,step,:,:]
             if step == tf.cast(0, dtype=tf.int32):
-                transformed_state = self.dropout(transformed_state, training=kwargs.get('training'))
+                transformed_state = self.dropout(transformed_state, training=training)
             transformed_state = self.enc_layer(transformed_state,
-                    training=kwargs.get('training'), mask=mask)
+                    training=training, mask=mask)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
                     [transformed_state, halting_probability, remainders, n_updates],
-                    training=kwargs.get('training'), mask=mask)
+                    training=training, mask=mask)
             transformed_state = ((transformed_state * update_weights) +
                                 state * (1 - update_weights))
             step += 1
@@ -487,7 +484,7 @@ class Encoder(tf.keras.layers.Layer):
           maximum_iterations=self.max_iterations,
           parallel_iterations=1,
           swap_memory=True,
-          back_prop=kwargs.get('training'))
+          back_prop=training)
         act_loss = remainders + n_updates
         if mask is not None:
             act_loss *= (1-mask)
@@ -541,7 +538,7 @@ class Decoder(tf.keras.layers.Layer):
         self.look_ahead_mask = create_look_ahead_mask(sequence_length)
         return super(Decoder, self).build(input_shape)
 
-    def call(self, input, **kwargs):
+    def call(self, input, training, mask):
         x, enc_output, input_padding_mask, target_padding_mask = input
         # look ahead and dropout masks
         look_ahead_mask = tf.maximum(target_padding_mask, self.look_ahead_mask)
@@ -562,11 +559,12 @@ class Decoder(tf.keras.layers.Layer):
         def update_state(state, step, halting_probability, remainders, n_updates):
             transformed_state = state + self.pos_encoding[:,step,:,:]
             if step == tf.cast(0, dtype=tf.int32):
-                transformed_state = self.dropout(transformed_state, training=kwargs.get('training'))
-            transformed_state = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask], **kwargs)
+                transformed_state = self.dropout(transformed_state, training=training)
+            transformed_state = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
+                training=training, mask=mask)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
                 [transformed_state, halting_probability, remainders, n_updates],
-                training=kwargs.get('training'), mask=target_padding_mask)
+                training=training, mask=target_padding_mask)
             transformed_state = ((transformed_state * update_weights) +
                                 state * (1 - update_weights))
             step += 1
@@ -588,7 +586,7 @@ class Decoder(tf.keras.layers.Layer):
           maximum_iterations=self.max_iterations,
           parallel_iterations=1,
           swap_memory=True,
-          back_prop=kwargs.get('training'))
+          back_prop=training)
         act_loss = remainders + n_updates
         if target_padding_mask is not None:
             act_loss *= (1-target_padding_mask)
