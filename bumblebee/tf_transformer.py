@@ -415,7 +415,8 @@ class Encoder(tf.keras.layers.Layer):
         self.max_timescale = hparams.get('encoder_time_scale') or 10000
         self.random_shift = hparams.get('random_shift') or False
         self.halt_epsilon = hparams.get('halt_epsilon') or 0.01
-        self.time_penalty = hparams.get('act_time_penalty') or 0.01
+        self.time_penalty = hparams.get('encoder_time_penalty') or hparams.get('time_penalty') or 0.01
+        self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
 
     def get_config(self):
@@ -436,6 +437,7 @@ class Encoder(tf.keras.layers.Layer):
                                                             int(self.d_model),
                                                             max_timescale=self.max_timescale,
                                                             random_shift=self.random_shift)
+        self.dropout = tf.keras.layers.SpatialDropout1D(self.rate)
         self.enc_layer = EncoderLayer(hparams=self.hparams)
         self.act_layer = ACT(hparams=self.hparams)
         self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
@@ -457,6 +459,8 @@ class Encoder(tf.keras.layers.Layer):
         # define update and halt-condition
         def update_state(state, step, halting_probability, remainders, n_updates):
             transformed_state = state + self.pos_encoding[:,step,:,:]
+            if step == tf.cast(0, dtype=tf.int32):
+                transformed_state = self.dropout(transformed_state, training=kwargs.get('training'))
             transformed_state = self.enc_layer(transformed_state,
                     training=kwargs.get('training'), mask=mask)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
@@ -507,7 +511,7 @@ class Decoder(tf.keras.layers.Layer):
         self.max_timescale = hparams.get('decoder_time_scale') or 1000
         self.random_shift = hparams.get('random_shift') or False
         self.halt_epsilon = hparams.get('halt_epsilon') or 0.01
-        self.time_penalty = hparams.get('time_penalty') or 0.01
+        self.time_penalty = hparams.get('decoder_time_penalty') or hparams.get('time_penalty') or 0.01
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
 
@@ -530,6 +534,7 @@ class Decoder(tf.keras.layers.Layer):
                                                 max_timescale=self.max_timescale,
                                                 random_shift=self.random_shift)
         self.emb_layer = tf.keras.layers.Embedding(self.d_output, self.d_model)
+        self.dropout = tf.keras.layers.SpatialDropout1D(self.rate)
         self.dec_layer = DecoderLayer(hparams=self.hparams)
         self.act_layer = ACT(hparams=self.hparams)
         self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
@@ -556,6 +561,8 @@ class Decoder(tf.keras.layers.Layer):
         # define update and halt-condition
         def update_state(state, step, halting_probability, remainders, n_updates):
             transformed_state = state + self.pos_encoding[:,step,:,:]
+            if step == tf.cast(0, dtype=tf.int32):
+                transformed_state = self.dropout(transformed_state, training=kwargs.get('training'))
             transformed_state = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask], **kwargs)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
                 [transformed_state, halting_probability, remainders, n_updates],
@@ -654,8 +661,8 @@ class TransformerLayer(tf.keras.layers.Layer):
         # enc_output.shape == # (batch_size, inp_seq_len, d_model)
         enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
         # flip random bases in target sequence with dropout rate
-        if training:
-            target = self.__flip_target__(target)
+        #if training:
+        #    target = self.__flip_target__(target)
         # dec_output.shape == (batch_size, tar_seq_len, d_model)
         dec_output = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                 training=training, mask=None)
@@ -674,13 +681,13 @@ class Transformer(tf.keras.Model):
                             strides=1,
                             padding='same',
                             data_format='channels_last')
-        self.dropout = tf.keras.layers.SpatialDropout1D(hparams.get('rate') or 0.1)
+        #self.dropout = tf.keras.layers.SpatialDropout1D(hparams.get('rate') or 0.1)
         self.transformer_layer = TransformerLayer(hparams)
 
     def call(self, inputs, training=False):
         input, target, input_lengths, target_lengths = inputs
         inner = self.cnn(input)
-        inner = self.dropout(inner, training=training)
+        #inner = self.dropout(inner, training=training)
         output = self.transformer_layer([inner, target, input_lengths, target_lengths], training=training)
         return output
 

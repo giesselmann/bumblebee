@@ -25,7 +25,7 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-import os, argparse
+import os, argparse, yaml
 import edlib
 import numpy as np
 import tensorflow as tf
@@ -38,55 +38,69 @@ from tf_transformer_util import BatchGeneratorSim, BatchGeneratorSig, Transforme
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="BumbleBee basecaller")
-    parser.add_argument("model", help="pore model")
-    parser.add_argument("event", help="event file")
-    parser.add_argument("--prefix", default="", help="checkpoint and event prefix")
+    parser.add_argument("model", help="Pore model")
+    parser.add_argument("event", help="Event file")
+    parser.add_argument("--config", default=None, help="Transformer config file")
+    parser.add_argument("--prefix", default="", help="Checkpoint and event prefix")
+    parser.add_argument("--input_length", type=int, default=1000, help="Input signal window")
+    parser.add_argument("--target_length", type=int, default=100, help="Target sequence length")
+    parser.add_argument("--minibatch_size", type=int, default=32, help="Minibatch size")
+    parser.add_argument("--batches_train", type=int, default=10000, help="Training batches")
+    parser.add_argument("--batches_val", type=int, default=1000, help="Validation batches")
+    parser.add_argument("--gpus", nargs='+', type=int, default=[0], help="GPUs to use")
     args = parser.parse_args()
-    input_max_len = 850
-    target_max_len = 75
-    batches_train = 50000
-    batches_val = 1000
-    val_rate = batches_train // batches_val
-    batch_size = 32
+    input_max_len = args.input_length
+    target_max_len = args.target_length
+    batch_size = args.minibatch_size
     batch_gen = BatchGeneratorSig(args.model, args.event, max_input_len=input_max_len,
                                   min_target_len=50, max_target_len=target_max_len,
-                                  batches_train=batches_train, batches_val=batches_val,
+                                  batches_train=args.batches_train, batches_val=args.batches_val,
                                   minibatch_size=batch_size)
-
+    batches_train = batch_gen.batches_train
+    batches_val = batch_gen.batches_val
+    val_rate = batches_train // batches_val
     d_output = batch_gen.target_dim
-    d_model = 96
-
-    transformer_hparams = {'d_output' : d_output,
-                           'd_model' : d_model,
+    transformer_hparams_file = (args.config or os.path.join('./training_configs', args.prefix, 'hparams.yaml'))
+    if os.path.exists(transformer_hparams_file):
+        with open(transformer_hparams_file, 'r') as fp:
+            transformer_hparams = yaml.safe_load(fp)
+    else:
+        transformer_hparams = {'d_output' : d_output,
+                           'd_model' : 64,
                            'cnn_kernel' : 16,
-                           'dff' : d_model * 8,
+                           'dff' : 256,
                            'dff_type' : 'separable_convolution',
                            'encoder_dff_filter_width' : 16,
                            'decoder_dff_filter_width' : 8,
-                           'num_heads' : 6,
+                           'num_heads' : 4,
                            'encoder_max_iterations' : 8,
                            'decoder_max_iterations' : 16,
                            'encoder_time_scale' : 10000,
                            'decoder_time_scale' : 1000,
                            'random_shift' : False,
                            'ponder_bias_init' : 1.0,
+                           'encoder_time_penalty' : 0.001,
+                           'decoder_time_penalty' : 0.01,
                            'input_memory_comp' : 16,
-                           'target_memory_comp' : 4,
+                           'target_memory_comp' : None,
                            'input_memory_comp_pad' : 'same',
                            'target_memory_comp_pad' : 'causal'}
+        os.makedirs(os.path.dirname(transformer_hparams_file), exist_ok=True)
+        with open(transformer_hparams_file, 'w') as fp:
+            print(yaml.dump(transformer_hparams), file=fp)
 
-    tf.config.set_soft_device_placement(True)
+    tf.config.set_soft_device_placement(False)
     physical_devices = tf.config.experimental.list_physical_devices('GPU')
     for d in physical_devices:
-        tf.config.experimental.set_memory_growth(d, True)
+        tf.config.experimental.set_memory_growth(d, False)
 
-    strategy = tf.distribute.MirroredStrategy(devices=['/gpu:0'])
+    strategy = tf.distribute.MirroredStrategy(devices=['/gpu:' + str(i) for i in args.gpus] if args.gpus else ['/cpu:0'])
     checkpoint_dir = os.path.join('./training_checkpoints', args.prefix)
 
     summary_writer = tf.summary.create_file_writer(os.path.join('./training_summaries', args.prefix))
 
     with strategy.scope(), summary_writer.as_default():
-        learning_rate = TransformerLRS(d_model * 4, warmup_steps=8000)
+        learning_rate = TransformerLRS(transformer_hparams.get('d_model') * 4, warmup_steps=8000)
         optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
         loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
         def loss_function(real, pred, target_lengths):
@@ -95,11 +109,10 @@ if __name__ == '__main__':
             mask = tf.cast(mask, dtype=loss_.dtype)
             loss_ *= mask
             return tf.nn.compute_average_loss(loss_, global_batch_size=batch_size)
-        #test_loss = tf.keras.metrics.Mean(name='test_loss')
         train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
-        with tf.device('/cpu:0'):
-            transformer = Transformer(hparams=transformer_hparams)
+        #with tf.device('/cpu:0'):
+        transformer = Transformer(hparams=transformer_hparams)
         #transformer.summary()
 
         checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=transformer)
@@ -124,7 +137,6 @@ if __name__ == '__main__':
             target_lengths = input[3]
             predictions = transformer(input, training=False)
             t_loss = loss_function(target, predictions, target_lengths)
-            #test_loss.update_state(t_loss)
             test_accuracy.update_state(target, predictions)
             return t_loss
 
@@ -175,4 +187,3 @@ if __name__ == '__main__':
                         train_loss,
                         test_accuracy.result()))
             ckpt_manager.save()
-            #test_loss.reset_states()
