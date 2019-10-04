@@ -124,8 +124,10 @@ class BatchGeneratorSim(BatchGenerator):
     def __init__(self, pore_model_file, **kwargs):
         self.pm = pore_model(pore_model_file)
         super(BatchGeneratorSim, self).__init__(**kwargs)
-        self.sequences_train = self.__gen_seqs__(self.batches_train * self.minibatch_size, self.min_target_len, self.max_target_len)
-        self.sequences_val = self.__gen_seqs__(self.batches_val * self.minibatch_size, self.min_target_len, self.max_target_len)
+        self.sequences_train = self.__gen_seqs__(super(BatchGeneratorSim, self).batches_train * self.minibatch_size,
+                self.min_target_len, self.max_target_len)
+        self.sequences_val = self.__gen_seqs__(super(BatchGeneratorSim, self).batches_val * self.minibatch_size,
+                self.min_target_len, self.max_target_len)
 
     def __gen_seqs__(self, n, min_length, max_length):
         seqs = [''.join([random.choice('ACGT') for _

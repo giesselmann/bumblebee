@@ -25,7 +25,7 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-import os, argparse, yaml
+import os, argparse, yaml, time
 import edlib
 import numpy as np
 import tensorflow as tf
@@ -52,6 +52,10 @@ if __name__ == '__main__':
     input_max_len = args.input_length
     target_max_len = args.target_length
     batch_size = args.minibatch_size
+    #batch_gen = BatchGeneratorSim(args.model, max_input_len=input_max_len,
+    #                              min_target_len=50, max_target_len=target_max_len,
+    #                              batches_train=args.batches_train, batches_val=args.batches_val,
+    #                              minibatch_size=batch_size)
     batch_gen = BatchGeneratorSig(args.model, args.event, max_input_len=input_max_len,
                                   min_target_len=50, max_target_len=target_max_len,
                                   batches_train=args.batches_train, batches_val=args.batches_val,
@@ -92,7 +96,7 @@ if __name__ == '__main__':
     tf.config.set_soft_device_placement(False)
     physical_devices = tf.config.experimental.list_physical_devices('GPU')
     for d in physical_devices:
-        tf.config.experimental.set_memory_growth(d, False)
+        tf.config.experimental.set_memory_growth(d, True)
 
     strategy = tf.distribute.MirroredStrategy(devices=['/gpu:' + str(i) for i in args.gpus] if args.gpus else ['/cpu:0'])
     checkpoint_dir = os.path.join('./training_checkpoints', args.prefix)
@@ -108,7 +112,7 @@ if __name__ == '__main__':
             loss_ = loss_object(real, pred)
             mask = tf.cast(mask, dtype=loss_.dtype)
             loss_ *= mask
-            return tf.nn.compute_average_loss(loss_, global_batch_size=batch_size)
+            return tf.nn.compute_average_loss(loss_, global_batch_size=batch_size * strategy.num_replicas_in_sync)
         train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
         test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
         #with tf.device('/cpu:0'):
@@ -122,7 +126,9 @@ if __name__ == '__main__':
             print('Latest checkpoint restored!!')
 
         def train_step(inputs):
-            input, target = inputs
+            replica_context = tf.distribute.get_replica_context()  # for strategy
+            id = tf.get_static_value(replica_context.replica_id_in_sync_group)
+            input, target = inputs[id]
             target_lengths = input[3]
             with tf.GradientTape() as tape:
                 predictions = transformer(input, training=True)
@@ -133,7 +139,9 @@ if __name__ == '__main__':
             return loss
 
         def test_step(inputs):
-            input, target = inputs
+            replica_context = tf.distribute.get_replica_context()  # for strategy
+            id = tf.get_static_value(replica_context.replica_id_in_sync_group)
+            input, target = inputs[id]
             target_lengths = input[3]
             predictions = transformer(input, training=False)
             t_loss = loss_function(target, predictions, target_lengths)
@@ -152,6 +160,11 @@ if __name__ == '__main__':
             per_replica_losses = strategy.experimental_run_v2(test_step, args=(dataset_inputs,))
             return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None)
 
+        def distributed_batch(batch_gen):
+            return [([input_data, target_data[:,:-1], input_len, target_len], target_data[:,1:])
+                            for input_data, target_data, input_len, target_len in
+                                [next(batch_gen) for _ in range(strategy.num_replicas_in_sync)]]
+
         batch_gen_train = batch_gen.next_train()
         batch_gen_val = batch_gen.next_val()
 
@@ -159,12 +172,10 @@ if __name__ == '__main__':
             total_loss = 0.0
             num_batches = 0
             batch_gen.on_epoch_begin()
-            for batch in tqdm(range(batches_train), desc='Training', ncols=0):
+            for batch in tqdm(range(batches_train // strategy.num_replicas_in_sync), desc='Training', ncols=0):
                 tf.summary.experimental.set_step(optimizer.iterations)
-                input_data, target_data, input_len, target_len = next(batch_gen_train)
-                batch_loss = distributed_train_step((
-                        [input_data, target_data[:,:-1], input_len, target_len],
-                        target_data[:,1:]))
+                batch_input = distributed_batch(batch_gen_train)
+                batch_loss = distributed_train_step(batch_input)
                 if epoch == 0 and batch == 0:
                     transformer.summary()
                 num_batches += 1
@@ -173,10 +184,8 @@ if __name__ == '__main__':
                 tf.summary.scalar("loss", batch_loss)
                 tf.summary.scalar("lr", learning_rate(optimizer.iterations.numpy().astype(np.float32)))
                 if batch % val_rate == 0:
-                    input_data, target_data, input_len, target_len = next(batch_gen_val)
-                    batch_loss = distributed_test_step((
-                            [input_data, target_data[:,:-1], input_len, target_len],
-                            target_data[:,1:]))
+                    batch_input = distributed_batch(batch_gen_val)
+                    batch_loss = distributed_test_step(batch_input)
                     tf.summary.scalar("val_loss", batch_loss)
                     tf.summary.scalar('train_accuracy', train_accuracy.result())
                     tf.summary.scalar("val_accuracy", test_accuracy.result())
