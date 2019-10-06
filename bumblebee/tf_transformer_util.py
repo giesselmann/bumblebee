@@ -175,8 +175,10 @@ class BatchGeneratorSig(BatchGenerator):
         dist_quantile = np.quantile(summary['dist'], 1-discard_quantile)
         score_mask = np.logical_and(summary['logp'] > logp_quantile, summary['dist'] < dist_quantile)
         lengths = np.random.randint(self.min_target_len, self.max_target_len - 5, len(batches), dtype=np.uint64)
+        unique_batches = np.unique(batches)
+        np.random.shuffle(unique_batches)
         with tqdm(total=n_segments_train + n_segments_val) as pbar:
-            for batch in np.unique(batches):
+            for batch in unique_batches:
                 batch_mask = np.logical_and(np.equal(batches, batch), score_mask)
                 batch_summary = summary[batch_mask]
                 batch_lengths = lengths[batch_mask]
