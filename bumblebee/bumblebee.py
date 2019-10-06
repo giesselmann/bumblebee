@@ -104,7 +104,7 @@ if __name__ == '__main__':
     summary_writer = tf.summary.create_file_writer(os.path.join('./training_summaries', args.prefix))
 
     with strategy.scope(), summary_writer.as_default():
-        learning_rate = TransformerLRS(transformer_hparams.get('d_model'), warmup_steps=8000)
+        learning_rate = TransformerLRS(transformer_hparams.get('dff'), warmup_steps=8000)
         optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
         loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
         def loss_function(real, pred, target_lengths):
