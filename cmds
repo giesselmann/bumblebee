@@ -5,3 +5,10 @@ python3 bumblebee/bumblebee.py util/r9_4_450bps.mpi.model /scratch/local2/giesse
 python bumblebee/bumblebee.py util/r9_4_450bps.mpi.model D:/bumblebee/J1_TKOlike/events/minimap2/guppy/TKOlike.events.hdf5 --prefix ffn_cnn_sig_64 --input_length 850 --target_length 75 --batches_train 50000 --batches_val 5000 --gpus 0 1 --minibatch_size 24
 
 python bumblebee/bumblebee.py util/r9_4_450bps.mpi.model /scratch/local2/giesselm/bumblebee/J1_TKOlike/events/minimap2/guppy/TKOlike.events.hdf5 --prefix ffn_cnn_sig_96 --input_length 850 --target_length 75 --batches_train 50000 --batches_val 5000 --gpus 0 1 --minibatch_size 16
+
+
+# prom
+cd /data/machine_learning
+source virtual/tf_gpu2/bin/activate
+cd projects/bumblebee
+python3 bumblebee/bumblebee.py util/r9_4_450bps.mpi.model ../../data/bumblebee/J1_TKOlike/events/minimap2/guppy/TKOlike.events.hdf5 --prefix bb_128 --input_length 1200 --target_length 100 --minibatch_size 32 --batches_train 50000 --batches_val 5000 --gpus 0

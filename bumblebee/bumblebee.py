@@ -70,20 +70,20 @@ if __name__ == '__main__':
             transformer_hparams = yaml.safe_load(fp)
     else:
         transformer_hparams = {'d_output' : d_output,
-                           'd_model' : 64,
-                           'cnn_kernel' : 16,
-                           'dff' : 256,
+                           'd_model' : 128,
+                           'cnn_kernel' : 24,
+                           'dff' : 512,
                            'dff_type' : 'separable_convolution',
                            'encoder_dff_filter_width' : 16,
                            'decoder_dff_filter_width' : 8,
-                           'num_heads' : 4,
-                           'encoder_max_iterations' : 8,
-                           'decoder_max_iterations' : 16,
+                           'num_heads' : 8,
+                           'encoder_max_iterations' : 10,
+                           'decoder_max_iterations' : 20,
                            'encoder_time_scale' : 10000,
                            'decoder_time_scale' : 1000,
                            'random_shift' : False,
                            'ponder_bias_init' : 1.0,
-                           'encoder_time_penalty' : 0.001,
+                           'encoder_time_penalty' : 0.01,
                            'decoder_time_penalty' : 0.01,
                            'input_memory_comp' : 16,
                            'target_memory_comp' : None,
@@ -93,7 +93,7 @@ if __name__ == '__main__':
         with open(transformer_hparams_file, 'w') as fp:
             print(yaml.dump(transformer_hparams), file=fp)
 
-    tf.config.set_soft_device_placement(False)
+    tf.config.set_soft_device_placement(True)
     physical_devices = tf.config.experimental.list_physical_devices('GPU')
     for d in physical_devices:
         tf.config.experimental.set_memory_growth(d, True)
@@ -191,7 +191,8 @@ if __name__ == '__main__':
                     tf.summary.scalar("val_accuracy", test_accuracy.result())
                     train_accuracy.reset_states()
                     test_accuracy.reset_states()
-
+                if batch % 1000 == 0:
+                    ckpt_manager.save()
             print("Epoch {}: train loss: {}; accuracy: {}".format(epoch,
                         train_loss,
                         test_accuracy.result()))

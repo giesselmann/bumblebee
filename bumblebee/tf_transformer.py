@@ -491,7 +491,6 @@ class Encoder(tf.keras.layers.Layer):
         act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
         self.add_loss(act_loss)
         tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates))
-        #tf.summary.scalar("ponder_loss_encoder", tf.reduce_mean(act_loss))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 
@@ -593,7 +592,6 @@ class Decoder(tf.keras.layers.Layer):
         act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
         self.add_loss(act_loss)
         tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates))
-        #tf.summary.scalar("ponder_loss_decoder", tf.reduce_mean(act_loss))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 
@@ -682,7 +680,7 @@ class Transformer(tf.keras.Model):
         #self.dropout = tf.keras.layers.SpatialDropout1D(hparams.get('rate') or 0.1)
         self.transformer_layer = TransformerLayer(hparams)
 
-    def call(self, inputs, training=False):
+    def call(self, inputs, training=False, mask=None):
         input, target, input_lengths, target_lengths = inputs
         inner = self.cnn(input)
         #inner = self.dropout(inner, training=training)
