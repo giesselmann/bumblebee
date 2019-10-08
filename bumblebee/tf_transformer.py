@@ -40,20 +40,6 @@ def get_angles(pos, j, max_timescale, d_model):
 
 
 
-def pos_encoding():
-    pos_rads = get_angles(np.arange(seq_len)[np.newaxis, :, np.newaxis],
-                      np.arange(d_model)[np.newaxis, np.newaxis, :])
-
-
-
-
-def depth_encoding():
-    depth_rads = get_angles(np.arange(depth)[:, np.newaxis, np.newaxis],
-                                np.arange(d_model)[np.newaxis, np.newaxis, :])
-
-
-
-
 def positional_encoding(seq_len, depth, d_model,
                         max_timescale=10000, random_shift=False):
     def get_angles(pos, j, shift=0.0):
@@ -109,7 +95,7 @@ def scaled_dot_product_attention(q, k, v, mask):
       mask: Float tensor with shape broadcastable
             to (..., seq_len_q, seq_len_k). Defaults to None.
     Returns:
-      output, attention_weights
+      output
     """
     matmul_qk = tf.matmul(q, k, transpose_b=True)  # (..., seq_len_q, seq_len_k)
     # scale matmul_qk
@@ -122,7 +108,48 @@ def scaled_dot_product_attention(q, k, v, mask):
     # add up to 1.
     attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)  # (..., seq_len_q, seq_len_k)
     output = tf.matmul(attention_weights, v)  # (..., seq_len_q, depth_v)
-    return output, attention_weights
+    return output
+
+
+
+
+def scaled_local_attention(q, k, v, mask, window=32, mode='causal'):
+    idx = tf.range(0, tf.shape(q)[-2], dtype=tf.int32)
+    q_idx = tf.range(0, tf.shape(q)[-2], dtype=tf.int32)
+    window_2 = window // 2
+    if mode == 'same:':
+        k_idx = tf.concat([tf.zeros(window_2-1, dtype=tf.int32),
+                       tf.range(0, tf.shape(k)[-2] - 2*window_2 + 1, dtype=tf.int32),
+                       tf.ones(window_2, dtype=tf.int32) * tf.shape(k)[-2]], 0)
+    else: # 'causal'
+        k_idx = tf.concat([tf.zeros(window_2 * 2 - 1, dtype=tf.int32),
+                           tf.range(0, tf.shape(k)[-2] - 2*window_2 + 1, dtype=tf.int32)], 0)
+    idx = tf.stack([q_idx, tf.gather(k_idx, tf.cast(tf.linspace(tf.cast(0, tf.float32),
+                                             k_idx.shape[0]-1,
+                                             q_idx.shape[0]), tf.int32))], 1)
+    window_t = tf.cast(window_2 * 2, tf.int32)
+    dk = tf.cast(tf.shape(k)[-1], tf.float32)
+    def element_wise_attention(idx2compute):
+        _q_idx, _k_idx = tf.unstack(idx2compute)
+        matmul_qk = tf.matmul(q[...,_q_idx:_q_idx+1,:], k[..., _k_idx:_k_idx+window_t, :], transpose_b=True)
+        scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
+        if mask is not None and tf.shape(mask)[-2] == 1:
+            scaled_attention_logits += (mask[..., _k_idx:_k_idx+window_t] * -1e9)
+        if mask is not None and tf.shape(mask)[-2] == tf.shape(q)[-2]:
+            scaled_attention_logits += (mask[..., _k_idx:_k_idx+window_t, _q_idx] * -1e9)
+        attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)
+        output = tf.matmul(attention_weights, v[..., _k_idx:_k_idx+window_t, :])
+        return tf.squeeze(output) # (batch_size, num_heads, d_model)
+    z = tf.map_fn(element_wise_attention, idx,
+                    dtype=q.dtype)
+    # [1,0,2] or [1,2,0,3] for multi-head
+    if len(q.shape) == 3:
+        z = tf.transpose(z, perm=[1, 0, 2])
+    elif len(q.shape) == 4:
+        z = tf.transpose(z, perm=[1, 2, 0, 3])
+    else:
+        raise NotImplementedError('Input shape mismatch')
+    return z
 
 
 
@@ -155,6 +182,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self.num_heads = hparams.get('num_heads') or 4
         self.memory_comp = hparams.get('memory_comp')
         self.memory_comp_pad = hparams.get('memory_comp_pad') or 'same'
+        self.local_attention_mode = hparams.get('local_attention_mode') or 'causal'
+        self.local_attention_window = hparams.get('local_attention_window') or 32
         assert self.d_model % self.num_heads == 0
         self.depth = self.d_model // self.num_heads
         self.hparams = hparams.copy()
@@ -215,15 +244,19 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         v = self.split_heads(v, seq_len_k)
         # scaled_attention.shape == (batch_size, num_heads, seq_len_q, depth)
         # attention_weights.shape == (batch_size, num_heads, seq_len_q, seq_len_k)
-        scaled_attention, attention_weights = scaled_dot_product_attention(
-          q, k, v, mask=mask)
+        #scaled_attention, attention_weights = scaled_dot_product_attention(
+        #  q, k, v, mask=mask)
+        scaled_attention = scaled_local_attention(q, k, v,
+                                mask=mask,
+                                window=self.local_attention_window,
+                                mode=self.local_attention_mode)
         # (batch_size, seq_len_q, num_heads, depth)
         scaled_attention = tf.transpose(scaled_attention, perm=[0, 2, 1, 3])
         # (batch_size, seq_len_q, d_model)
         concat_attention = tf.reshape(scaled_attention, (-1, seq_len_q, self.d_model))
         # (batch_size, seq_len_q, d_model)
         output = self.dense(concat_attention)
-        return [output, attention_weights]
+        return output
 
 
 
@@ -238,7 +271,8 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
         self.hparams['memory_comp'] = hparams.get('input_memory_comp')
-        self.hparams['memory_comp_pad'] = hparams.get('input_memory_comp_pad')
+        self.hparams['memory_comp_pad'] = 'same'
+        self.hparams['local_attention_window'] = hparams.get('input_local_attention_window')
 
     def get_config(self):
         config = super(EncoderLayer, self).get_config()
@@ -263,7 +297,7 @@ class EncoderLayer(tf.keras.layers.Layer):
 
     def call(self, input, training, mask):
         # attn_output == (batch_size, input_seq_len, d_model)
-        attn_output, _ = self.mha([input, input, input], training=training, mask=mask)
+        attn_output = self.mha([input, input, input], training=training, mask=mask)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(input + attn_output)  # (batch_size, input_seq_len, d_model)
         ffn_output = self.ffn(out1)  # (batch_size, input_seq_len, d_model)
@@ -296,10 +330,14 @@ class DecoderLayer(tf.keras.layers.Layer):
     def build(self, input_shape):
         assert isinstance(input_shape, list)
         self.hparams['memory_comp'] = self.hparams.get('target_memory_comp')
-        self.hparams['memory_comp_pad'] = self.hparams.get('target_memory_comp_pad')
+        self.hparams['memory_comp_pad'] = 'causal'
+        self.hparams['local_attention_window'] = self.hparams.get('target_local_attention_window')
+        self.hparams['local_attention_mode'] = 'causal'
         self.mha1 = MultiHeadAttention(hparams=self.hparams)
         self.hparams['memory_comp'] = self.hparams.get('input_memory_comp')
-        self.hparams['memory_comp_pad'] = self.hparams.get('input_memory_comp_pad')
+        self.hparams['memory_comp_pad'] = 'same'
+        self.hparams['local_attention_window'] = self.hparams.get('input_local_attention_window')
+        self.hparams['local_attention_mode'] = 'same'
         self.mha2 = MultiHeadAttention(hparams=self.hparams)
         if self.dff_type == 'point_wise':
             self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
@@ -325,12 +363,12 @@ class DecoderLayer(tf.keras.layers.Layer):
             padding_mask = None
         # enc_output.shape == (batch_size, input_seq_len, d_model)
         # attn_weights_block1 == (batch_size, target_seq_len, d_model)
-        attn1, attn_weights_block1 = self.mha1([x, x, x],
+        attn1 = self.mha1([x, x, x],
                 training=training, mask=look_ahead_mask)
         attn1 = self.dropout1(attn1, training)
         out1 = self.layernorm1(attn1 + x)
         # attn_weights_block2 == (batch_size, target_seq_len, d_model)
-        attn2, attn_weights_block2 = self.mha2([enc_output, enc_output, out1],
+        attn2 = self.mha2([enc_output, enc_output, out1],
                 training=training, mask=padding_mask)
         attn2 = self.dropout2(attn2, training)
         out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
@@ -668,7 +706,6 @@ class TransformerLayer(tf.keras.layers.Layer):
 
 
 
-
 class Transformer(tf.keras.Model):
     def __init__(self, hparams={}):
         super(Transformer, self).__init__()
@@ -691,16 +728,13 @@ class Transformer(tf.keras.Model):
 
 
 if __name__ == '__main__':
-    d_model = 128
-    depth = 8
-    sig_len = 10000
-    max_timescale = 2500
-    # (1, depth, sig_len, d_model)
-    t = positional_encoding(sig_len, depth, d_model,
-                        max_timescale=max_timescale, random_shift=False)
-    f, ax = plt.subplots(2)
-    ax[0].pcolormesh(t[0, 0], cmap='RdBu')
-    ax[1].pcolormesh(t[0, 1], cmap='RdBu')
-    #ax.plot(t[0, 0, :, -1], 'r-')
-    #ax.plot(t[0, -1, :, -1], 'b-')
-    plt.show()
+    minibatch_size = 32
+    d_model = 32
+    sig_len = 128
+
+    q = tf.random.uniform((minibatch_size, sig_len, d_model))
+    k = tf.random.uniform((minibatch_size, sig_len, d_model))
+    v = tf.random.uniform((minibatch_size, sig_len, d_model))
+
+    z = scaled_dot_product_attention(q, k, v, None)
+    z1 = scaled_local_attention(q, k, v, None)

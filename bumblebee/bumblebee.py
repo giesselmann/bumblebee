@@ -39,7 +39,7 @@ from tf_transformer_util import BatchGeneratorSim, BatchGeneratorSig, Transforme
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="BumbleBee basecaller")
     parser.add_argument("model", help="Pore model")
-    parser.add_argument("event", help="Event file")
+    parser.add_argument("--event", default='', help="Event file")
     parser.add_argument("--config", default=None, help="Transformer config file")
     parser.add_argument("--prefix", default="", help="Checkpoint and event prefix")
     parser.add_argument("--input_length", type=int, default=1000, help="Input signal window")
@@ -47,19 +47,21 @@ if __name__ == '__main__':
     parser.add_argument("--minibatch_size", type=int, default=32, help="Minibatch size")
     parser.add_argument("--batches_train", type=int, default=10000, help="Training batches")
     parser.add_argument("--batches_val", type=int, default=1000, help="Validation batches")
-    parser.add_argument("--gpus", nargs='+', type=int, default=[0], help="GPUs to use")
+    parser.add_argument("--gpus", nargs='+', type=int, default=[], help="GPUs to use")
     args = parser.parse_args()
     input_max_len = args.input_length
     target_max_len = args.target_length
     batch_size = args.minibatch_size
-    #batch_gen = BatchGeneratorSim(args.model, max_input_len=input_max_len,
-    #                              min_target_len=50, max_target_len=target_max_len,
-    #                              batches_train=args.batches_train, batches_val=args.batches_val,
-    #                              minibatch_size=batch_size)
-    batch_gen = BatchGeneratorSig(args.model, args.event, max_input_len=input_max_len,
-                                  min_target_len=50, max_target_len=target_max_len,
-                                  batches_train=args.batches_train, batches_val=args.batches_val,
-                                  minibatch_size=batch_size)
+    if not args.event:
+        batch_gen = BatchGeneratorSim(args.model, max_input_len=input_max_len,
+                                    min_target_len=50, max_target_len=target_max_len,
+                                    batches_train=args.batches_train, batches_val=args.batches_val,
+                                    minibatch_size=batch_size)
+    else:
+        batch_gen = BatchGeneratorSig(args.model, args.event, max_input_len=input_max_len,
+                                    min_target_len=50, max_target_len=target_max_len,
+                                    batches_train=args.batches_train, batches_val=args.batches_val,
+                                    minibatch_size=batch_size)
     batches_train = batch_gen.batches_train
     batches_val = batch_gen.batches_val
     val_rate = batches_train // batches_val
@@ -85,10 +87,11 @@ if __name__ == '__main__':
                            'ponder_bias_init' : 1.0,
                            'encoder_time_penalty' : 0.01,
                            'decoder_time_penalty' : 0.01,
-                           'input_memory_comp' : 16,
-                           'target_memory_comp' : None,
-                           'input_memory_comp_pad' : 'same',
-                           'target_memory_comp_pad' : 'causal'}
+                           'input_local_attention_window' : 200,
+                           'target_local_attention_window' : 20
+                           #'input_memory_comp' : 16,
+                           #'target_memory_comp' : None
+                           }
         os.makedirs(os.path.dirname(transformer_hparams_file), exist_ok=True)
         with open(transformer_hparams_file, 'w') as fp:
             print(yaml.dump(transformer_hparams), file=fp)
