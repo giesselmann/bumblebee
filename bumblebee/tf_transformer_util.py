@@ -199,8 +199,14 @@ class BatchGeneratorSig(BatchGenerator):
                 pbar.update(len(batch_sequences))
                 if len(segments) >= n_segments_train + n_segments_val:
                     break
-        self.segments_train = segments[:n_segments_train]
-        self.segments_val = segments[n_segments_train:n_segments_train + n_segments_val]
+        if len(segments) >= n_segments_train + n_segments_val:
+            self.segments_train = segments[:n_segments_train]
+            self.segments_val = segments[n_segments_train:n_segments_train + n_segments_val]
+        else:
+            train_ratio = n_segments_train / (n_segments_train + n_segments_val)
+            train_split = int(train_ratio * (n_segments_train + n_segments_val))
+            self.segments_train = segments[:train_split]
+            self.segments_val = segments[train_split:]            
 
     def __del__(self):
         self.event_file.close()
