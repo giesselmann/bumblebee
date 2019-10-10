@@ -527,7 +527,7 @@ class Encoder(tf.keras.layers.Layer):
             act_loss *= (1-mask)
         act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
         self.add_loss(act_loss)
-        tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates))
+        tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates))    # TODO correct for seq len
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 
@@ -628,7 +628,7 @@ class Decoder(tf.keras.layers.Layer):
             act_loss *= (1-target_padding_mask)
         act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
         self.add_loss(act_loss)
-        tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates))
+        tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates))    # TODO correct for seq len
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 
@@ -656,20 +656,7 @@ class TransformerLayer(tf.keras.layers.Layer):
         self.decoder = Decoder(hparams=self.hparams)
         self.d_output_t = tf.cast(self.d_output, tf.int32)
         self.final_layer = tf.keras.layers.Dense(self.d_output)
-
-    def __create_masks__(self, input_lengths, target_lengths, input_max, target_max):
-        # Encoder padding mask
-        # Used in encoder self-attention
-        enc_padding_mask = create_padding_mask(input_lengths, input_max)
-        # Decoder input padding mask
-        # This padding mask is used to mask the encoder outputs.
-        # Used in the 2nd attention block in the decoder.
-        dec_input_padding_mask = enc_padding_mask
-        # Decoder target padding mask
-        # Used in the 1st attention block in the decoder.
-        # Used in the 1st attention block in the decoder with the look_ahead_mask
-        dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
-        return enc_padding_mask, dec_input_padding_mask, dec_target_padding_mask
+        return super(TransformerLayer, self).build(input_shape)
 
     def __flip_target__(self, target):
         flp_mask = tf.random.uniform(target.shape, 0.0, 1.0, dtype=tf.float32)
@@ -680,27 +667,66 @@ class TransformerLayer(tf.keras.layers.Layer):
         target = (target + flp_val) % self.d_output_t
         return target
 
-    def __create_pos_encoding__(self, n):
-        positional_encoding(int(sequence_length),
-                                                self.max_iterations,
-                                                int(self.d_model),
-                                                max_timescale=self.max_timescale,
-                                                random_shift=self.random_shift)
-
     def call(self, inputs, training=True, mask=None):
-        input, target, input_lengths, target_lengths = inputs
-        enc_padding_mask, dec_input_padding_mask, dec_target_padding_mask = self.__create_masks__(
-                input_lengths, target_lengths, input.shape[1], target.shape[1])
-        # enc_output.shape == # (batch_size, inp_seq_len, d_model)
-        enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
-        # flip random bases in target sequence with dropout rate
-        #if training:
-        #    target = self.__flip_target__(target)
-        # dec_output.shape == (batch_size, tar_seq_len, d_model)
-        dec_output = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
-                training=training, mask=None)
-        final_output = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
-        return final_output
+        if len(inputs) == 4:    # trainig
+            input, target, input_lengths, target_lengths = inputs
+            input_max = input.shape[1]
+            target_max = target.shape[1]
+            enc_padding_mask = create_padding_mask(input_lengths, input_max)
+            dec_input_padding_mask = create_padding_mask(input_lengths, input_max)
+            dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
+            # enc_output.shape == # (batch_size, inp_seq_len, d_model)
+            enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
+            # flip random bases in target sequence with dropout rate
+            #if training:
+            #    target = self.__flip_target__(target)
+            # dec_output.shape == (batch_size, tar_seq_len, d_model)
+            dec_output = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
+                    training=training, mask=None)
+            final_output = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
+            return final_output
+        else:   # prediction
+            input, input_lengths = inputs
+            input_max = input.shape[1]
+            target_max = input_max // 9 # TODO make dynamic output length
+            target = tf.concat([tf.ones_like(input_lengths) * self.d_output_t - 2, # init with sos token
+                                tf.zeros((tf.shape(input)[0],) + (target_max-1,), dtype=input_lengths.dtype)], axis=-1)
+            target_lengths = tf.ones_like(input_lengths)
+            # run encoder once
+            enc_padding_mask = create_padding_mask(input_lengths, input_max)
+            dec_input_padding_mask = create_padding_mask(input_lengths, input_max)
+            enc_output = self.encoder(input, training=False, mask=enc_padding_mask)
+            target_active = tf.ones(target_lengths.shape, dtype=tf.bool)
+            step = tf.cast(0, dtype=tf.int32)
+            # update decoder target with new predictions
+            def update_state(step, target, target_lengths, target_active):
+                dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
+                dec_output = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
+                        training=False, mask=None)
+                predictions = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
+                final_output = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)   # (batch_size, tar_seq_len)
+                target = tf.concat([target[:,:step],
+                                    final_output[:,step:]], axis=-1)
+                target_active = tf.logical_and(target_active, tf.expand_dims(tf.less(final_output[:,step], self.d_output_t -2), -1))
+                target_lengths += tf.cast(target_active, target_lengths.dtype)
+                step += 1
+                return (step, target, target_lengths, target_active)
+
+            # stop when all sequences yielded eos
+            def should_continue(u0, u1, u2, target_active):
+                del u0, u1, u2
+                return tf.reduce_any(target_active)
+
+            # loop over decoder until all sequences stop with eos token or target_max reached
+            # Do while loop iterations until predicate above is false.
+            (_, target, target_lengths, _) = tf.while_loop(
+              should_continue, update_state,
+              (step, target, target_lengths, target_active),
+              maximum_iterations=target_max-1,
+              parallel_iterations=1,
+              swap_memory=True,
+              back_prop=False)
+            return [target, target_lengths]
 
 
 
@@ -717,11 +743,16 @@ class Transformer(tf.keras.Model):
         self.transformer_layer = TransformerLayer(hparams)
 
     def call(self, inputs, training=False, mask=None):
-        input, target, input_lengths, target_lengths = inputs
-        inner = self.cnn(input)
-        #inner = self.dropout(inner, training=training)
-        output = self.transformer_layer([inner, target, input_lengths, target_lengths], training=training)
-        return output
+        if len(inputs) == 4:    # training
+            input, target, input_lengths, target_lengths = inputs
+            inner = self.cnn(input)
+            output = self.transformer_layer([inner, target, input_lengths, target_lengths], training=training)
+            return output
+        elif len(inputs) == 2:  # prediction
+            input, input_lengths = inputs
+            inner = self.cnn(input)
+            output = self.transformer_layer([inner, input_lengths])
+            return output
 
 
 

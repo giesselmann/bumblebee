@@ -37,6 +37,12 @@ from util import pore_model
 
 
 
+def decode_sequence(logits, alphabet='ACGT'):
+    return ''.join([alphabet[i] for i in logits if i < len(alphabet)])
+
+
+
+
 class BatchGenerator():
     def __init__(self, batches_train=100, batches_val=10,
                  minibatch_size=32,
@@ -206,7 +212,7 @@ class BatchGeneratorSig(BatchGenerator):
             train_ratio = n_segments_train / (n_segments_train + n_segments_val)
             train_split = int(train_ratio * (n_segments_train + n_segments_val))
             self.segments_train = segments[:train_split]
-            self.segments_val = segments[train_split:]            
+            self.segments_val = segments[train_split:]
 
     def __del__(self):
         self.event_file.close()

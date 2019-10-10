@@ -25,12 +25,14 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-import os, argparse, yaml, time
-import edlib
+import os, sys, argparse, yaml, time
+import edlib, random
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
+from util import pore_model
 from tf_transformer import Transformer
+from tf_transformer_util import decode_sequence
 from tf_transformer_util import BatchGeneratorSim, BatchGeneratorSig, TransformerLRS
 
 
@@ -168,6 +170,14 @@ predict     Predict sequence from raw fast5
                 test_accuracy.update_state(target, predictions)
                 return t_loss
 
+            def predict_step(inputs):
+                replica_context = tf.distribute.get_replica_context()  # for strategy
+                id = tf.get_static_value(replica_context.replica_id_in_sync_group)
+                input, target = inputs[id]
+                input_data = input[0]
+                input_lengths = input[2]
+                predictions, _ = transformer([input_data, input_lengths])
+
             # `experimental_run_v2` replicates the provided computation and runs it
             # with the distributed input.
             @tf.function
@@ -221,7 +231,41 @@ predict     Predict sequence from raw fast5
                 transformer.save_weights(os.path.join(checkpoint_dir, 'weights'), save_format='tf')
 
     def predict(self, argv):
-        pass
+        parser = argparse.ArgumentParser(description="BumbleBee basecaller prediction")
+        parser.add_argument("config", help="BumbleBee config")
+        parser.add_argument("checkpoint", help="Training checkpoint")
+        parser.add_argument("model", help="Pore model")
+        #parser.add_argument("fast5", help="Raw signal fast5 file")
+        parser.add_argument("--max_signal_length", type=int, default=750, help="Signal window size")
+        parser.add_argument("--minibatch_size", type=int, default=16, help="Batch size")
+        parser.add_argument("-t", "--threads", type=int, default=16, help="Threads")
+        args = parser.parse_args(argv)
+        tf.config.threading.set_inter_op_parallelism_threads(args.threads // 4)
+        tf.config.threading.set_intra_op_parallelism_threads(args.threads)
+        # test sim_signal
+        pm = pore_model(args.model)
+        sequences = [''.join([random.choice('ACGT') for _
+            in range(random.randint(50, 75))]) for i
+                in range(args.minibatch_size)]
+        signals = [pm.generate_signal(s, samples=None, noise=True) for s in sequences]
+        input = np.zeros((args.minibatch_size, args.max_signal_length, 1), dtype=np.float32)
+        input_lengths = np.zeros((args.minibatch_size, 1), dtype=np.int32)
+        for i, s in enumerate(signals):
+            input[i, :len(s),0] = (s - pm.model_median) / pm.model_MAD
+            input_lengths[i,0] = len(s)
+        # load and init with dummy data
+        with open(args.config, 'r') as fp:
+            transformer_hparams = yaml.safe_load(fp)
+        transformer = Transformer(hparams=transformer_hparams)
+        _, _ = transformer([input, input_lengths])
+        # load weights into initialized model
+        transformer.load_weights(args.checkpoint)
+
+        targets, target_lengths = transformer([input, input_lengths])
+        for sequence, target, target_length in zip(sequences, targets, target_lengths):
+            print('@seq')
+            print(sequence)
+            print(decode_sequence(target[1:target_length.numpy()[0]]))
 
 
 
