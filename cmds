@@ -1,7 +1,10 @@
 source /project/miniondev/virtual/tf_gpu2/bin/activate
 
-python3 bumblebee/bumblebee.py util/r9_4_450bps.mpi.model --prefix sim --input_length 850 --target_length 75 --batches_train 100 --batches_val 10 --minibatch_size 24
+python3 bumblebee/bumblebee.py train util/r9_4_450bps.mpi.model --prefix sim --input_length 850 --target_length 75 --batches_train 100 --batches_val 10 --minibatch_size 24
 
+python bumblebee/bumblebee.py train util/r9_4_450bps.mpi.model --gpus 0 --prefix sim --input_length 850 --target_length 75 --batches_train 1000 --batches_val 100 --minibatch_size 16
+
+python bumblebee/bumblebee.py predict bb_128_long/hparams.yaml bb_128_long/weights_0/weights util/r9_4_450bps.mpi.model ../../bumblebee/J1_TKOlike/events/minimap2/guppy/TKOlike.events.hdf5
 
 # prom
 cd /data/machine_learning

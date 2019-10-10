@@ -91,9 +91,9 @@ predict     Predict sequence from raw fast5
                 transformer_hparams = yaml.safe_load(fp)
         else:
             transformer_hparams = {'d_output' : d_output,
-                               'd_model' : 128,
+                               'd_model' : 64,
                                'cnn_kernel' : 24,
-                               'dff' : 512,
+                               'dff' : 256,
                                'dff_type' : 'separable_convolution',
                                'encoder_dff_filter_width' : 16,
                                'decoder_dff_filter_width' : 8,
@@ -109,7 +109,7 @@ predict     Predict sequence from raw fast5
                                #'input_local_attention_window' : 200,
                                #'target_local_attention_window' : 20
                                'input_memory_comp' : 16,
-                               'target_memory_comp' : 4
+                               'target_memory_comp' : None
                                }
             os.makedirs(os.path.dirname(transformer_hparams_file), exist_ok=True)
             with open(transformer_hparams_file, 'w') as fp:
@@ -122,7 +122,7 @@ predict     Predict sequence from raw fast5
 
         strategy = tf.distribute.MirroredStrategy(devices=['/gpu:' + str(i) for i in args.gpus] if args.gpus else ['/cpu:0'])
         checkpoint_dir = os.path.join('./training_checkpoints', args.prefix)
-
+        os.makedirs(checkpoint_dir, exist_ok=True)
         summary_writer = tf.summary.create_file_writer(os.path.join('./training_summaries', args.prefix))
 
         with strategy.scope(), summary_writer.as_default():
@@ -137,6 +137,7 @@ predict     Predict sequence from raw fast5
                 return tf.nn.compute_average_loss(loss_, global_batch_size=batch_size * strategy.num_replicas_in_sync)
             train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
             test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
+            prediction_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='prediction_accuracy')
             #with tf.device('/cpu:0'):
             transformer = Transformer(hparams=transformer_hparams)
             #transformer.summary()
@@ -152,31 +153,25 @@ predict     Predict sequence from raw fast5
                 id = tf.get_static_value(replica_context.replica_id_in_sync_group)
                 input, target = inputs[id]
                 target_lengths = input[3]
+                mask = tf.squeeze(tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32))
                 with tf.GradientTape() as tape:
                     predictions = transformer(input, training=True)
                     loss = loss_function(target, predictions, target_lengths)
                 gradients = tape.gradient(loss, transformer.trainable_variables)
                 optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
-                train_accuracy.update_state(target, predictions)
+                train_accuracy.update_state(target, predictions, mask)
                 return loss
 
             def test_step(inputs):
                 replica_context = tf.distribute.get_replica_context()  # for strategy
                 id = tf.get_static_value(replica_context.replica_id_in_sync_group)
                 input, target = inputs[id]
-                target_lengths = input[3]
+                input_data, _, input_lengths, target_lengths = input
+                mask = tf.squeeze(tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32))
                 predictions = transformer(input, training=False)
                 t_loss = loss_function(target, predictions, target_lengths)
-                test_accuracy.update_state(target, predictions)
+                test_accuracy.update_state(target, predictions, mask)
                 return t_loss
-
-            def predict_step(inputs):
-                replica_context = tf.distribute.get_replica_context()  # for strategy
-                id = tf.get_static_value(replica_context.replica_id_in_sync_group)
-                input, target = inputs[id]
-                input_data = input[0]
-                input_lengths = input[2]
-                predictions, _ = transformer([input_data, input_lengths])
 
             # `experimental_run_v2` replicates the provided computation and runs it
             # with the distributed input.
@@ -215,8 +210,8 @@ predict     Predict sequence from raw fast5
                     tf.summary.scalar("lr", learning_rate(optimizer.iterations.numpy().astype(np.float32)))
                     if batch % val_rate == 0:
                         batch_input = distributed_batch(batch_gen_val)
-                        batch_loss = distributed_test_step(batch_input)
-                        tf.summary.scalar("val_loss", batch_loss)
+                        test_loss = distributed_test_step(batch_input)
+                        tf.summary.scalar("val_loss", test_loss)
                         tf.summary.scalar('train_accuracy', train_accuracy.result())
                         tf.summary.scalar("val_accuracy", test_accuracy.result())
                         train_accuracy.reset_states()
@@ -224,9 +219,7 @@ predict     Predict sequence from raw fast5
                     if batch % 1000 == 0:
                         ckpt_manager.save()
                         transformer.save_weights(os.path.join(checkpoint_dir, 'weights'), save_format='tf')
-                print("Epoch {}: train loss: {}; accuracy: {}".format(epoch,
-                            train_loss,
-                            test_accuracy.result()))
+                print("Epoch {}: train loss: {}".format(epoch, train_loss))
                 ckpt_manager.save()
                 transformer.save_weights(os.path.join(checkpoint_dir, 'weights'), save_format='tf')
 
@@ -235,37 +228,35 @@ predict     Predict sequence from raw fast5
         parser.add_argument("config", help="BumbleBee config")
         parser.add_argument("checkpoint", help="Training checkpoint")
         parser.add_argument("model", help="Pore model")
-        #parser.add_argument("fast5", help="Raw signal fast5 file")
-        parser.add_argument("--max_signal_length", type=int, default=750, help="Signal window size")
+        parser.add_argument("fast5", help="Raw signal fast5 file")
+        parser.add_argument("--max_signal_length", type=int, default=1200, help="Signal window size")
         parser.add_argument("--minibatch_size", type=int, default=16, help="Batch size")
         parser.add_argument("-t", "--threads", type=int, default=16, help="Threads")
         args = parser.parse_args(argv)
         tf.config.threading.set_inter_op_parallelism_threads(args.threads // 4)
         tf.config.threading.set_intra_op_parallelism_threads(args.threads)
         # test sim_signal
-        pm = pore_model(args.model)
-        sequences = [''.join([random.choice('ACGT') for _
-            in range(random.randint(50, 75))]) for i
-                in range(args.minibatch_size)]
-        signals = [pm.generate_signal(s, samples=None, noise=True) for s in sequences]
-        input = np.zeros((args.minibatch_size, args.max_signal_length, 1), dtype=np.float32)
-        input_lengths = np.zeros((args.minibatch_size, 1), dtype=np.int32)
-        for i, s in enumerate(signals):
-            input[i, :len(s),0] = (s - pm.model_median) / pm.model_MAD
-            input_lengths[i,0] = len(s)
+        batch_gen = BatchGeneratorSig(args.model, args.fast5, max_input_len=args.max_signal_length,
+                                        min_target_len=50, max_target_len=100,
+                                        batches_train=1, batches_val=0,
+                                        minibatch_size=args.minibatch_size)
+        batch_gen_train = batch_gen.next_train()
+        input_data, target_data, input_lengths, target_lengths = next(batch_gen_train)
         # load and init with dummy data
         with open(args.config, 'r') as fp:
             transformer_hparams = yaml.safe_load(fp)
         transformer = Transformer(hparams=transformer_hparams)
-        _, _ = transformer([input, input_lengths])
+        _ = transformer([input_data, target_data[:,:-1], input_lengths, target_lengths])
         # load weights into initialized model
         transformer.load_weights(args.checkpoint)
 
-        targets, target_lengths = transformer([input, input_lengths])
-        for sequence, target, target_length in zip(sequences, targets, target_lengths):
+
+        predictions = transformer([input_data, target_data[:,:-1], input_lengths, target_lengths], training=False)
+        for target, target_length, prediction, prediction_length in zip(target_data, target_lengths, predictions, target_lengths):
+            logits = tf.argmax(prediction, axis=-1)
             print('@seq')
-            print(sequence)
-            print(decode_sequence(target[1:target_length.numpy()[0]]))
+            print(decode_sequence(target[:target_length[0]]))
+            print(decode_sequence(logits[:prediction_length[0]]))
 
 
 

@@ -686,9 +686,8 @@ class TransformerLayer(tf.keras.layers.Layer):
             final_output = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
             return final_output
         else:   # prediction
-            input, input_lengths = inputs
+            input, input_lengths, target_max = inputs
             input_max = input.shape[1]
-            target_max = input_max // 9 # TODO make dynamic output length
             target = tf.concat([tf.ones_like(input_lengths) * self.d_output_t - 2, # init with sos token
                                 tf.zeros((tf.shape(input)[0],) + (target_max-1,), dtype=input_lengths.dtype)], axis=-1)
             target_lengths = tf.ones_like(input_lengths)
@@ -698,35 +697,38 @@ class TransformerLayer(tf.keras.layers.Layer):
             enc_output = self.encoder(input, training=False, mask=enc_padding_mask)
             target_active = tf.ones(target_lengths.shape, dtype=tf.bool)
             step = tf.cast(0, dtype=tf.int32)
+            predictions = tf.zeros_like(target)
             # update decoder target with new predictions
-            def update_state(step, target, target_lengths, target_active):
+            def update_state(step, target, u0, target_lengths, target_active):
+                del u0
                 dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
                 dec_output = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                         training=False, mask=None)
                 predictions = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
                 final_output = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)   # (batch_size, tar_seq_len)
-                target = tf.concat([target[:,:step],
-                                    final_output[:,step:]], axis=-1)
+                target = tf.concat([target[:,:step+1],
+                                    final_output[:,step:-1]], axis=-1)
                 target_active = tf.logical_and(target_active, tf.expand_dims(tf.less(final_output[:,step], self.d_output_t -2), -1))
                 target_lengths += tf.cast(target_active, target_lengths.dtype)
                 step += 1
-                return (step, target, target_lengths, target_active)
+                return (step, target, predictions, target_lengths, target_active)
 
             # stop when all sequences yielded eos
-            def should_continue(u0, u1, u2, target_active):
-                del u0, u1, u2
+            def should_continue(u0, u1, u2, u3, target_active):
+                del u0, u1, u2, u3
                 return tf.reduce_any(target_active)
 
             # loop over decoder until all sequences stop with eos token or target_max reached
             # Do while loop iterations until predicate above is false.
-            (_, target, target_lengths, _) = tf.while_loop(
+            (_, target, predictions, target_lengths, _) = tf.while_loop(
               should_continue, update_state,
-              (step, target, target_lengths, target_active),
+              (step, target, predictions, target_lengths, target_active),
               maximum_iterations=target_max-1,
               parallel_iterations=1,
               swap_memory=True,
               back_prop=False)
-            return [target, target_lengths]
+            #target = tf.concat([target[:,:-1], tf.ones_like(input_lengths) * self.d_output_t - 1], axis=-1)
+            return [predictions, target_lengths]
 
 
 
@@ -748,10 +750,10 @@ class Transformer(tf.keras.Model):
             inner = self.cnn(input)
             output = self.transformer_layer([inner, target, input_lengths, target_lengths], training=training)
             return output
-        elif len(inputs) == 2:  # prediction
-            input, input_lengths = inputs
+        elif len(inputs) == 3:  # prediction
+            input, input_lengths, target_max = inputs
             inner = self.cnn(input)
-            output = self.transformer_layer([inner, input_lengths])
+            output = self.transformer_layer([inner, input_lengths, target_max])
             return output
 
 
