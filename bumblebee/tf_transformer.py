@@ -421,8 +421,7 @@ class ACT(tf.keras.layers.Layer):
         # Mask for inputs which have not halted yet
         still_running = tf.cast(tf.less(halting_probability, 1.0), tf.float32)
         if mask is not None:
-            mask = tf.squeeze(mask) # (batch_size, seq_len) with 0.0 on valid steps
-            halting_probability += mask
+            halting_probability += tf.squeeze(mask) # (batch_size, seq_len) with 0.0 on valid steps
         # Mask of inputs which halted at this step
         new_halted = tf.cast(
             tf.greater(halting_probability + p * still_running, self.halt_threshold),
@@ -535,7 +534,8 @@ class Encoder(tf.keras.layers.Layer):
             act_loss *= (1-mask)
         act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
         self.add_loss(act_loss)
-        tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates))    # TODO correct for seq len
+        n_updates_mean = tf.divide(tf.reduce_sum(n_updates, axis=-1), tf.squeeze(tf.reduce_sum(1-mask, axis=-1)))
+        tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates_mean))    # TODO correct for seq len
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 
@@ -636,7 +636,8 @@ class Decoder(tf.keras.layers.Layer):
             act_loss *= (1-target_padding_mask)
         act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
         self.add_loss(act_loss)
-        tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates))    # TODO correct for seq len
+        n_updates_mean = tf.divide(tf.reduce_sum(n_updates, axis=-1), tf.squeeze(tf.reduce_sum(1-target_padding_mask, axis=-1)))
+        tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates_mean))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 
