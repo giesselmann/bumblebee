@@ -399,15 +399,15 @@ class ACT(tf.keras.layers.Layer):
         return (input_shape[-1],) + input_shape[1:]
 
     def build(self, input_shape):
-        # (batch_size, seq_len, 1)
+        # (batch_size, seq_len, d_model)
         if self.act_type == 'dense':
             self.ponder_kernel = tf.keras.layers.Dense(1,
                 activation=tf.nn.sigmoid,
                 use_bias=True,
                 bias_initializer=tf.constant_initializer(self.ponder_bias_init))
         else:
-            self.ponder_kernel = tf.keras.layers.SeparableConv1D(1, 4, 
-                    padding='same',
+            self.ponder_kernel = tf.keras.layers.SeparableConv1D(1, 4,
+                    padding='causal',
                     data_format='channels_last',
                     activation=tf.nn.sigmoid)
         return super(ACT, self).build(input_shape)
