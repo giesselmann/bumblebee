@@ -218,10 +218,10 @@ predict     Predict sequence from raw fast5
                         test_accuracy.reset_states()
                     if batch % 1000 == 0:
                         ckpt_manager.save()
-                        transformer.save_weights(os.path.join(checkpoint_dir, 'weights'), save_format='tf')
+                        #transformer.save_weights(os.path.join(checkpoint_dir, 'weights'), save_format='tf')
                 print("Epoch {}: train loss: {}".format(epoch, train_loss))
                 ckpt_manager.save()
-                transformer.save_weights(os.path.join(checkpoint_dir, 'weights'), save_format='tf')
+                #transformer.save_weights(os.path.join(checkpoint_dir, 'weights'), save_format='tf')
 
     def predict(self, argv):
         parser = argparse.ArgumentParser(description="BumbleBee basecaller prediction")
