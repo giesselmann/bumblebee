@@ -535,7 +535,7 @@ class Encoder(tf.keras.layers.Layer):
         act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
         self.add_loss(act_loss)
         n_updates_mean = tf.divide(tf.reduce_sum(n_updates, axis=-1), tf.squeeze(tf.reduce_sum(1-mask, axis=-1)))
-        tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates_mean))    # TODO correct for seq len
+        tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates_mean))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 

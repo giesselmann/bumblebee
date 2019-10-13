@@ -73,12 +73,12 @@ predict     Predict sequence from raw fast5
         batch_size = args.minibatch_size
         if not args.event:
             batch_gen = BatchGeneratorSim(args.model, max_input_len=input_max_len,
-                                        min_target_len=50, max_target_len=target_max_len,
+                                        min_target_len=target_max_len//2, max_target_len=target_max_len,
                                         batches_train=args.batches_train, batches_val=args.batches_val,
                                         minibatch_size=batch_size)
         else:
             batch_gen = BatchGeneratorSig(args.model, args.event, max_input_len=input_max_len,
-                                        min_target_len=50, max_target_len=target_max_len,
+                                        min_target_len=target_max_len//2, max_target_len=target_max_len,
                                         batches_train=args.batches_train, batches_val=args.batches_val,
                                         minibatch_size=batch_size)
         batches_train = batch_gen.batches_train
@@ -91,15 +91,15 @@ predict     Predict sequence from raw fast5
                 transformer_hparams = yaml.safe_load(fp)
         else:
             transformer_hparams = {'d_output' : d_output,
-                               'd_model' : 128,
-                               'cnn_kernel' : 24,
-                               'dff' : 768,
+                               'd_model' : 512,
+                               'cnn_kernel' : 8,
+                               'dff' : 2048,
                                'dff_type' : 'separable_convolution',
-                               'encoder_dff_filter_width' : 16,
-                               'decoder_dff_filter_width' : 8,
+                               'encoder_dff_filter_width' : 8,
+                               'decoder_dff_filter_width' : 4,
                                'num_heads' : 8,
                                'encoder_max_iterations' : 10,
-                               'decoder_max_iterations' : 20,
+                               'decoder_max_iterations' : 10,
                                'encoder_time_scale' : 10000,
                                'decoder_time_scale' : 1000,
                                'random_shift' : False,
@@ -109,7 +109,7 @@ predict     Predict sequence from raw fast5
                                'decoder_time_penalty' : 0.01,
                                #'input_local_attention_window' : 200,
                                #'target_local_attention_window' : 20
-                               'input_memory_comp' : 16,
+                               'input_memory_comp' : 10,
                                'target_memory_comp' : None
                                }
             os.makedirs(os.path.dirname(transformer_hparams_file), exist_ok=True)
@@ -124,17 +124,18 @@ predict     Predict sequence from raw fast5
         strategy = tf.distribute.MirroredStrategy(devices=['/gpu:' + str(i) for i in args.gpus] if args.gpus else ['/cpu:0'])
         checkpoint_dir = os.path.join('./training_checkpoints', args.prefix)
         os.makedirs(checkpoint_dir, exist_ok=True)
-        summary_writer = tf.summary.create_file_writer(os.path.join('./training_summaries', args.prefix))
+        summary_dir = os.path.join('./training_summaries', args.prefix)
+        os.makedirs(summary_dir, exist_ok=True)
+        summary_writer = tf.summary.create_file_writer(summary_dir)
 
         with strategy.scope(), summary_writer.as_default():
-            learning_rate = TransformerLRS(transformer_hparams.get('dff'), warmup_steps=8000)
+            learning_rate = TransformerLRS(transformer_hparams.get('d_model') * 16, warmup_steps=8000)
             optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
             loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
             def loss_function(real, pred, target_lengths):
-                mask = tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32)
                 loss_ = loss_object(real, pred)
-                mask = tf.cast(mask, dtype=loss_.dtype)
-                loss_ *= mask
+                mask = tf.sequence_mask(target_lengths, target_max_len+2, dtype=loss_.dtype)
+                loss_ = (loss_ * mask) / tf.cast(target_lengths, dtype=loss_.dtype)
                 return tf.nn.compute_average_loss(loss_, global_batch_size=batch_size * strategy.num_replicas_in_sync)
             train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
             test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
@@ -158,7 +159,8 @@ predict     Predict sequence from raw fast5
                 with tf.GradientTape() as tape:
                     predictions = transformer(input, training=True)
                     loss = loss_function(target, predictions, target_lengths)
-                gradients = tape.gradient(loss, transformer.trainable_variables)
+                #gradients = tape.gradient(loss, transformer.trainable_variables)
+                gradients = tape.gradient([loss] + transformer.losses, transformer.trainable_variables)
                 optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
                 train_accuracy.update_state(target, predictions, mask)
                 return loss

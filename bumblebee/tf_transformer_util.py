@@ -245,8 +245,7 @@ class BatchGeneratorSig(BatchGenerator):
 class TransformerLRS(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, d_model, warmup_steps=4000):
         super(TransformerLRS, self).__init__()
-        self.d_model = d_model
-        self.d_model = tf.cast(self.d_model, tf.float32)
+        self.d_model = tf.cast(d_model, tf.float32)
         self.warmup_steps = warmup_steps
 
     def __call__(self, step):
