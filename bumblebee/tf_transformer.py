@@ -531,10 +531,14 @@ class Encoder(tf.keras.layers.Layer):
           back_prop=training)
         act_loss = remainders + n_updates
         if mask is not None:
-            act_loss *= (1-mask)
-        act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
+            _msk = tf.squeeze(1-mask)
+            act_loss = tf.reduce_sum(act_loss * _msk, axis=-1, keepdims=True) / tf.reduce_sum(_msk, axis=-1, keepdims=True)
+            act_loss *= self.time_penalty_t
+            n_updates_mean = tf.divide(tf.reduce_sum(n_updates * _msk, axis=-1), tf.squeeze(tf.reduce_sum(_msk, axis=-1)))
+        else:
+            act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=-1)
+            n_updates_mean = tf.reduce_mean(n_updates, axis=-1)
         self.add_loss(act_loss)
-        n_updates_mean = tf.divide(tf.reduce_sum(n_updates, axis=-1), tf.squeeze(tf.reduce_sum(1-mask, axis=-1)))
         tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates_mean))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
@@ -633,10 +637,14 @@ class Decoder(tf.keras.layers.Layer):
           back_prop=training)
         act_loss = remainders + n_updates
         if target_padding_mask is not None:
-            act_loss *= (1-target_padding_mask)
-        act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=1)
+            _msk = tf.squeeze(1-target_padding_mask)
+            act_loss = tf.reduce_sum(act_loss * _msk, axis=-1, keepdims=True) / tf.reduce_sum(_msk, axis=-1, keepdims=True)
+            act_loss *= self.time_penalty_t
+            n_updates_mean = tf.divide(tf.reduce_sum(n_updates * _msk, axis=-1), tf.squeeze(tf.reduce_sum(_msk, axis=-1)))
+        else:
+            act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=-1)
+            n_updates_mean = tf.reduce_mean(n_updates, axis=-1)
         self.add_loss(act_loss)
-        n_updates_mean = tf.divide(tf.reduce_sum(n_updates, axis=-1), tf.squeeze(tf.reduce_sum(1-target_padding_mask, axis=-1)))
         tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates_mean))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
