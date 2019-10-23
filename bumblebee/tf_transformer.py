@@ -460,6 +460,7 @@ class Encoder(tf.keras.layers.Layer):
         self.time_penalty = hparams.get('encoder_time_penalty') or hparams.get('time_penalty') or 0.01
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
+        self.hparams['act_type'] = hparams.get('encoder_act_type') or hparams.get('act_type') or 'dense'
 
     def get_config(self):
         config = super(Encoder, self).get_config()
@@ -559,6 +560,7 @@ class Decoder(tf.keras.layers.Layer):
         self.time_penalty = hparams.get('decoder_time_penalty') or hparams.get('time_penalty') or 0.01
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
+        self.hparams['act_type'] = hparams.get('decoder_act_type') or hparams.get('act_type') or 'dense'
 
     def get_config(self):
         config = super(Decoder, self).get_config()
