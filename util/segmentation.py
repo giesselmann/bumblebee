@@ -336,16 +336,18 @@ class alignment_file():
             summary_dst = fp_h5.create_dataset("summary", data=summary_table, shuffle=True)
 
     def merge_batches(batch_dir, virtual_file, recursive=False):
-        if recursive:
-            input_files = [os.path.join(dirpath, f) for dirpath, _, files in os.walk(batch_dir) for f in files if f.endswith('.hdf5')]
-        else:
-            input_files = glob.glob(os.path.join(batch_dir, '*.hdf5'))
+        input_files = []
+        for d in batch_dir:
+            if recursive:
+                input_files.extend([os.path.join(dirpath, f)
+                    for dirpath, _, files in os.walk(d) for f in files if f.endswith('.hdf5')])
+            else:
+                input_files.extend(glob.glob(os.path.join(d, '*.hdf5')))
         summary_sources = []
         seq_sources = []
         raw_sources = []
         for input_file in input_files:
             input_file_relative = os.path.relpath(input_file, os.path.commonpath([virtual_file, input_file]))
-            print(input_file)
             with h5py.File(input_file, 'r') as fp_h5:
                 summary_sources.append(h5py.VirtualSource(input_file_relative, 'summary', shape=fp_h5['summary'].shape))
                 summary_dtype = fp_h5['summary'].dtype
@@ -464,10 +466,11 @@ Available commands are:
 
     def merge(self, argv):
         parser = argparse.ArgumentParser(description="BumbleBee")
-        parser.add_argument("input", help="Batch directory")
         parser.add_argument("output", help="Output file")
+        parser.add_argument("input", nargs='+', help="Batch directory")
+        parser.add_argument("--recursive", action='store_true', help="Scan batch directory recursively")
         args = parser.parse_args(argv)
-        alignment_file.merge_batches(args.input, args.output)
+        alignment_file.merge_batches(args.input, args.output, recursive=args.recursive)
 
 
 

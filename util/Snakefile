@@ -121,7 +121,7 @@ rule merge_run:
         input_dir = lambda wildcards, input : os.path.join(os.path.dirname(input.tag[0]), wildcards.runname)
     shell:
         """
-        {config[py_env]}/bin/python3 {config[segmentation_script]} merge {params.input_dir} {output.hdf5}
+        {config[py_env]}/bin/python3 {config[segmentation_script]} merge {output.hdf5} {params.input_dir}
         """
 
 
@@ -140,5 +140,5 @@ rule merge_runs:
         input_dirs = lambda wildcards, input : [os.path.dirname(tag) for tag in input.tags]
     shell:
         """
-        {config[py_env]}/bin/python3 {config[segmentation_script]} merge {params.input_dirs} {output.hdf5}
+        {config[py_env]}/bin/python3 {config[segmentation_script]} merge {output.hdf5} {params.input_dirs}
         """
