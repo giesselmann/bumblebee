@@ -137,7 +137,7 @@ rule merge_runs:
     output:
         hdf5 = "events/{aligner, [^.\/]*}/{sequence_workflow, ((?!batches).)*}/{tag, [^\/]*}.{reference}.hdf5"
     params:
-        input_dirs = lambda wildcards, input : [os.path.dirname(tag) for tag in input.tags]
+        input_dirs = lambda wildcards, input : [re.sub('\.{}\.events'.format(wildcards.reference), '', tag) for tag in input.tags]
     shell:
         """
         {config[py_env]}/bin/python3 {config[segmentation_script]} merge {output.hdf5} {params.input_dirs}

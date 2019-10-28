@@ -201,7 +201,7 @@ class BatchGeneratorSig(BatchGenerator):
                     for begin, end in zip(batch_raw_begin[batch_seq_begin], batch_raw_end[batch_seq_end])]
                 segments.extend([(batch, _seq, _begin, _end)
                     for _seq, (_begin, _end) in zip(batch_sequences, batch_raw_segments)
-                        if _end - _begin <= self.max_input_len])
+                        if _end - _begin <= self.max_input_len and _end - _begin > 0])
                 pbar.update(len(batch_sequences))
                 if len(segments) >= n_segments_train + n_segments_val:
                     break
@@ -265,3 +265,4 @@ if __name__ == '__main__':
     batch_gen.on_epoch_begin()
     for i in tqdm(range(5000*32)):
         seq, sig = batch_gen.get_sequence_signal_pair(i)
+        assert len(sig) != 0

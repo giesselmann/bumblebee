@@ -343,6 +343,8 @@ class alignment_file():
                     for dirpath, _, files in os.walk(d) for f in files if f.endswith('.hdf5')])
             else:
                 input_files.extend(glob.glob(os.path.join(d, '*.hdf5')))
+        if len(input_files) == 0:
+            return
         summary_sources = []
         seq_sources = []
         raw_sources = []

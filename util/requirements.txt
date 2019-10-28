@@ -30,4 +30,5 @@ scipy
 edlib
 h5py
 pomegranate
+scikit-image
 ont_fast5_api
