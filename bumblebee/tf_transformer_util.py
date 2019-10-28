@@ -25,7 +25,7 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-import os, argparse, re
+import os, argparse, re, timeit
 import random
 import h5py
 import numpy as np
@@ -191,18 +191,19 @@ class BatchGeneratorSig(BatchGenerator):
                 batch_seq_begin = batch_summary['seq_begin'] + 10 # skip first events
                 batch_seq_end = batch_seq_begin + batch_lengths
                 batch_events = self.event_file['seq'][batch,:]
-                batch_raw = self.event_file['raw'][batch,:]
+                #batch_raw = self.event_file['raw'][batch,:]
                 batch_raw_end = np.cumsum(batch_events['length'][...])
                 batch_raw_begin = batch_raw_end - batch_events['length'][...]
                 assert np.all(np.less_equal(batch_seq_end, batch_summary['seq_end']))
-                batch_sequences = [batch_events['sequence'][begin:end].tostring().decode('utf-8')
-                    for begin, end in zip(batch_seq_begin, batch_seq_end + 6)]
+                #batch_sequences = [batch_events['sequence'][begin:end].tostring().decode('utf-8')
+                #    for begin, end in zip(batch_seq_begin, batch_seq_end + 6)]
                 batch_raw_segments = [(begin, end)
                     for begin, end in zip(batch_raw_begin[batch_seq_begin], batch_raw_end[batch_seq_end])]
-                segments.extend([(batch, _seq, _begin, _end)
-                    for _seq, (_begin, _end) in zip(batch_sequences, batch_raw_segments)
-                        if _end - _begin <= self.max_input_len and _end - _begin > 0])
-                pbar.update(len(batch_sequences))
+                _segments = [(batch, _seq_begin, _seq_end, _begin, _end)
+                    for _seq_begin, _seq_end, (_begin, _end) in zip(batch_seq_begin, batch_seq_end + 6, batch_raw_segments)
+                        if _end - _begin <= self.max_input_len and _end - _begin > 0]
+                segments.extend(_segments)
+                pbar.update(len(_segments))
                 if len(segments) >= n_segments_train + n_segments_val:
                     break
         if len(segments) >= n_segments_train + n_segments_val:
@@ -227,9 +228,10 @@ class BatchGeneratorSig(BatchGenerator):
 
     def get_sequence_signal_pair(self, index):
         if index < self.val_split:
-            batch, sequence, begin, end = self.segments_train[index]
+            batch, seq_begin, seq_end, begin, end = self.segments_train[index]
         else:
-            batch, sequence, begin, end = self.segments_val[(index - self.val_split) % len(self.segments_val)]
+            batch, seq_begin, seq_end, begin, end = self.segments_val[(index - self.val_split) % len(self.segments_val)]
+        sequence = self.event_file['seq'][batch,'sequence'][seq_begin:seq_end].tostring().decode('utf-8')
         signal = self.event_file['raw'][batch,begin:end]
         nrm_signal = (signal - self.pm.model_median) / self.pm.model_MAD
         sequence = re.sub('N', lambda x : random.choice(self.target_alphabet[:-2]), sequence)
@@ -261,7 +263,7 @@ if __name__ == '__main__':
     parser.add_argument("model", help="Pore model")
     parser.add_argument("event", help="Event table")
     args = parser.parse_args()
-    batch_gen = BatchGeneratorSig(args.model, args.event, batches_train=50000, batches_val=5000, max_target_len=100)
+    batch_gen = BatchGeneratorSig(args.model, args.event, batches_train=5000, batches_val=500, max_target_len=100)
     batch_gen.on_epoch_begin()
     for i in tqdm(range(5000*32)):
         seq, sig = batch_gen.get_sequence_signal_pair(i)
