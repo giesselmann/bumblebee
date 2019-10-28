@@ -348,6 +348,7 @@ class alignment_file():
         summary_sources = []
         seq_sources = []
         raw_sources = []
+        input_files_relative = [os.path.relpath(input_file, os.path.commonpath([virtual_file, input_file])) for input_file in input_files]
         for input_file in input_files:
             input_file_relative = os.path.relpath(input_file, os.path.commonpath([virtual_file, input_file]))
             with h5py.File(input_file, 'r') as fp_h5:
@@ -372,6 +373,7 @@ class alignment_file():
             fp_h5.create_virtual_dataset('seq', seq_layout, fillvalue=np.array([('N', 0)], dtype=alignment_file.event_dtype))
             fp_h5.create_virtual_dataset('raw', raw_layout, fillvalue=0.0)
             fp_h5.create_dataset('batch', data=np.repeat(np.arange(len(summary_sources)), [x.shape[0] for x in summary_sources]))
+            fp_h5.create_dataset('batch_files', data='\n'.join(input_files_relative))
 
 
 
