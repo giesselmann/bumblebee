@@ -476,6 +476,16 @@ Available commands are:
         args = parser.parse_args(argv)
         alignment_file.merge_batches(args.input, args.output, recursive=args.recursive)
 
+    def convert(self, argv):
+        parser = argparse.ArgumentParser(description="BumbleBee")
+        parser.add_argument("input", help="Input file")
+        parser.add_argument("output", help="Output file")
+        args = parser.parse_args(argv)
+        with h5py.File(args.output, 'w') as fp_out, h5py.File(args.input, 'r') as fp_in:
+            fp_out.create_dataset("summary", data=fp_in['summary'][...], shuffle=True)
+            fp_out.create_dataset("seq", data=fp_in['seq'][...], shuffle=True)
+            fp_out.create_dataset("raw", data=fp_in['raw'][...].astype(np.float16), compression='gzip', chunks=(2048,))
+
 
 
 
