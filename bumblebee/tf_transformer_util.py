@@ -195,12 +195,12 @@ class BatchGeneratorSig(BatchGenerator):
                 batch_raw_end = np.cumsum(batch_events['length'][...])
                 batch_raw_begin = batch_raw_end - batch_events['length'][...]
                 assert np.all(np.less_equal(batch_seq_end, batch_summary['seq_end']))
-                #batch_sequences = [batch_events['sequence'][begin:end].tostring().decode('utf-8')
-                #    for begin, end in zip(batch_seq_begin, batch_seq_end + 6)]
+                batch_sequences = [batch_events[begin:end]['sequence'].tostring().decode('utf-8')
+                    for begin, end in zip(batch_seq_begin, batch_seq_end + 6)]
                 batch_raw_segments = [(begin, end)
                     for begin, end in zip(batch_raw_begin[batch_seq_begin], batch_raw_end[batch_seq_end])]
-                _segments = [(batch, _seq_begin, _seq_end, _begin, _end)
-                    for _seq_begin, _seq_end, (_begin, _end) in zip(batch_seq_begin, batch_seq_end + 6, batch_raw_segments)
+                _segments = [(batch, _seq, _begin, _end)
+                    for _seq, (_begin, _end) in zip(batch_sequences, batch_raw_segments)
                         if _end - _begin <= self.max_input_len and _end - _begin > 0]
                 segments.extend(_segments)
                 pbar.update(len(_segments))
@@ -228,10 +228,10 @@ class BatchGeneratorSig(BatchGenerator):
 
     def get_sequence_signal_pair(self, index):
         if index < self.val_split:
-            batch, seq_begin, seq_end, begin, end = self.segments_train[index]
+            batch, sequence, begin, end = self.segments_train[index]
         else:
-            batch, seq_begin, seq_end, begin, end = self.segments_val[(index - self.val_split) % len(self.segments_val)]
-        sequence = self.event_file['seq'][batch,'sequence'][seq_begin:seq_end].tostring().decode('utf-8')
+            batch, sequence, begin, end = self.segments_val[(index - self.val_split) % len(self.segments_val)]
+        #sequence = self.event_file['seq'][batch,seq_begin:seq_end]['sequence'].tostring()#.decode('utf-8')
         signal = self.event_file['raw'][batch,begin:end]
         nrm_signal = (signal - self.pm.model_median) / self.pm.model_MAD
         sequence = re.sub('N', lambda x : random.choice(self.target_alphabet[:-2]), sequence)
