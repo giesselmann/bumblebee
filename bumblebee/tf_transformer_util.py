@@ -26,11 +26,14 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, argparse, re, timeit
+import time
 import random
 import h5py
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
+from threading import Thread, Lock
+from collections import deque
 from tqdm import tqdm
 from util import pore_model
 
@@ -214,6 +217,11 @@ class BatchGeneratorSig(BatchGenerator):
             train_split = int(train_ratio * (n_segments_train + n_segments_val))
             self.segments_train = segments[:train_split]
             self.segments_val = segments[train_split:]
+        self.__cache__ = deque()
+        self.__cache_worker__ = Thread(target=self.__cache_worker_fn__)
+        self.__cache_lock__ = Lock()
+        self.__cache_next__ = 0
+        self.__cache_worker__.start()
 
     def __del__(self):
         self.event_file.close()
@@ -226,16 +234,35 @@ class BatchGeneratorSig(BatchGenerator):
     def batches_val(self):
         return len(self.segments_val) // self.minibatch_size
 
-    def get_sequence_signal_pair(self, index):
+    def __get_seq_sig_pair__(self, index):
         if index < self.val_split:
             batch, sequence, begin, end = self.segments_train[index]
         else:
             batch, sequence, begin, end = self.segments_val[(index - self.val_split) % len(self.segments_val)]
-        #sequence = self.event_file['seq'][batch,seq_begin:seq_end]['sequence'].tostring()#.decode('utf-8')
-        signal = self.event_file['raw'][batch,begin:end]
+        signal = self.event_file['raw'][batch,begin:end].astype(np.float32)
         nrm_signal = (signal - self.pm.model_median) / self.pm.model_MAD
         sequence = re.sub('N', lambda x : random.choice(self.target_alphabet[:-2]), sequence)
         return (sequence, nrm_signal)
+
+    def __cache_worker_fn__(self):
+        while True:
+            while len(self.__cache__) < 1024:
+                with self.__cache_lock__:
+                    self.__cache__.append((self.__cache_next__, ) + self.__get_seq_sig_pair__(self.__cache_next__))
+                    self.__cache_next__ += 1
+            time.sleep(0.1)
+
+    def get_sequence_signal_pair(self, index):
+        idx = -1
+        with self.__cache_lock__:
+            if len(self.__cache__):
+                idx, sequence, nrm_signal = self.__cache__.popleft()
+            if idx == index:
+                return (sequence, nrm_signal)
+            else:
+                self.__cache__.clear()
+                self.__cache_next__ = index + 1
+                return self.__get_seq_sig_pair__(index)
 
     def on_epoch_begin(self):
         super(BatchGeneratorSig, self).on_epoch_begin()
