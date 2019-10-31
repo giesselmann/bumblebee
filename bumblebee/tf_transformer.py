@@ -527,8 +527,8 @@ class Encoder(tf.keras.layers.Layer):
           should_continue, update_state,
           (state, step, halting_probability, remainders, n_updates),
           maximum_iterations=self.max_iterations,
-          parallel_iterations=1,
-          swap_memory=True,
+          parallel_iterations=4,
+          swap_memory=False,
           back_prop=training)
         act_loss = remainders + n_updates
         if mask is not None:
@@ -537,10 +537,11 @@ class Encoder(tf.keras.layers.Layer):
             act_loss *= self.time_penalty_t
             n_updates_mean = tf.divide(tf.reduce_sum(n_updates * _msk, axis=-1), tf.squeeze(tf.reduce_sum(_msk, axis=-1)))
         else:
-            act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=-1)
+            act_loss = self.time_penalty_t * tf.math.reduce_sum(act_loss, axis=-1)
             n_updates_mean = tf.reduce_mean(n_updates, axis=-1)
         self.add_loss(act_loss)
         tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates_mean))
+        #tf.summary.scalar("ponder_loss_encoder", tf.reduce_sum(act_loss))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 
@@ -634,8 +635,8 @@ class Decoder(tf.keras.layers.Layer):
           should_continue, update_state,
           (state, step, halting_probability, remainders, n_updates),
           maximum_iterations=self.max_iterations,
-          parallel_iterations=1,
-          swap_memory=True,
+          parallel_iterations=4,
+          swap_memory=False,
           back_prop=training)
         act_loss = remainders + n_updates
         if target_padding_mask is not None:
@@ -644,10 +645,11 @@ class Decoder(tf.keras.layers.Layer):
             act_loss *= self.time_penalty_t
             n_updates_mean = tf.divide(tf.reduce_sum(n_updates * _msk, axis=-1), tf.squeeze(tf.reduce_sum(_msk, axis=-1)))
         else:
-            act_loss = self.time_penalty_t * tf.math.reduce_mean(act_loss, axis=-1)
+            act_loss = self.time_penalty_t * tf.math.reduce_sum(act_loss, axis=-1)
             n_updates_mean = tf.reduce_mean(n_updates, axis=-1)
         self.add_loss(act_loss)
         tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates_mean))
+        #tf.summary.scalar("ponder_loss_decoder", tf.reduce_sum(act_loss))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state
 

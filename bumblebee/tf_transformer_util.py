@@ -218,12 +218,15 @@ class BatchGeneratorSig(BatchGenerator):
             self.segments_train = segments[:train_split]
             self.segments_val = segments[train_split:]
         self.__cache__ = deque()
+        self.__cache_active__ = True
         self.__cache_worker__ = Thread(target=self.__cache_worker_fn__)
         self.__cache_lock__ = Lock()
         self.__cache_next__ = 0
-        self.__cache_worker__.start()
+        #self.__cache_worker__.start()
 
     def __del__(self):
+        self.__cache_active__ = False
+        #self.__cache_worker__.join()
         self.event_file.close()
 
     @property
@@ -245,12 +248,13 @@ class BatchGeneratorSig(BatchGenerator):
         return (sequence, nrm_signal)
 
     def __cache_worker_fn__(self):
-        while True:
-            while len(self.__cache__) < 1024:
+        while self.__cache_active__:
+            while len(self.__cache__) < 4096 and self.__cache_active__:
                 with self.__cache_lock__:
                     self.__cache__.append((self.__cache_next__, ) + self.__get_seq_sig_pair__(self.__cache_next__))
                     self.__cache_next__ += 1
-            time.sleep(0.1)
+                #time.sleep(0.01)
+            #time.sleep(0.1)
 
     def get_sequence_signal_pair(self, index):
         idx = -1
@@ -289,9 +293,42 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="BumbleBee")
     parser.add_argument("model", help="Pore model")
     parser.add_argument("event", help="Event table")
+    parser.add_argument("tfrecord", help="TF record output prefix")
+    parser.add_argument("--batches_train", type=int, default=1000, help="Training batches")
+    parser.add_argument("--batches_test", type=int, default=100, help="Validation batches")
+    parser.add_argument("--batch_size", type=int, default=100, help="TF records per file")
+    parser.add_argument("--max_target_len", type=int, default=130, help="Maximum target sequence length")
+    parser.add_argument("--max_input_len", type=int, default=1400, help="Maximum input signal length")
+    parser.add_argument("--discard_quantile", type=float, default=0.4, help="Discard quantile of low quality data")
     args = parser.parse_args()
-    batch_gen = BatchGeneratorSig(args.model, args.event, batches_train=5000, batches_val=500, max_target_len=100)
+    batch_gen = BatchGeneratorSig(args.model, args.event,
+                            batches_train=args.batches_train,
+                            batches_val=args.batches_test,
+                            minibatch_size=args.batch_size,
+                            max_input_len=args.max_input_len,
+                            max_target_len=args.max_target_len,
+                            discard_quantile=args.discard_quantile)
     batch_gen.on_epoch_begin()
-    for i in tqdm(range(5000*32)):
-        seq, sig = batch_gen.get_sequence_signal_pair(i)
-        assert len(sig) != 0
+
+    def serialize_example(sequence, signal):
+        sequence_b = tf.train.BytesList(value=[sequence.encode("ASCII")])
+        signal_b = tf.train.BytesList(value=[tf.io.serialize_tensor(signal.astype(np.float16)).numpy()])
+        feature = {
+            'sequence' :  tf.train.Feature(bytes_list=sequence_b),
+            'signal' : tf.train.Feature(bytes_list=signal_b)
+        }
+        example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
+        return example_proto.SerializeToString()
+
+    with tf.io.TFRecordWriter(args.tfrecord + ".train.tfrec") as writer:
+        for i in tqdm(range(args.batches_train * args.batch_size), desc='Training batches'):
+            seq, sig = batch_gen.get_sequence_signal_pair(i)
+            example = serialize_example(seq, sig)
+            writer.write(example)
+
+    with tf.io.TFRecordWriter(args.tfrecord + ".test.tfrec") as writer:
+        for i in tqdm(range(args.batches_test * args.batch_size), desc='Test batches'):
+            seq, sig = batch_gen.get_sequence_signal_pair(args.batches_train * args.batch_size + i)
+            example = serialize_example(seq, sig)
+            writer.write(example)
+    del batch_gen
