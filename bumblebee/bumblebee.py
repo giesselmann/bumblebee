@@ -121,15 +121,15 @@ predict     Predict sequence from raw fast5
                 transformer_hparams = yaml.safe_load(fp)
         else:
             transformer_hparams = {'d_output' : d_output,
-                               'd_model' : 256,
+                               'd_model' : 384,
                                'cnn_kernel' : 16,
                                'dff' : 1536,
-                               'dff_type' : 'separable_convolution',
-                               'encoder_dff_filter_width' : 20,
-                               'decoder_dff_filter_width' : 20,
+                               'dff_type' : 'point_wise',
+                               'encoder_dff_filter_width' : 24,
+                               'decoder_dff_filter_width' : 24,
                                'num_heads' : 8,
-                               'encoder_max_iterations' : 8,
-                               'decoder_max_iterations' : 8,
+                               'encoder_max_iterations' : 10,
+                               'decoder_max_iterations' : 10,
                                'encoder_time_scale' : 10000,
                                'decoder_time_scale' : 1000,
                                'random_shift' : False,
@@ -137,7 +137,7 @@ predict     Predict sequence from raw fast5
                                'encoder_act_type' : 'dense',
                                'decoder_act_type' : 'dense',
                                'encoder_time_penalty' : 0.001,
-                               'decoder_time_penalty' : 0.01,
+                               'decoder_time_penalty' : 0.005,
                                #'input_local_attention_window' : 200,
                                #'target_local_attention_window' : 20
                                'input_memory_comp' : 16,
@@ -159,14 +159,16 @@ predict     Predict sequence from raw fast5
         summary_writer = tf.summary.create_file_writer(summary_dir)
 
         with strategy.scope(), summary_writer.as_default():
-            learning_rate = TransformerLRS(transformer_hparams.get('d_model') * 16, warmup_steps=8000)
+            learning_rate = TransformerLRS(transformer_hparams.get('dff'), warmup_steps=8000)
             optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
             loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
             def loss_function(real, pred, target_lengths):
                 loss_ = loss_object(real, pred)
                 mask = tf.sequence_mask(target_lengths, target_max_len+2, dtype=loss_.dtype)
-                loss_ = (loss_ * mask) / tf.cast(target_lengths, dtype=loss_.dtype)
-                return tf.nn.compute_average_loss(loss_, global_batch_size=args.minibatch_size)
+                loss_ = (loss_ * mask) # / tf.cast(target_lengths, dtype=loss_.dtype)
+                nrm_loss = loss_ / tf.cast(target_lengths, dtype=loss_.dtype)
+                return (tf.nn.compute_average_loss(loss_, global_batch_size=args.minibatch_size),
+                        tf.nn.compute_average_loss(nrm_loss, global_batch_size=args.minibatch_size))
             train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
             test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
             prediction_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='prediction_accuracy')
@@ -185,20 +187,20 @@ predict     Predict sequence from raw fast5
                 mask = tf.squeeze(tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32))
                 with tf.GradientTape() as tape:
                     predictions = transformer(input, training=True)
-                    loss = loss_function(target, predictions, target_lengths)
+                    loss, nrm_loss = loss_function(target, predictions, target_lengths)
                 gradients = tape.gradient([loss] + transformer.losses, transformer.trainable_variables)
                 optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
                 train_accuracy.update_state(target, predictions, mask)
-                return loss
+                return nrm_loss
 
             def test_step(inputs):
                 input, target = inputs
                 target_lengths = input[3]
                 mask = tf.squeeze(tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32))
                 predictions = transformer(input, training=False)
-                t_loss = loss_function(target, predictions, target_lengths)
+                t_loss, nrm_loss = loss_function(target, predictions, target_lengths)
                 test_accuracy.update_state(target, predictions, mask)
-                return t_loss
+                return nrm_loss
 
             # `experimental_run_v2` replicates the provided computation and runs it
             # with the distributed input.

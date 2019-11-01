@@ -168,7 +168,7 @@ def separable_conv_feed_forward_network(d_model, dff, d_filter, padding='same'):
         tf.keras.layers.SeparableConv1D(dff, d_filter, # (batch_size, seq_len, dff)
                 padding=padding,
                 data_format='channels_last',
-                activation='relu'),
+                activation='sigmoid'),
         tf.keras.layers.Dense(d_model),                # (batch_size, seq_len, d_model)
     ])
 
@@ -533,7 +533,7 @@ class Encoder(tf.keras.layers.Layer):
         act_loss = remainders + n_updates
         if mask is not None:
             _msk = tf.squeeze(1-mask)
-            act_loss = tf.reduce_sum(act_loss * _msk, axis=-1, keepdims=True) / tf.reduce_sum(_msk, axis=-1, keepdims=True)
+            act_loss = tf.reduce_sum(act_loss * _msk, axis=-1, keepdims=True) # / tf.reduce_sum(_msk, axis=-1, keepdims=True)
             act_loss *= self.time_penalty_t
             n_updates_mean = tf.divide(tf.reduce_sum(n_updates * _msk, axis=-1), tf.squeeze(tf.reduce_sum(_msk, axis=-1)))
         else:
@@ -641,7 +641,7 @@ class Decoder(tf.keras.layers.Layer):
         act_loss = remainders + n_updates
         if target_padding_mask is not None:
             _msk = tf.squeeze(1-target_padding_mask)
-            act_loss = tf.reduce_sum(act_loss * _msk, axis=-1, keepdims=True) / tf.reduce_sum(_msk, axis=-1, keepdims=True)
+            act_loss = tf.reduce_sum(act_loss * _msk, axis=-1, keepdims=True) # / tf.reduce_sum(_msk, axis=-1, keepdims=True)
             act_loss *= self.time_penalty_t
             n_updates_mean = tf.divide(tf.reduce_sum(n_updates * _msk, axis=-1), tf.squeeze(tf.reduce_sum(_msk, axis=-1)))
         else:

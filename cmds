@@ -1,23 +1,16 @@
 source /project/miniondev/virtual/tf_gpu2/bin/activate
 
-python3 bumblebee/bumblebee.py train util/r9_4_450bps.mpi.model --prefix sim --input_length 850 --target_length 75 --batches_train 100 --batches_val 10 --minibatch_size 24
-
-python bumblebee/bumblebee.py train util/r9_4_450bps.mpi.model --gpus 0 --prefix sim --input_length 850 --target_length 75 --batches_train 1000 --batches_val 100 --minibatch_size 16
-
-python bumblebee/bumblebee.py predict bb_128_long/hparams.yaml bb_128_long/weights_0/weights util/r9_4_450bps.mpi.model ../../bumblebee/J1_TKOlike/events/minimap2/guppy/TKOlike.events.hdf5
+# generate tf records
+python3 /project/miniondev/src/bumblebee/bumblebee/tf_transformer_util.py /project/miniondev/src/bumblebee/util/r9_4_450bps.mpi.model events/minimap2/guppy/test.mm9.hdf5 events/minimap2/guppy/events.mm9 --batches_train 1600000 --batches_test 160000 --batch_size 64 --discard_quantile 0.4
 
 # prom
 cd /data/machine_learning
 source virtual/tf_gpu2/bin/activate
 cd projects/bumblebee
 
+
 export TF_ENABLE_AUTO_MIXED_PRECISION=1
+export CUDA_VISIBLE_DEVICES='0,1,2,3'
+python3 bumblebee/bumblebee.py train util/r9_4_450bps.mpi.model --event ../../data/bumblebee/events/minimap2/guppy/events.mm9.hdf5 --prefix bb_384.2 --input_length 1400 --target_length 130 --minibatch_size 16 --batches_train 1600000 --batches_val 160000 --gpus 0 1 2 3
 
-export CUDA_VISIBLE_DEVICES=0
-python3 bumblebee/bumblebee.py train util/r9_4_450bps.mpi.model --event ../../data/bumblebee/J1_TKOlike/events/minimap2/guppy/TKOlike.events.hdf5 --prefix bb_128 --input_length 1200 --target_length 100 --minibatch_size 32 --batches_train 50000 --batches_val 5000 --gpus 0
-
-export CUDA_VISIBLE_DEVICES=1
-python3 bumblebee/bumblebee.py train util/r9_4_450bps.mpi.model --event ../../data/bumblebee/J1_TKOlike/events/minimap2/guppy/TKOlike.events.hdf5 --prefix bb_160 --input_length 1200 --target_length 100 --minibatch_size 32 --batches_train 50000 --batches_val 5000 --gpus 0
-
-export CUDA_VISIBLE_DEVICES=2
-python3 bumblebee/bumblebee.py train util/r9_4_450bps.mpi.model --event ../../data/bumblebee/J1_TKOlike/events/minimap2/guppy/TKOlike.events.hdf5 --prefix bb_128_long --input_length 2200 --target_length 200 --minibatch_size 32 --batches_train 50000 --batches_val 5000 --gpus 0
+python3 bumblebee/bumblebee.py train ../../data/bumblebee/events.mm9.train.tfrec ../../data/bumblebee/events.mm9.test.tfrec --prefix bb_384.3 --input_length 1400 --target_length 130 --minibatch_size 64 --batches_train 1600000 --batches_val 160000 --gpus 0 1 2 3

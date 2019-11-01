@@ -430,6 +430,21 @@ Available commands are:
             exit(1)
         getattr(self, args.command)(sys.argv[2:])
 
+    def filter(self, argv):
+        parser = argparse.ArgumentParser(description="BumbleBee")
+        parser.add_argument("model", help="Pore model")
+        args = parser.parse_args(argv)
+        for sam_line in sys.stdin:
+            sam_fields = sam_line.strip().split('\t')
+            sam_tags = {f.split(':')[0]:f.split(':')[2] for f in sam_fields[11:]}
+            sam_read_quality = sam_fields[10]
+
+            ops = [(int(op[:-1]), op[-1]) for op in re.findall('(\d*\D)',cigar)]
+
+            
+            sam_algn_quality = int(sam_tags.get("AS") or '0') / np.sum([])
+
+
     def align(self, argv):
         parser = argparse.ArgumentParser(description="BumbleBee")
         parser.add_argument("model", help="Pore model")
