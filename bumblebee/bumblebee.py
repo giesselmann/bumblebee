@@ -79,11 +79,15 @@ predict     Predict sequence from raw fast5
         # tfRecord files
         record_files = [os.path.join(dirpath, f) for dirpath, _, files
                             in os.walk(args.records) for f in files if f.endswith('.tfrec')]
+        random.shuffle(record_files)
         val_rate = args.batches_train // args.batches_val
-        val_split = int(min(1, args.batches_val / args.batches_train * len(record_files)))
+        val_split = int(max(1, args.batches_val / args.batches_train * len(record_files)))
         val_files = record_files[:val_split]
         train_files = record_files[val_split:]
 
+        print("Training files {}".format(len(train_files)))
+        print("Test files {}".format(len(val_files)))
+        
         def encode_sequence(sequence):
             ids = {char:tf_alphabet.find(char) for char in tf_alphabet}
             ret = [ids[char] if char in ids else ids[random.choice(alphabet)] for char in '^' + sequence.numpy().decode('utf-8') + '$']
@@ -108,20 +112,25 @@ predict     Predict sequence from raw fast5
             #input, target = eg
             return (input[2] <= tf.cast(input_max_len, tf.int32) and input[3] <= tf.cast(target_max_len + 2, tf.int32))[0]
 
-        ds_train = (tf.data.TFRecordDataset(filenames = train_files)
-                    .map(tf_parse, num_parallel_calls=16))
-        ds_train = ds_train.filter(tf_filter)
-        ds_train = (ds_train.prefetch(args.minibatch_size * 64)
-                    .shuffle(args.minibatch_size * 64)
+
+        ds_train = tf.data.Dataset.from_tensor_slices(train_files).shuffle(len(train_files))
+        ds_train = (ds_train.interleave(lambda x:
+                    tf.data.TFRecordDataset(filenames=x).map(tf_parse, num_parallel_calls=1), cycle_length=8, block_length=8))
+        ds_train = (ds_train
+                    .filter(tf_filter)
+                    .prefetch(args.minibatch_size * 64)
+                    .shuffle(args.minibatch_size * 1024)
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len+2,], [1,], [1,]), [target_max_len+2,]),
                         drop_remainder=True)
                     .repeat())
 
-        ds_test = (tf.data.TFRecordDataset(filenames = val_files)
-                    .map(tf_parse, num_parallel_calls=16))
-        ds_test = ds_test.filter(tf_filter)
-        ds_test = (ds_test.prefetch(args.minibatch_size * 32)
+        ds_test = tf.data.Dataset.from_tensor_slices(val_files)
+        ds_test = (ds_test.interleave(lambda x:
+                    tf.data.TFRecordDataset(filenames=x).map(tf_parse, num_parallel_calls=1), cycle_length=8, block_length=8))
+        ds_test = (ds_test
+                    .filter(tf_filter)
+                    .prefetch(args.minibatch_size * 32)
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len+2,], [1,], [1,]), [target_max_len+2,]),
                         drop_remainder=True)
@@ -134,12 +143,12 @@ predict     Predict sequence from raw fast5
         else:
             transformer_hparams = {'d_output' : d_output,
                                'd_model' : 384,
-                               'cnn_kernel' : 16,
+                               'cnn_kernel' : 20,
                                'dff' : 1536,
                                #'dff_type' : 'point_wise',
                                'encoder_dff_type' : 'separable_convolution',
                                'decoder_dff_type' : 'point_wise',
-                               'encoder_dff_filter_width' : 20,
+                               'encoder_dff_filter_width' : 24,
                                #'decoder_dff_filter_width' : 20,
                                'num_heads' : 8,
                                'encoder_max_iterations' : 14,

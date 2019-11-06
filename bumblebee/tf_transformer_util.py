@@ -88,6 +88,7 @@ if __name__ == '__main__':
         ret = [ids[char] if char in ids else ids[random.choice(alphabet)] for char in '^' + sequence.numpy().decode('utf-8') + '$']
         return tf.cast(ret, tf.int32)
 
+    @tf.function
     def tf_parse(eg):
         example = tf.io.parse_example(
             eg[tf.newaxis], {
@@ -103,19 +104,30 @@ if __name__ == '__main__':
         sig_len = tf.expand_dims(tf.size(sig), axis=-1)
         return ((sig, seq[:-1], sig_len, seq_len), seq[1:])
 
+    @tf.function
     def tf_filter(input, target):
         #input, target = eg
         return (input[2] <= tf.cast(input_max_len, tf.int32) and input[3] <= tf.cast(target_max_len + 2, tf.int32))[0]
 
-    ds_train = (tf.data.TFRecordDataset(filenames = train_files)
-                .map(tf_parse, num_parallel_calls=16))
-    ds_train = ds_train.filter(tf_filter)
-    ds_train = (ds_train.prefetch(args.minibatch_size * 64)
+    #ds_train = (tf.data.TFRecordDataset(filenames = train_files)
+    #            .map(tf_parse, num_parallel_calls=16))
+    #ds_train = ds_train.filter(tf_filter)
+    #ds_train = (ds_train.prefetch(args.minibatch_size * 64)
+    #            .shuffle(args.minibatch_size * 64)
+    #            .padded_batch(args.minibatch_size,
+    #                padded_shapes=(([input_max_len, 1], [target_max_len+2,], [1,], [1,]), [target_max_len+2,]),
+    #                drop_remainder=True)
+    #            .repeat())
+
+    ds_train = tf.data.Dataset.from_tensor_slices(train_files)
+    ds_train = (ds_train.interleave(lambda x:
+                tf.data.TFRecordDataset(filenames=x).map(tf_parse, num_parallel_calls=4), cycle_length=4, block_length=16))
+    ds_train = (ds_train.filter(tf_filter)
+                .prefetch(args.minibatch_size * 32)
                 .shuffle(args.minibatch_size * 64)
                 .padded_batch(args.minibatch_size,
                     padded_shapes=(([input_max_len, 1], [target_max_len+2,], [1,], [1,]), [target_max_len+2,]),
-                    drop_remainder=True)
-                .repeat())
+                    drop_remainder=True))
 
     ds_train_iter = iter(ds_train)
     for batch in tqdm(ds_train_iter, desc='Training'):

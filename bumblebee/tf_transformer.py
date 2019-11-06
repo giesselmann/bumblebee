@@ -120,7 +120,7 @@ def point_wise_feed_forward_network(d_model, dff):
             activation='relu'),
       # (batch_size, seq_len, d_model)
       tf.keras.layers.Dense(d_model,
-            activation='sigmoid')
+            activation=None)
     ])
 
 
@@ -132,12 +132,14 @@ def separable_conv_feed_forward_network(d_model, dff, d_filter, padding='same'):
         tf.keras.layers.SeparableConv1D(dff, d_filter,
                 padding=padding,
                 data_format='channels_last',
-                activation='relu',
-                depthwise_regularizer=tf.keras.regularizers.l1_l2(l1=0.01, l2=0.01),
-                pointwise_regularizer=tf.keras.regularizers.l1_l2(l1=0.01, l2=0.01)),
+                activation='sigmoid'
+                #depthwise_regularizer=tf.keras.regularizers.l1_l2(l1=0.01, l2=0.01),
+                #pointwise_regularizer=tf.keras.regularizers.l1_l2(l1=0.01, l2=0.01)
+                ),
+        tf.keras.layers.LayerNormalization(epsilon=1e-6),
         # (batch_size, seq_len, d_model)
         tf.keras.layers.Dense(d_model,
-                activation='sigmoid'),
+                activation=None),
     ])
 
 
@@ -718,9 +720,11 @@ class Transformer(tf.keras.Model):
                             kernel_size=(hparams.get("cnn_kernel") or 8,),
                             strides=1,
                             padding='same',
+                            activation='sigmoid',
                             data_format='channels_last')
         #self.dropout = tf.keras.layers.SpatialDropout1D(hparams.get('rate') or 0.1)
-        self.pool = tf.keras.layers.MaxPool1D(pool_size=2, strides=2, padding='valid', data_format='channels_last')
+        self.norm = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.pool = tf.keras.layers.MaxPool1D(pool_size=3, strides=3, padding='valid', data_format='channels_last')
         self.transformer_layer = TransformerLayer(hparams)
 
     def call(self, inputs, training=False, mask=None):
@@ -728,6 +732,8 @@ class Transformer(tf.keras.Model):
             input, target, input_lengths, target_lengths = inputs
             inner = self.cnn(input)
             inner = self.pool(inner)
+            inner = self.norm(inner)
+            input_lengths = input_lengths // 3
             output = self.transformer_layer([inner, target, input_lengths, target_lengths], training=training)
             return output
         elif len(inputs) == 3:  # prediction
