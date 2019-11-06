@@ -33,7 +33,7 @@ from tqdm import tqdm
 from util import pore_model
 from tf_transformer import Transformer
 from tf_transformer_util import decode_sequence
-from tf_transformer_util import BatchGeneratorSim, BatchGeneratorSig, TransformerLRS
+from tf_transformer_util import TransformerLRS
 
 
 
@@ -88,7 +88,7 @@ predict     Predict sequence from raw fast5
 
         def encode_sequence(sequence):
             ids = {char:tf_alphabet.find(char) for char in tf_alphabet}
-            ret = [ids[char] for char in '^' + sequence.numpy().decode('utf-8') + '$']
+            ret = [ids[char] if char in ids else ids[random.choice(alphabet)] for char in '^' + sequence.numpy().decode('utf-8') + '$']
             return tf.cast(ret, tf.int32)
 
         def tf_parse(eg):

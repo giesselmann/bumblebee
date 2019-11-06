@@ -32,7 +32,6 @@ import h5py
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
-from threading import Thread, Lock
 from collections import deque
 from tqdm import tqdm
 from util import pore_model
@@ -42,235 +41,6 @@ from util import pore_model
 
 def decode_sequence(logits, alphabet='ACGT'):
     return ''.join([alphabet[i] if i < len(alphabet) else '_' for i in logits])
-
-
-
-
-class BatchGenerator():
-    def __init__(self, batches_train=100, batches_val=10,
-                 minibatch_size=32,
-                 max_input_len=1000, min_target_len=None, max_target_len=100, target_alphabet='ACGT'):
-        self._batches_train = batches_train
-        self._batches_val = batches_val
-        self.minibatch_size = minibatch_size
-        self.max_input_len = max_input_len
-        self.max_target_len = max_target_len
-        self.min_target_len = min_target_len or max_target_len // 2
-        self.target_alphabet = target_alphabet + '^$'
-        self.current_train_index = 0
-        self.current_val_index = batches_train * minibatch_size
-
-    @property
-    def target_dim(self):
-        return len(self.target_alphabet)
-
-    @property
-    def batches_train(self):
-        return self._batches_train
-
-    @property
-    def batches_val(self):
-        return self._batches_val
-
-    @property
-    def val_split(self):
-        return self.batches_train * self.minibatch_size
-
-    @property
-    def num_sequences(self):
-        return self.val_split + self.batches_val * self.minibatch_size
-
-    def __encode_sequence__(self, sequence):
-        ids = {char:self.target_alphabet.find(char) for char in self.target_alphabet}
-        ret = [ids[char] for char in '^' + sequence + '$']
-        return ret
-
-    def get_sequence_signal_pair(self, index):
-        raise NotImplementedError
-
-    def get_batch(self, index, size):
-        input_data = np.zeros((size, self.max_input_len, 1), dtype=np.float32)
-        target_data = np.zeros((size, self.max_target_len+3), dtype=np.int32)
-        input_lens = np.zeros((size, 1), dtype=np.int32)
-        target_lens = np.zeros((size, 1), dtype=np.int32)
-        for i in range(size):
-            sequence, signal = self.get_sequence_signal_pair(index + i)
-            input_data[i,:min(len(signal), self.max_input_len),0] = signal[:self.max_input_len]
-            target_data[i,:len(sequence)+2] = self.__encode_sequence__(sequence)
-            input_lens[i] = len(signal)
-            target_lens[i] = len(sequence) + 2
-        return (input_data, target_data, input_lens, target_lens)
-
-    def __next_train__(self):
-        ret = self.get_batch(self.current_train_index, self.minibatch_size)
-        self.current_train_index += self.minibatch_size
-        if self.current_train_index >= self.val_split:
-            self.current_train_index = self.current_train_index % self.minibatch_size
-        return ret
-
-    def __next_val__(self):
-        ret = self.get_batch(self.current_val_index, self.minibatch_size)
-        self.current_val_index += self.minibatch_size
-        if self.current_val_index >= self.num_sequences:
-            self.current_val_index = self.val_split + self.current_val_index % self.minibatch_size
-        return ret
-
-    def next_train(self):
-        while True:
-            yield self.__next_train__()
-
-    def next_val(self):
-        while True:
-            yield self.__next_val__()
-
-    def on_epoch_begin(self):
-        pass
-
-
-
-
-class BatchGeneratorSim(BatchGenerator):
-    def __init__(self, pore_model_file, **kwargs):
-        self.pm = pore_model(pore_model_file)
-        super(BatchGeneratorSim, self).__init__(**kwargs)
-        self.sequences_train = self.__gen_seqs__(super(BatchGeneratorSim, self).batches_train * self.minibatch_size,
-                self.min_target_len, self.max_target_len)
-        self.sequences_val = self.__gen_seqs__(super(BatchGeneratorSim, self).batches_val * self.minibatch_size,
-                self.min_target_len, self.max_target_len)
-
-    def __gen_seqs__(self, n, min_length, max_length):
-        seqs = [''.join([random.choice('ACGT') for _
-            in range(random.randint(min_length, max_length))]) for i
-                in range(n)]
-        return seqs
-
-    @property
-    def batches_train(self):
-        return len(self.sequences_train) // self.minibatch_size
-
-    @property
-    def batches_val(self):
-        return len(self.sequences_val) // self.minibatch_size
-
-    def get_sequence_signal_pair(self, index):
-        if index < self.val_split:
-            sequence = self.sequences_train[index]
-        else:
-            sequence = self.sequences_val[(index - self.val_split) % len(self.sequences_val)]
-        sim_signal = self.pm.generate_signal(sequence, samples=None, noise=True)
-        nrm_signal = self.pm.quantile_nrm(sim_signal)
-        return (sequence, nrm_signal)
-
-    def on_epoch_begin(self):
-        super(BatchGeneratorSim, self).on_epoch_begin()
-        random.shuffle(self.sequences_train)
-
-
-
-
-class BatchGeneratorSig(BatchGenerator):
-    def __init__(self, pore_model_file, event_file,
-                 discard_quantile=0.3, **kwargs):
-        self.pm = pore_model(pore_model_file)
-        super(BatchGeneratorSig, self).__init__(**kwargs)
-        self.event_file = event_file
-        segments = []
-        n_segments_train = super(BatchGeneratorSig, self).batches_train * self.minibatch_size
-        n_segments_val = super(BatchGeneratorSig, self).batches_val * self.minibatch_size
-        self.event_file = h5py.File(event_file, 'r')
-        batches = self.event_file['batch']
-        summary = self.event_file['summary'][...]
-        logp_quantile = np.quantile(summary['logp'], discard_quantile)
-        dist_quantile = np.quantile(summary['dist'], 1-discard_quantile)
-        score_mask = np.logical_and(summary['logp'] > logp_quantile, summary['dist'] < dist_quantile)
-        lengths = np.random.randint(self.min_target_len, self.max_target_len - 5, len(batches), dtype=np.uint64)
-        unique_batches = np.unique(batches)
-        np.random.shuffle(unique_batches)
-        with tqdm(total=n_segments_train + n_segments_val) as pbar:
-            for batch in unique_batches:
-                batch_mask = np.logical_and(np.equal(batches, batch), score_mask)
-                batch_summary = summary[batch_mask]
-                batch_lengths = lengths[batch_mask]
-                batch_seq_begin = batch_summary['seq_begin'] + 10 # skip first events
-                batch_seq_end = batch_seq_begin + batch_lengths
-                batch_events = self.event_file['seq'][batch,:]
-                #batch_raw = self.event_file['raw'][batch,:]
-                batch_raw_end = np.cumsum(batch_events['length'][...])
-                batch_raw_begin = batch_raw_end - batch_events['length'][...]
-                assert np.all(np.less_equal(batch_seq_end, batch_summary['seq_end']))
-                batch_sequences = [batch_events[begin:end]['sequence'].tostring().decode('utf-8')
-                    for begin, end in zip(batch_seq_begin, batch_seq_end + 6)]
-                batch_raw_segments = [(begin, end)
-                    for begin, end in zip(batch_raw_begin[batch_seq_begin], batch_raw_end[batch_seq_end])]
-                _segments = [(batch, _seq, _begin, _end)
-                    for _seq, (_begin, _end) in zip(batch_sequences, batch_raw_segments)
-                        if _end - _begin <= self.max_input_len and _end - _begin > 0]
-                segments.extend(_segments)
-                pbar.update(len(_segments))
-                if len(segments) >= n_segments_train + n_segments_val:
-                    break
-        if len(segments) >= n_segments_train + n_segments_val:
-            self.segments_train = segments[:n_segments_train]
-            self.segments_val = segments[n_segments_train:n_segments_train + n_segments_val]
-        else:
-            train_ratio = n_segments_train / (n_segments_train + n_segments_val)
-            train_split = int(train_ratio * (n_segments_train + n_segments_val))
-            self.segments_train = segments[:train_split]
-            self.segments_val = segments[train_split:]
-        self.__cache__ = deque()
-        self.__cache_active__ = True
-        self.__cache_worker__ = Thread(target=self.__cache_worker_fn__)
-        self.__cache_lock__ = Lock()
-        self.__cache_next__ = 0
-        #self.__cache_worker__.start()
-
-    def __del__(self):
-        self.__cache_active__ = False
-        #self.__cache_worker__.join()
-        self.event_file.close()
-
-    @property
-    def batches_train(self):
-        return len(self.segments_train) // self.minibatch_size
-
-    @property
-    def batches_val(self):
-        return len(self.segments_val) // self.minibatch_size
-
-    def __get_seq_sig_pair__(self, index):
-        if index < self.val_split:
-            batch, sequence, begin, end = self.segments_train[index]
-        else:
-            batch, sequence, begin, end = self.segments_val[(index - self.val_split) % len(self.segments_val)]
-        signal = self.event_file['raw'][batch,begin:end].astype(np.float32)
-        nrm_signal = (signal - self.pm.model_median) / self.pm.model_MAD
-        sequence = re.sub('N', lambda x : random.choice(self.target_alphabet[:-2]), sequence)
-        return (sequence, nrm_signal)
-
-    def __cache_worker_fn__(self):
-        while self.__cache_active__:
-            while len(self.__cache__) < 4096 and self.__cache_active__:
-                with self.__cache_lock__:
-                    self.__cache__.append((self.__cache_next__, ) + self.__get_seq_sig_pair__(self.__cache_next__))
-                    self.__cache_next__ += 1
-                #time.sleep(0.01)
-            #time.sleep(0.1)
-
-    def get_sequence_signal_pair(self, index):
-        idx = -1
-        with self.__cache_lock__:
-            if len(self.__cache__):
-                idx, sequence, nrm_signal = self.__cache__.popleft()
-            if idx == index:
-                return (sequence, nrm_signal)
-            else:
-                self.__cache__.clear()
-                self.__cache_next__ = index + 1
-                return self.__get_seq_sig_pair__(index)
-
-    def on_epoch_begin(self):
-        super(BatchGeneratorSig, self).on_epoch_begin()
-        random.shuffle(self.segments_train)
 
 
 
@@ -291,44 +61,62 @@ class TransformerLRS(tf.keras.optimizers.schedules.LearningRateSchedule):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="BumbleBee")
-    parser.add_argument("model", help="Pore model")
-    parser.add_argument("event", help="Event table")
-    parser.add_argument("tfrecord", help="TF record output prefix")
-    parser.add_argument("--batches_train", type=int, default=1000, help="Training batches")
-    parser.add_argument("--batches_test", type=int, default=100, help="Validation batches")
-    parser.add_argument("--batch_size", type=int, default=100, help="TF records per file")
-    parser.add_argument("--max_target_len", type=int, default=130, help="Maximum target sequence length")
-    parser.add_argument("--max_input_len", type=int, default=1400, help="Maximum input signal length")
-    parser.add_argument("--discard_quantile", type=float, default=0.4, help="Discard quantile of low quality data")
+    parser.add_argument("records", help="TF record output prefix")
+    parser.add_argument("--minibatch_size", type=int, default=100, help="TF records per file")
+    parser.add_argument("--batches_train", type=int, default=10000, help="Training batches")
+    parser.add_argument("--batches_val", type=int, default=1000, help="Validation batches")
+    parser.add_argument("--input_length", type=int, default=1000, help="Input signal window")
+    parser.add_argument("--target_length", type=int, default=100, help="Target sequence length")
     args = parser.parse_args()
-    batch_gen = BatchGeneratorSig(args.model, args.event,
-                            batches_train=args.batches_train,
-                            batches_val=args.batches_test,
-                            minibatch_size=args.batch_size,
-                            max_input_len=args.max_input_len,
-                            max_target_len=args.max_target_len,
-                            discard_quantile=args.discard_quantile)
-    batch_gen.on_epoch_begin()
 
-    def serialize_example(sequence, signal):
-        sequence_b = tf.train.BytesList(value=[sequence.encode("ASCII")])
-        signal_b = tf.train.BytesList(value=[tf.io.serialize_tensor(signal.astype(np.float16)).numpy()])
-        feature = {
-            'sequence' :  tf.train.Feature(bytes_list=sequence_b),
-            'signal' : tf.train.Feature(bytes_list=signal_b)
-        }
-        example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
-        return example_proto.SerializeToString()
+    # Constants
+    alphabet = "ACGT"
+    tf_alphabet = alphabet + '^$'
+    input_max_len = args.input_length
+    target_max_len = args.target_length
 
-    with tf.io.TFRecordWriter(args.tfrecord + ".train.tfrec") as writer:
-        for i in tqdm(range(args.batches_train * args.batch_size), desc='Training batches'):
-            seq, sig = batch_gen.get_sequence_signal_pair(i)
-            example = serialize_example(seq, sig)
-            writer.write(example)
+    # tfRecord files
+    record_files = [os.path.join(dirpath, f) for dirpath, _, files
+                        in os.walk(args.records) for f in files if f.endswith('.tfrec')]
 
-    with tf.io.TFRecordWriter(args.tfrecord + ".test.tfrec") as writer:
-        for i in tqdm(range(args.batches_test * args.batch_size), desc='Test batches'):
-            seq, sig = batch_gen.get_sequence_signal_pair(args.batches_train * args.batch_size + i)
-            example = serialize_example(seq, sig)
-            writer.write(example)
-    del batch_gen
+    val_split = int(min(1, args.batches_val / args.batches_train * len(record_files)))
+    val_files = record_files[:val_split]
+    train_files = record_files[val_split:]
+
+    def encode_sequence(sequence):
+        ids = {char:tf_alphabet.find(char) for char in tf_alphabet}
+        ret = [ids[char] if char in ids else ids[random.choice(alphabet)] for char in '^' + sequence.numpy().decode('utf-8') + '$']
+        return tf.cast(ret, tf.int32)
+
+    def tf_parse(eg):
+        example = tf.io.parse_example(
+            eg[tf.newaxis], {
+                'sequence': tf.io.FixedLenFeature(shape=(), dtype=tf.string),
+                'signal': tf.io.FixedLenFeature(shape=(), dtype=tf.string)})
+        seq = tf.py_function(encode_sequence, [example['sequence'][0]], tf.int32)
+        sig = tf.expand_dims(
+                tf.cast(
+                    tf.io.parse_tensor(example['signal'][0], tf.float16),
+                    tf.float32),
+                axis=-1)
+        seq_len = tf.expand_dims(tf.size(seq), axis=-1) - 1
+        sig_len = tf.expand_dims(tf.size(sig), axis=-1)
+        return ((sig, seq[:-1], sig_len, seq_len), seq[1:])
+
+    def tf_filter(input, target):
+        #input, target = eg
+        return (input[2] <= tf.cast(input_max_len, tf.int32) and input[3] <= tf.cast(target_max_len + 2, tf.int32))[0]
+
+    ds_train = (tf.data.TFRecordDataset(filenames = train_files)
+                .map(tf_parse, num_parallel_calls=16))
+    ds_train = ds_train.filter(tf_filter)
+    ds_train = (ds_train.prefetch(args.minibatch_size * 64)
+                .shuffle(args.minibatch_size * 64)
+                .padded_batch(args.minibatch_size,
+                    padded_shapes=(([input_max_len, 1], [target_max_len+2,], [1,], [1,]), [target_max_len+2,]),
+                    drop_remainder=True)
+                .repeat())
+
+    ds_train_iter = iter(ds_train)
+    for batch in tqdm(ds_train_iter, desc='Training'):
+        continue
