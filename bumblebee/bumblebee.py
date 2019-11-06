@@ -76,12 +76,10 @@ predict     Predict sequence from raw fast5
         input_max_len = args.input_length
         target_max_len = args.target_length
 
-        val_rate = args.batches_train // args.batches_val
-
         # tfRecord files
         record_files = [os.path.join(dirpath, f) for dirpath, _, files
                             in os.walk(args.records) for f in files if f.endswith('.tfrec')]
-
+        val_rate = args.batches_train // args.batches_val
         val_split = int(min(1, args.batches_val / args.batches_train * len(record_files)))
         val_files = record_files[:val_split]
         train_files = record_files[val_split:]
@@ -154,8 +152,6 @@ predict     Predict sequence from raw fast5
                                'decoder_act_type' : 'dense',
                                'encoder_time_penalty' : 0.0005,
                                'decoder_time_penalty' : 0.005,
-                               #'input_local_attention_window' : 200,
-                               #'target_local_attention_window' : 20
                                'input_memory_comp' : 16,
                                'target_memory_comp' : None
                                }

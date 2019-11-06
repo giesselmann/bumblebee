@@ -113,51 +113,14 @@ def scaled_dot_product_attention(q, k, v, mask):
 
 
 
-def scaled_local_attention(q, k, v, mask, window=32, mode='causal'):
-    idx = tf.range(0, tf.shape(q)[-2], dtype=tf.int32)
-    q_idx = tf.range(0, tf.shape(q)[-2], dtype=tf.int32)
-    window_2 = window // 2
-    if mode == 'same:':
-        k_idx = tf.concat([tf.zeros(window_2-1, dtype=tf.int32),
-                       tf.range(0, tf.shape(k)[-2] - 2*window_2 + 1, dtype=tf.int32),
-                       tf.ones(window_2, dtype=tf.int32) * tf.shape(k)[-2]], 0)
-    else: # 'causal'
-        k_idx = tf.concat([tf.zeros(window_2 * 2 - 1, dtype=tf.int32),
-                           tf.range(0, tf.shape(k)[-2] - 2*window_2 + 1, dtype=tf.int32)], 0)
-    idx = tf.stack([q_idx, tf.gather(k_idx, tf.cast(tf.linspace(tf.cast(0, tf.float32),
-                                             k_idx.shape[0]-1,
-                                             q_idx.shape[0]), tf.int32))], 1)
-    window_t = tf.cast(window_2 * 2, tf.int32)
-    dk = tf.cast(tf.shape(k)[-1], tf.float32)
-    def element_wise_attention(idx2compute):
-        _q_idx, _k_idx = tf.unstack(idx2compute)
-        matmul_qk = tf.matmul(q[...,_q_idx:_q_idx+1,:], k[..., _k_idx:_k_idx+window_t, :], transpose_b=True)
-        scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
-        if mask is not None and tf.shape(mask)[-2] == 1:
-            scaled_attention_logits += (mask[..., _k_idx:_k_idx+window_t] * -1e9)
-        if mask is not None and tf.shape(mask)[-2] == tf.shape(q)[-2]:
-            scaled_attention_logits += (mask[..., _k_idx:_k_idx+window_t, _q_idx] * -1e9)
-        attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)
-        output = tf.matmul(attention_weights, v[..., _k_idx:_k_idx+window_t, :])
-        return tf.squeeze(output) # (batch_size, num_heads, d_model)
-    z = tf.map_fn(element_wise_attention, idx,
-                    dtype=q.dtype)
-    # [1,0,2] or [1,2,0,3] for multi-head
-    if len(q.shape) == 3:
-        z = tf.transpose(z, perm=[1, 0, 2])
-    elif len(q.shape) == 4:
-        z = tf.transpose(z, perm=[1, 2, 0, 3])
-    else:
-        raise NotImplementedError('Input shape mismatch')
-    return z
-
-
-
-
 def point_wise_feed_forward_network(d_model, dff):
     return tf.keras.Sequential([
-      tf.keras.layers.Dense(dff, activation='sigmoid'),  # (batch_size, seq_len, dff)
-      tf.keras.layers.Dense(d_model)  # (batch_size, seq_len, d_model)
+      # (batch_size, seq_len, dff)
+      tf.keras.layers.Dense(dff,
+            activation='relu'),
+      # (batch_size, seq_len, d_model)
+      tf.keras.layers.Dense(d_model,
+            activation='sigmoid')
     ])
 
 
@@ -165,11 +128,16 @@ def point_wise_feed_forward_network(d_model, dff):
 
 def separable_conv_feed_forward_network(d_model, dff, d_filter, padding='same'):
     return tf.keras.Sequential([
-        tf.keras.layers.SeparableConv1D(dff, d_filter, # (batch_size, seq_len, dff)
+        # (batch_size, seq_len, dff)
+        tf.keras.layers.SeparableConv1D(dff, d_filter,
                 padding=padding,
                 data_format='channels_last',
+                activation='relu',
+                depthwise_regularizer=tf.keras.regularizers.l1_l2(l1=0.01, l2=0.01),
+                pointwise_regularizer=tf.keras.regularizers.l1_l2(l1=0.01, l2=0.01)),
+        # (batch_size, seq_len, d_model)
+        tf.keras.layers.Dense(d_model,
                 activation='sigmoid'),
-        tf.keras.layers.Dense(d_model),                # (batch_size, seq_len, d_model)
     ])
 
 
@@ -182,8 +150,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self.num_heads = hparams.get('num_heads') or 4
         self.memory_comp = hparams.get('memory_comp')
         self.memory_comp_pad = hparams.get('memory_comp_pad') or 'same'
-        self.local_attention_mode = hparams.get('local_attention_mode') or 'causal'
-        self.local_attention_window = hparams.get('local_attention_window') or 32
         assert self.d_model % self.num_heads == 0
         self.depth = self.d_model // self.num_heads
         self.hparams = hparams.copy()
@@ -245,10 +211,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         # scaled_attention.shape == (batch_size, num_heads, seq_len_q, depth)
         # attention_weights.shape == (batch_size, num_heads, seq_len_q, seq_len_k)
         scaled_attention = scaled_dot_product_attention(q, k, v, mask=mask)
-        #scaled_attention = scaled_local_attention(q, k, v,
-        #                        mask=mask,
-        #                        window=self.local_attention_window,
-        #                        mode=self.local_attention_mode)
         # (batch_size, seq_len_q, num_heads, depth)
         scaled_attention = tf.transpose(scaled_attention, perm=[0, 2, 1, 3])
         # (batch_size, seq_len_q, d_model)
@@ -271,7 +233,6 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.hparams = hparams.copy()
         self.hparams['memory_comp'] = hparams.get('input_memory_comp')
         self.hparams['memory_comp_pad'] = 'same'
-        self.hparams['local_attention_window'] = hparams.get('input_local_attention_window')
 
     def get_config(self):
         config = super(EncoderLayer, self).get_config()
@@ -330,13 +291,9 @@ class DecoderLayer(tf.keras.layers.Layer):
         assert isinstance(input_shape, list)
         self.hparams['memory_comp'] = self.hparams.get('target_memory_comp')
         self.hparams['memory_comp_pad'] = 'causal'
-        self.hparams['local_attention_window'] = self.hparams.get('target_local_attention_window')
-        self.hparams['local_attention_mode'] = 'causal'
         self.mha1 = MultiHeadAttention(hparams=self.hparams)
         self.hparams['memory_comp'] = self.hparams.get('input_memory_comp')
         self.hparams['memory_comp_pad'] = 'same'
-        self.hparams['local_attention_window'] = self.hparams.get('input_local_attention_window')
-        self.hparams['local_attention_mode'] = 'same'
         self.mha2 = MultiHeadAttention(hparams=self.hparams)
         if self.dff_type == 'point_wise':
             self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
