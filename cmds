@@ -14,3 +14,5 @@ export CUDA_VISIBLE_DEVICES='0,1,2,3'
 python3 bumblebee/bumblebee.py train util/r9_4_450bps.mpi.model --event ../../data/bumblebee/events/minimap2/guppy/events.mm9.hdf5 --prefix bb_384.2 --input_length 1400 --target_length 130 --minibatch_size 16 --batches_train 1600000 --batches_val 160000 --gpus 0 1 2 3
 
 python3 bumblebee/bumblebee.py train ../../data/bumblebee/events.mm9.train.tfrec ../../data/bumblebee/events.mm9.test.tfrec --prefix bb_384.3 --input_length 1400 --target_length 130 --minibatch_size 64 --batches_train 1600000 --batches_val 160000 --gpus 0 1 2 3
+
+python3 bumblebee/bumblebee.py train ../../data/bumblebee/events/ --prefix bb_384.6a --input_length 1400 --target_length 130 --minibatch_size 64 --batches_train 1600000 --batches_val 160000 --gpus 0 1 2 3

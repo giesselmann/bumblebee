@@ -156,7 +156,7 @@ def scaled_local_attention(q, k, v, mask, window=32, mode='causal'):
 
 def point_wise_feed_forward_network(d_model, dff):
     return tf.keras.Sequential([
-      tf.keras.layers.Dense(dff, activation='relu'),  # (batch_size, seq_len, dff)
+      tf.keras.layers.Dense(dff, activation='sigmoid'),  # (batch_size, seq_len, dff)
       tf.keras.layers.Dense(d_model)  # (batch_size, seq_len, d_model)
     ])
 
@@ -265,7 +265,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         super(EncoderLayer, self).__init__(**kwargs)
         self.d_model = hparams.get('d_model') or 256
         self.dff = hparams.get('dff') or 1024
-        self.dff_type = hparams.get('dff_type') or 'point_wise'
+        self.dff_type = hparams.get('encoder_dff_type') or hparams.get('dff_type') or 'point_wise'
         self.dff_filter = hparams.get('encoder_dff_filter_width') or 8
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
@@ -312,7 +312,7 @@ class DecoderLayer(tf.keras.layers.Layer):
         super(DecoderLayer, self).__init__(**kwargs)
         self.d_model = hparams.get('d_model') or 256
         self.dff = hparams.get('dff') or 1024
-        self.dff_type = hparams.get('dff_type') or 'point_wise'
+        self.dff_type = hparams.get('decoder_dff_type') or hparams.get('dff_type') or 'point_wise'
         self.dff_filter = hparams.get('decoder_dff_filter_width') or 8
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
@@ -763,17 +763,20 @@ class Transformer(tf.keras.Model):
                             padding='same',
                             data_format='channels_last')
         #self.dropout = tf.keras.layers.SpatialDropout1D(hparams.get('rate') or 0.1)
+        self.pool = tf.keras.layers.MaxPool1D(pool_size=2, strides=2, padding='valid', data_format='channels_last')
         self.transformer_layer = TransformerLayer(hparams)
 
     def call(self, inputs, training=False, mask=None):
         if len(inputs) == 4:    # training
             input, target, input_lengths, target_lengths = inputs
             inner = self.cnn(input)
+            inner = self.pool(inner)
             output = self.transformer_layer([inner, target, input_lengths, target_lengths], training=training)
             return output
         elif len(inputs) == 3:  # prediction
             input, input_lengths, target_max = inputs
             inner = self.cnn(input)
+            inner = self.pool(inner)
             output = self.transformer_layer([inner, input_lengths, target_max])
             return output
 

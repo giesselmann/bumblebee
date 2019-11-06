@@ -57,8 +57,7 @@ predict     Predict sequence from raw fast5
 
     def train(self, argv):
         parser = argparse.ArgumentParser(description="BumbleBee basecaller training")
-        parser.add_argument("train", help="Training records")
-        parser.add_argument("test", help="Validation records")
+        parser.add_argument("records", help="Training records")
         parser.add_argument("--config", default=None, help="Transformer config file")
         parser.add_argument("--prefix", default="", help="Checkpoint and event prefix")
         parser.add_argument("--input_length", type=int, default=1000, help="Input signal window")
@@ -79,6 +78,14 @@ predict     Predict sequence from raw fast5
 
         val_rate = args.batches_train // args.batches_val
 
+        # tfRecord files
+        record_files = [os.path.join(dirpath, f) for dirpath, _, files
+                            in os.walk(args.records) for f in files if f.endswith('.tfrec')]
+
+        val_split = int(min(1, args.batches_val / args.batches_train * len(record_files)))
+        val_files = record_files[:val_split]
+        train_files = record_files[val_split:]
+
         def encode_sequence(sequence):
             ids = {char:tf_alphabet.find(char) for char in tf_alphabet}
             ret = [ids[char] for char in '^' + sequence.numpy().decode('utf-8') + '$']
@@ -95,21 +102,28 @@ predict     Predict sequence from raw fast5
                         tf.io.parse_tensor(example['signal'][0], tf.float16),
                         tf.float32),
                     axis=-1)
-            seq_len = tf.expand_dims(tf.size(seq), axis=-1)
+            seq_len = tf.expand_dims(tf.size(seq), axis=-1) - 1
             sig_len = tf.expand_dims(tf.size(sig), axis=-1)
             return ((sig, seq[:-1], sig_len, seq_len), seq[1:])
 
-        ds_train = (tf.data.TFRecordDataset(filenames = [args.train])
-                    .map(tf_parse, num_parallel_calls=16)
-                    .prefetch(args.minibatch_size * 32)
+        def tf_filter(input, target):
+            #input, target = eg
+            return (input[2] <= tf.cast(input_max_len, tf.int32) and input[3] <= tf.cast(target_max_len + 2, tf.int32))[0]
+
+        ds_train = (tf.data.TFRecordDataset(filenames = train_files)
+                    .map(tf_parse, num_parallel_calls=16))
+        ds_train = ds_train.filter(tf_filter)
+        ds_train = (ds_train.prefetch(args.minibatch_size * 64)
+                    .shuffle(args.minibatch_size * 64)
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len+2,], [1,], [1,]), [target_max_len+2,]),
                         drop_remainder=True)
-                    .shuffle(128).cache()
                     .repeat())
-        ds_test = (tf.data.TFRecordDataset(filenames = [args.test])
-                    .map(tf_parse, num_parallel_calls=16)
-                    .prefetch(args.minibatch_size * 32)
+
+        ds_test = (tf.data.TFRecordDataset(filenames = val_files)
+                    .map(tf_parse, num_parallel_calls=16))
+        ds_test = ds_test.filter(tf_filter)
+        ds_test = (ds_test.prefetch(args.minibatch_size * 32)
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len+2,], [1,], [1,]), [target_max_len+2,]),
                         drop_remainder=True)
@@ -124,19 +138,21 @@ predict     Predict sequence from raw fast5
                                'd_model' : 384,
                                'cnn_kernel' : 16,
                                'dff' : 1536,
-                               'dff_type' : 'point_wise',
-                               'encoder_dff_filter_width' : 24,
-                               'decoder_dff_filter_width' : 24,
+                               #'dff_type' : 'point_wise',
+                               'encoder_dff_type' : 'separable_convolution',
+                               'decoder_dff_type' : 'point_wise',
+                               'encoder_dff_filter_width' : 20,
+                               #'decoder_dff_filter_width' : 20,
                                'num_heads' : 8,
-                               'encoder_max_iterations' : 10,
-                               'decoder_max_iterations' : 10,
+                               'encoder_max_iterations' : 14,
+                               'decoder_max_iterations' : 14,
                                'encoder_time_scale' : 10000,
                                'decoder_time_scale' : 1000,
                                'random_shift' : False,
                                'ponder_bias_init' : 1.0,
                                'encoder_act_type' : 'dense',
                                'decoder_act_type' : 'dense',
-                               'encoder_time_penalty' : 0.001,
+                               'encoder_time_penalty' : 0.0005,
                                'decoder_time_penalty' : 0.005,
                                #'input_local_attention_window' : 200,
                                #'target_local_attention_window' : 20
@@ -207,12 +223,12 @@ predict     Predict sequence from raw fast5
             @tf.function
             def distributed_train_step(dataset_inputs):
                 per_replica_losses = strategy.experimental_run_v2(train_step, args=(dataset_inputs,))
-                return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None)
+                return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses, axis=None)
 
             @tf.function
             def distributed_test_step(dataset_inputs):
                 per_replica_losses = strategy.experimental_run_v2(test_step, args=(dataset_inputs,))
-                return strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None)
+                return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses, axis=None)
 
             best_losses = [float("inf")] * 5
             for epoch in range(20):

@@ -32,7 +32,7 @@ from snakemake.utils import min_version
 
 min_version("5.4.0")
 configfile: "config.yaml"
-localrules: tag_run, merge_run, merge_runs
+localrules: tag_run, tag_tag
 
 
 
@@ -67,33 +67,31 @@ rule segmentation:
     input:
         raw = lambda wildcards : get_raw_batch(wildcards),
         bam = "alignments/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.bam",
-        bai = "alignments/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.bam.bai",
-        genome = lambda wildcards: config['references'][wildcards.reference]['genome']
+        bai = "alignments/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.bam.bai"
     output:
-        hdf5 = "events/{aligner, [^.\/]*}/{sequence_workflow}/batches/{tag, [^\/]*}/{runname, [^\/]*}/{batch}.{reference}.hdf5"
+        tfrec = "events/{aligner, [^.\/]*}/{sequence_workflow}/batches/{tag, [^\/]*}/{runname, [^\/]*}/{batch}.{reference}.tfrec"
     params:
         format = lambda wildcards, input : os.path.splitext(input.raw)[1]
     threads: 32
     resources:
         mem_mb = lambda wildcards, threads, attempt : int(threads * 2000),
-        time_min = lambda wildcards, threads, attempt : int((7680 / threads) * attempt)
+        time_min = lambda wildcards, threads, attempt : int((3840 / threads) * attempt)
     shadow: 'minimal'
     shell:
         """
-        /project/minion/bin/samtools view -bF 2308 {input.bam} | /project/minion/bin/bedtools bamtobed -i stdin | /project/minion/bin/bedtools getfasta -fi {input.genome} -bed stdin -name -s | sed -r 's/\(.\)//' > sequences.fa
         mkdir raw
         if [ \'{params.format}\' == '.tar' ]; then
             {config[py_env]}/bin/python3 {config[storage_fast5Index]} extract {input.raw} raw/ --output_format bulk
         else
             cp {input.raw} raw/
         fi
-        {config[py_env]}/bin/python3 {config[segmentation_script]} align {config[pore_model]} sequences.fa `ls raw/*.fast5` {output.hdf5} --t {threads}
+        /project/minion/bin/samtools view -F 2308 {input.bam} | {config[py_env]}/bin/python3 {config[segmentation_script]} {config[pore_model]} `ls raw/*.fast5` {output.tfrec} --slicer 8 --mapper {threads}
         """
 
 
 rule tag_run:
     input:
-        hdf5 = lambda wildcards : expand("events/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.hdf5",
+        hdf5 = lambda wildcards : expand("events/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.tfrec",
                         aligner = wildcards.aligner,
                         sequence_workflow = wildcards.sequence_workflow,
                         tag = wildcards.tag,
@@ -112,20 +110,7 @@ rule tag_run:
         "touch {output.tag}"
 
 
-rule merge_run:
-    input:
-        tag = "events/{aligner}/{sequence_workflow}/batches/{tag}/{runname}.{reference}.events"
-    output:
-        hdf5 = "events/{aligner, [^.\/]*}/{sequence_workflow, ((?!batches).)*}/batches/{tag, [^\/]*}/{runname, [^\/]*}.{reference}.hdf5"
-    params:
-        input_dir = lambda wildcards, input : os.path.join(os.path.dirname(input.tag[0]), wildcards.runname)
-    shell:
-        """
-        {config[py_env]}/bin/python3 {config[segmentation_script]} merge {output.hdf5} {params.input_dir}
-        """
-
-
-rule merge_runs:
+rule tag_tag:
     input:
         tags = lambda wildcards : ["events/{aligner}/{sequence_workflow}/batches/{tag}/{runname}.{reference}.events".format(
                 aligner=wildcards.aligner,
@@ -135,10 +120,4 @@ rule merge_runs:
                 reference=wildcards.reference)
             for tag, runnames in config['tag_map'].items() for runname in runnames]
     output:
-        hdf5 = "events/{aligner, [^.\/]*}/{sequence_workflow, ((?!batches).)*}/{tag, [^\/]*}.{reference}.hdf5"
-    params:
-        input_dirs = lambda wildcards, input : [re.sub('\.{}\.events'.format(wildcards.reference), '', tag) for tag in input.tags]
-    shell:
-        """
-        {config[py_env]}/bin/python3 {config[segmentation_script]} merge {output.hdf5} {params.input_dirs}
-        """
+        tag = touch("events/{aligner, [^.\/]*}/{sequence_workflow, ((?!batches).)*}/{tag}.{reference}.events")
