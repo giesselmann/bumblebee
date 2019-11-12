@@ -67,6 +67,7 @@ if __name__ == '__main__':
     parser.add_argument("--batches_val", type=int, default=1000, help="Validation batches")
     parser.add_argument("--input_length", type=int, default=1000, help="Input signal window")
     parser.add_argument("--target_length", type=int, default=100, help="Target sequence length")
+    parser.add_argument("--model", help="Pore model for plots")
     args = parser.parse_args()
 
     # Constants
@@ -74,6 +75,11 @@ if __name__ == '__main__':
     tf_alphabet = alphabet + '^$'
     input_max_len = args.input_length
     target_max_len = args.target_length
+
+    if args.model:
+        pm = pore_model(args.model)
+    else:
+        pm = None
 
     # tfRecord files
     record_files = [os.path.join(dirpath, f) for dirpath, _, files
@@ -131,4 +137,11 @@ if __name__ == '__main__':
 
     ds_train_iter = iter(ds_train)
     for batch in tqdm(ds_train_iter, desc='Training'):
-        continue
+        if pm:
+            inputs, target = batch
+            input, target, input_lengths, target_lengths = inputs
+            sequence = decode_sequence(target[0][1:target_lengths[0].numpy()[0]])
+            f, ax = plt.subplots(2)
+            ax[0].plot(pm.generate_signal(sequence, samples=None), 'k-')
+            ax[1].plot(input[0][:input_lengths[0].numpy()[0]].numpy(), 'b-')
+            plt.show()

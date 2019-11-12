@@ -61,7 +61,8 @@ predict     Predict sequence from raw fast5
         parser.add_argument("--config", default=None, help="Transformer config file")
         parser.add_argument("--prefix", default="", help="Checkpoint and event prefix")
         parser.add_argument("--input_length", type=int, default=1000, help="Input signal window")
-        parser.add_argument("--target_length", type=int, default=100, help="Target sequence length")
+        parser.add_argument("--target_min_length", type=int, default=100, help="Target sequence max length")
+        parser.add_argument("--target_length", type=int, default=100, help="Target sequence max length")
         parser.add_argument("--minibatch_size", type=int, default=32, help="Minibatch size")
         parser.add_argument("--batches_train", type=int, default=10000, help="Training batches")
         parser.add_argument("--batches_val", type=int, default=1000, help="Validation batches")
@@ -75,6 +76,7 @@ predict     Predict sequence from raw fast5
         d_output = len(tf_alphabet)
         input_max_len = args.input_length
         target_max_len = args.target_length
+        target_min_len = args.target_min_length
 
         # tfRecord files
         record_files = [os.path.join(dirpath, f) for dirpath, _, files
@@ -82,12 +84,12 @@ predict     Predict sequence from raw fast5
         random.shuffle(record_files)
         val_rate = args.batches_train // args.batches_val
         val_split = int(max(1, args.batches_val / args.batches_train * len(record_files)))
-        val_files = record_files[:val_split]
+        test_files = record_files[:val_split]
         train_files = record_files[val_split:]
 
         print("Training files {}".format(len(train_files)))
-        print("Test files {}".format(len(val_files)))
-        
+        print("Test files {}".format(len(test_files)))
+
         def encode_sequence(sequence):
             ids = {char:tf_alphabet.find(char) for char in tf_alphabet}
             ret = [ids[char] if char in ids else ids[random.choice(alphabet)] for char in '^' + sequence.numpy().decode('utf-8') + '$']
@@ -104,16 +106,18 @@ predict     Predict sequence from raw fast5
                         tf.io.parse_tensor(example['signal'][0], tf.float16),
                         tf.float32),
                     axis=-1)
-            seq_len = tf.expand_dims(tf.size(seq), axis=-1) - 1
-            sig_len = tf.expand_dims(tf.size(sig), axis=-1)
+            seq_len = tf.cast(tf.expand_dims(tf.size(seq), axis=-1) - 1, tf.int32)
+            sig_len = tf.cast(tf.expand_dims(tf.size(sig), axis=-1), tf.int32)
             return ((sig, seq[:-1], sig_len, seq_len), seq[1:])
 
         def tf_filter(input, target):
             #input, target = eg
-            return (input[2] <= tf.cast(input_max_len, tf.int32) and input[3] <= tf.cast(target_max_len + 2, tf.int32))[0]
+            return (input[2] <= tf.cast(input_max_len, tf.int32) and
+                    input[2] >= tf.cast(target_min_len, tf.int32) and
+                    input[3] <= tf.cast(target_max_len + 2, tf.int32) and
+                    input[3] >= tf.cast(target_min_len + 2, tf.int32))[0]
 
-
-        ds_train = tf.data.Dataset.from_tensor_slices(train_files).shuffle(len(train_files))
+        ds_train = tf.data.Dataset.from_tensor_slices(train_files)
         ds_train = (ds_train.interleave(lambda x:
                     tf.data.TFRecordDataset(filenames=x).map(tf_parse, num_parallel_calls=1), cycle_length=8, block_length=8))
         ds_train = (ds_train
@@ -125,7 +129,7 @@ predict     Predict sequence from raw fast5
                         drop_remainder=True)
                     .repeat())
 
-        ds_test = tf.data.Dataset.from_tensor_slices(val_files)
+        ds_test = tf.data.Dataset.from_tensor_slices(test_files)
         ds_test = (ds_test.interleave(lambda x:
                     tf.data.TFRecordDataset(filenames=x).map(tf_parse, num_parallel_calls=1), cycle_length=8, block_length=8))
         ds_test = (ds_test
@@ -143,25 +147,32 @@ predict     Predict sequence from raw fast5
         else:
             transformer_hparams = {'d_output' : d_output,
                                'd_model' : 384,
-                               'cnn_kernel' : 20,
+                               'cnn_kernel' : 16,
+                               'cnn_pool_stride' : 3,
+                               'cnn_pool_size' : 5,
                                'dff' : 1536,
-                               #'dff_type' : 'point_wise',
+                               #'dff_type' : 'point_wise' or 'convolution' or 'separable_convolution'
                                'encoder_dff_type' : 'separable_convolution',
                                'decoder_dff_type' : 'point_wise',
-                               'encoder_dff_filter_width' : 24,
-                               #'decoder_dff_filter_width' : 20,
+                               #'dff_filter_width' : 16,
+                               'encoder_dff_filter_width' : 48,
+                               'encoder_dff_pool_size' : 3,
+                               #'decoder_dff_filter_width' : 32,
                                'num_heads' : 8,
-                               'encoder_max_iterations' : 14,
-                               'decoder_max_iterations' : 14,
+                               'encoder_max_iterations' : 10,
+                               'decoder_max_iterations' : 16,
                                'encoder_time_scale' : 10000,
-                               'decoder_time_scale' : 1000,
+                               'decoder_time_scale' : 3333,
                                'random_shift' : False,
                                'ponder_bias_init' : 1.0,
-                               'encoder_act_type' : 'dense',
-                               'decoder_act_type' : 'dense',
-                               'encoder_time_penalty' : 0.0005,
-                               'decoder_time_penalty' : 0.005,
-                               'input_memory_comp' : 16,
+                               #'act_type' : 'separable_convolution',
+                               'encoder_act_type' : 'point_wise',
+                               'decoder_act_type' : 'point_wise',
+                               'act_dff' : 32,
+                               #'act_conv_filter' : 5,
+                               'encoder_time_penalty' : 0.00001,
+                               'decoder_time_penalty' : 0.0001,
+                               'input_memory_comp' : 5,
                                'target_memory_comp' : None
                                }
             os.makedirs(os.path.dirname(transformer_hparams_file), exist_ok=True)
@@ -184,12 +195,12 @@ predict     Predict sequence from raw fast5
             optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
             loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
             def loss_function(real, pred, target_lengths):
-                loss_ = loss_object(real, pred)
+                loss_ = loss_object(real, pred) # (batch_size, target_seq_len)
                 mask = tf.sequence_mask(target_lengths, target_max_len+2, dtype=loss_.dtype)
-                loss_ = (loss_ * mask) # / tf.cast(target_lengths, dtype=loss_.dtype)
-                nrm_loss = loss_ / tf.cast(target_lengths, dtype=loss_.dtype)
-                return (tf.nn.compute_average_loss(loss_, global_batch_size=args.minibatch_size),
-                        tf.nn.compute_average_loss(nrm_loss, global_batch_size=args.minibatch_size))
+                loss_ = (loss_ * mask) / tf.cast(target_lengths, loss_.dtype)
+                return tf.nn.compute_average_loss(loss_,
+                                sample_weight=target_lengths / tf.math.reduce_max(target_lengths),
+                                global_batch_size=args.minibatch_size)
             train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
             test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
             prediction_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='prediction_accuracy')
@@ -208,20 +219,20 @@ predict     Predict sequence from raw fast5
                 mask = tf.squeeze(tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32))
                 with tf.GradientTape() as tape:
                     predictions = transformer(input, training=True)
-                    loss, nrm_loss = loss_function(target, predictions, target_lengths)
+                    loss = loss_function(target, predictions, target_lengths)
                 gradients = tape.gradient([loss] + transformer.losses, transformer.trainable_variables)
                 optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
                 train_accuracy.update_state(target, predictions, mask)
-                return nrm_loss
+                return loss
 
             def test_step(inputs):
                 input, target = inputs
                 target_lengths = input[3]
                 mask = tf.squeeze(tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32))
                 predictions = transformer(input, training=False)
-                t_loss, nrm_loss = loss_function(target, predictions, target_lengths)
+                t_loss = loss_function(target, predictions, target_lengths)
                 test_accuracy.update_state(target, predictions, mask)
-                return nrm_loss
+                return t_loss
 
             # `experimental_run_v2` replicates the provided computation and runs it
             # with the distributed input.
@@ -245,7 +256,7 @@ predict     Predict sequence from raw fast5
                     tf.summary.experimental.set_step(optimizer.iterations)
                     batch_input = next(ds_train_dist_iter)
                     batch_loss = distributed_train_step(batch_input)
-                    if batch_loss < max(best_losses):
+                    if batch_loss <= max(best_losses):
                         ckpt_manager.save()
                         best_losses[best_losses.index(max(best_losses))] = batch_loss
                     if epoch == 0 and batch == 0:
