@@ -48,6 +48,10 @@ class sam():
     def __init__(self):
         pass
 
+    def __reverse_complement__(seq):
+        complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 'N' : 'N'}
+        return "".join(complement.get(base, base) for base in reversed(seq))
+
     def __parse_value__(value, type):
         if type in {'FLAG', 'POS', 'MAPQ', 'PNEXT', 'TLEN', 'i'}:
             return int(value)
@@ -98,7 +102,10 @@ class sam():
 
     def get_ref_sequence(sam_record):
         if 'MD' in sam_record and sam_record['SEQ'] != '*':
-            return sam.__decode_md__(sam_record['SEQ'], sam_record['CIGAR'], sam_record['MD'])
+            seq = sam.__decode_md__(sam_record['SEQ'], sam_record['CIGAR'], sam_record['MD'])
+            if sam_record['FLAG'] & 0x16:
+                seq = sam.__reverse_complement__(seq)
+            return seq
         else:
             return ''
 
