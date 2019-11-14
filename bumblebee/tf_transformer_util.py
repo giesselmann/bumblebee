@@ -40,7 +40,7 @@ from util import pore_model
 
 
 def decode_sequence(logits, alphabet='ACGT'):
-    return ''.join([alphabet[i] if i < len(alphabet) else '_' for i in logits])
+    return ''.join([alphabet[i] if i < len(alphabet) else '' for i in logits])
 
 
 

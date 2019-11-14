@@ -26,7 +26,7 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, sys, argparse, yaml, time
-import edlib, random
+import edlib, random, re
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
@@ -276,42 +276,144 @@ predict     Predict sequence from raw fast5
                         test_accuracy.reset_states()
                 print("Epoch {}: train loss: {}".format(epoch, train_loss))
 
-    def predict(self, argv):
+    def weights(self, argv):
         parser = argparse.ArgumentParser(description="BumbleBee basecaller prediction")
         parser.add_argument("config", help="BumbleBee config")
         parser.add_argument("checkpoint", help="Training checkpoint")
-        parser.add_argument("model", help="Pore model")
-        parser.add_argument("fast5", help="Raw signal fast5 file")
-        parser.add_argument("--max_signal_length", type=int, default=1200, help="Signal window size")
+        args = parser.parse_args(argv)
+        # Load config
+        with open(args.config, 'r') as fp:
+            transformer_hparams = yaml.safe_load(fp)
+        strategy = tf.distribute.MirroredStrategy(devices=['/cpu:0'])
+        with strategy.scope():
+            transformer = Transformer(hparams=transformer_hparams)
+            optimizer = tf.keras.optimizers.Adam(0.0)
+            checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=transformer)
+            ckpt_manager = tf.train.CheckpointManager(checkpoint, args.checkpoint, max_to_keep=5)
+            if ckpt_manager.latest_checkpoint:
+                checkpoint.restore(ckpt_manager.latest_checkpoint)
+                print('Latest checkpoint restored!!')
+            else:
+                print("Checkpoint not found!!")
+                exit()
+            input_data = tf.zeros((1, 100, 1), dtype=tf.float32)
+            target_data = tf.zeros((1, 10), dtype=tf.int32)
+            input_lengths = tf.ones((1,), dtype=tf.int32)
+            target_lengths = tf.ones((1,), dtype=tf.int32)
+            # init model on dummy data
+            _ = transformer((input_data, target_data, input_lengths, target_lengths))
+            transformer.save_weights(os.path.join(os.path.dirname(args.config), 'weights.h5'), save_format='h5')
+
+    def validate(self, argv):
+        parser = argparse.ArgumentParser(description="BumbleBee basecaller prediction")
+        parser.add_argument("config", help="BumbleBee config")
+        parser.add_argument("weights", help="BumbleBee weights")
+        parser.add_argument("records", help="Raw signal fast5 file")
+        parser.add_argument("--input_min_length", type=int, default=500, help="Signal window size")
+        parser.add_argument("--input_max_length", type=int, default=1200, help="Signal window size")
         parser.add_argument("--minibatch_size", type=int, default=16, help="Batch size")
         parser.add_argument("-t", "--threads", type=int, default=16, help="Threads")
         args = parser.parse_args(argv)
         tf.config.threading.set_inter_op_parallelism_threads(args.threads // 4)
         tf.config.threading.set_intra_op_parallelism_threads(args.threads)
-        # test sim_signal
-        batch_gen = BatchGeneratorSig(args.model, args.fast5, max_input_len=args.max_signal_length,
-                                        min_target_len=50, max_target_len=100,
-                                        batches_train=1, batches_val=0,
-                                        minibatch_size=args.minibatch_size)
-        batch_gen_train = batch_gen.next_train()
-        input_data, target_data, input_lengths, target_lengths = next(batch_gen_train)
-        # load and init with dummy data
+
+        # Constants
+        alphabet = "ACGT"
+        tf_alphabet = alphabet + '^$'
+
+        # Model
+        d_output = len(tf_alphabet)
+        input_min_len = args.input_min_length
+        input_max_len = args.input_max_length
+        target_max_len = input_max_len // 8
+
+        # Load config
         with open(args.config, 'r') as fp:
             transformer_hparams = yaml.safe_load(fp)
+
+        # tfRecord files
+        if os.path.isfile(args.records):
+            record_files = [args.records]
+        else:
+            record_files = [os.path.join(dirpath, f) for dirpath, _, files
+                            in os.walk(args.records) for f in files if f.endswith('.tfrec')]
+
+        def encode_sequence(sequence):
+            ids = {char:tf_alphabet.find(char) for char in tf_alphabet}
+            ret = [ids[char] if char in ids else ids[random.choice(alphabet)] for char in '^' + sequence.numpy().decode('utf-8') + '$']
+            return tf.cast(ret, tf.int32)
+
+        def tf_parse(eg):
+            example = tf.io.parse_example(
+                eg[tf.newaxis], {
+                    'sequence': tf.io.FixedLenFeature(shape=(), dtype=tf.string),
+                    'signal': tf.io.FixedLenFeature(shape=(), dtype=tf.string)})
+            seq = tf.py_function(encode_sequence, [example['sequence'][0]], tf.int32)
+            sig = tf.expand_dims(
+                    tf.cast(
+                        tf.io.parse_tensor(example['signal'][0], tf.float16),
+                        tf.float32),
+                    axis=-1)
+            seq_len = tf.cast(tf.expand_dims(tf.size(seq), axis=-1) - 1, tf.int32)
+            sig_len = tf.cast(tf.expand_dims(tf.size(sig), axis=-1), tf.int32)
+            return ((sig, seq[:-1], sig_len, seq_len), seq[1:])
+
+        def tf_filter(input, target):
+            #input, target = eg
+            return (input[2] >= tf.cast(input_min_len, tf.int32) and
+                    input[2] <= tf.cast(input_max_len, tf.int32) and
+                    input[3] <= tf.cast(target_max_len + 2, tf.int32))[0]
+
+        ds_val = tf.data.Dataset.from_tensor_slices(record_files)
+        ds_val = (ds_val.interleave(lambda x:
+                    tf.data.TFRecordDataset(filenames=x).map(tf_parse, num_parallel_calls=1), cycle_length=8, block_length=8))
+        ds_val = (ds_val
+                    .filter(tf_filter)
+                    .prefetch(args.minibatch_size * 64)
+                    .padded_batch(args.minibatch_size,
+                        padded_shapes=(([input_max_len, 1], [target_max_len+2,], [1,], [1,]), [target_max_len+2,]),
+                        drop_remainder=True)
+                    )
+
+        def decode_predictions(input, predictions):
+            ret = []
+            input_data, target_data, input_lengths, target_lengths = input
+            for target, target_length, prediction, prediction_length in zip(target_data, target_lengths, predictions, target_lengths):
+                logits = tf.argmax(prediction, axis=-1)
+                target_sequence = decode_sequence(target[1:target_length[0]])
+                predicted_sequence = decode_sequence(logits[:prediction_length[0]-1])
+                algn = edlib.align(predicted_sequence, target_sequence, mode='NW', task='path')
+                ref_iter = iter(target_sequence)
+                res_iter = iter(predicted_sequence)
+                cigar_ops = [(int(op[:-1]), op[-1]) for op in re.findall('(\d*\D)',algn['cigar'])]
+                ref_exp = ''.join([''.join([next(ref_iter) for _ in range(n)]) if op in 'M=XD' else '-' * n for n, op in cigar_ops ])
+                res_exp = ''.join([''.join([next(res_iter) for _ in range(n)]) if op in 'M=XI' else '-' * n for n, op in cigar_ops ])
+                match_exp = ''.join('|' * n if op in 'M=' else '.' * n if op in 'X' else ' ' * n for n, op in cigar_ops)
+                acc = match_exp.count('|') / len(match_exp) if len(match_exp) else 0.0
+                yield (acc, ref_exp, match_exp, res_exp)
+
         transformer = Transformer(hparams=transformer_hparams)
-        _ = transformer([input_data, target_data[:,:-1], input_lengths, target_lengths])
-        # load weights into initialized model
-        transformer.load_weights(args.checkpoint)
+        input, target = next(iter(ds_val))
+        input_data, target_data, input_lengths, target_lengths = input
+        _ = transformer(input)
+        transformer.load_weights(args.weights)
+        predictions = transformer(input)
+        acc, ref_exp, match_exp, res_exp = next(decode_predictions(input, predictions))
+        print('@seq {0:.2f}'.format(acc))
+        print(ref_exp)
+        print(match_exp)
+        print(res_exp)
 
+        #input, input_lengths, target_max = inputs
+        predictions, target_lengths = transformer((input_data, input_lengths, target_max_len+2))
+        with open("algn.txt", 'w') as fp:
+            for acc, ref_exp, match_exp, res_exp in decode_predictions(input, predictions):
+                print('@seq {0:.2f}'.format(acc), file=fp)
+                print(ref_exp, file=fp)
+                print(match_exp, file=fp)
+                print(res_exp, file=fp)
 
-        predictions = transformer([input_data, target_data[:,:-1], input_lengths, target_lengths], training=False)
-        for target, target_length, prediction, prediction_length in zip(target_data, target_lengths, predictions, target_lengths):
-            logits = tf.argmax(prediction, axis=-1)
-            print('@seq')
-            print(decode_sequence(target[:target_length[0]]))
-            print(decode_sequence(logits[:prediction_length[0]]))
-
-
+        exit(0)
 
 
 if __name__ == '__main__':

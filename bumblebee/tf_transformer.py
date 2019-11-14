@@ -86,6 +86,9 @@ def scaled_dot_product_attention(q, k, v, mask):
     Returns:
       output
     """
+    # q, k, v
+    # encoder : x, x, x
+    # decoder : dec, enc_output, enc_output
     matmul_qk = tf.matmul(q, k, transpose_b=True)  # (..., seq_len_q, seq_len_k)
     # scale matmul_qk
     dk = tf.cast(tf.shape(k)[-1], tf.float32)
@@ -243,6 +246,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
 
     def call(self, vkq, training, mask):
         v, k, q = vkq
+        # encoder : x, x, x
+        # decoder : enc_output, enc_output, dec
         seq_len_q = tf.shape(q)[1]
         # (batch_size, seq_len, d_model)
         q = self.wq(q)
@@ -751,7 +756,7 @@ class TransformerLayer(tf.keras.layers.Layer):
                 final_output = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)   # (batch_size, tar_seq_len)
                 target = tf.concat([target[:,:step+1],
                                     final_output[:,step:-1]], axis=-1)
-                target_active = tf.logical_and(target_active, tf.expand_dims(tf.less(final_output[:,step], self.d_output_t -2), -1))
+                target_active = tf.logical_and(target_active, tf.expand_dims(tf.not_equal(final_output[:,step], self.d_output_t - 1), -1))
                 target_lengths += tf.cast(target_active, target_lengths.dtype)
                 step += 1
                 return (step, target, predictions, target_lengths, target_active)
@@ -844,7 +849,7 @@ if __name__ == '__main__':
                                         int(d_model),
                                         max_timescale=max_timescale)
     # (1, max_iterations, seq_len, d_model)
-    diff = pos_encoding[0][0] - pos_encoding[0][1]
+    diff = pos_encoding[0][0] - pos_encoding[0][2]
     plt.pcolormesh(diff, cmap='RdBu')
     plt.xlabel('Depth')
     #plt.xlim((0, 512))
