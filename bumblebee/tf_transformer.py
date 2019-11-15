@@ -105,11 +105,13 @@ def scaled_dot_product_attention(q, k, v, mask):
 
 
 
-def point_wise_feed_forward_network(d_model, dff):
+def point_wise_feed_forward_network(d_model, dff, nff=1):
     return tf.keras.Sequential([
       # (batch_size, seq_len, dff)
       tf.keras.layers.Dense(dff,
             activation=tf.nn.leaky_relu),
+    ] * nff +
+    [
       # (batch_size, seq_len, d_model)
       tf.keras.layers.Dense(d_model,
             activation=None),
@@ -119,7 +121,7 @@ def point_wise_feed_forward_network(d_model, dff):
 
 
 
-def conv_feed_forward_network(d_model, dff, d_filter, pool_size=3, padding='same'):
+def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, padding='same'):
     return tf.keras.Sequential([
         # (batch_size, seq_len, dff)
         tf.keras.layers.Conv1D(dff, d_filter,
@@ -131,16 +133,19 @@ def conv_feed_forward_network(d_model, dff, d_filter, pool_size=3, padding='same
                 strides=1,
                 padding='same',
                 data_format='channels_last'),
+        ] * nff +
+        [
         # (batch_size, seq_len, d_model)
         tf.keras.layers.Dense(d_model,
                 activation=None),
         #tf.keras.layers.LayerNormalization(epsilon=1e-6)
-    ])
+        ]
+    )
 
 
 
 
-def separable_conv_feed_forward_network(d_model, dff, d_filter, pool_size=3, padding='same'):
+def separable_conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, padding='same'):
     return tf.keras.Sequential([
         # (batch_size, seq_len, dff)
         tf.keras.layers.SeparableConv1D(dff, d_filter,
@@ -152,6 +157,8 @@ def separable_conv_feed_forward_network(d_model, dff, d_filter, pool_size=3, pad
                 strides=1,
                 padding='same',
                 data_format='channels_last'),
+        ] * nff +
+        [
         # (batch_size, seq_len, d_model)
         tf.keras.layers.Dense(d_model,
                 activation=None),
@@ -221,13 +228,13 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self.wk = tf.keras.layers.Dense(self.d_model)
         self.wv = tf.keras.layers.Dense(self.d_model)
         if self.memory_comp:
-            self.k_comp = tf.keras.layers.Conv1D(self.d_model,
+            self.k_comp = tf.keras.layers.SeparableConv1D(self.d_model,
                                 kernel_size=self.memory_comp,
                                 strides=self.memory_comp,
                                 padding=self.memory_comp_pad,
                                 #activation=tf.nn.leaky_relu,
                                 data_format='channels_last')
-            self.v_comp = tf.keras.layers.Conv1D(self.d_model,
+            self.v_comp = tf.keras.layers.SeparableConv1D(self.d_model,
                                 kernel_size=self.memory_comp,
                                 strides=self.memory_comp,
                                 padding=self.memory_comp_pad,
@@ -244,25 +251,30 @@ class MultiHeadAttention(tf.keras.layers.Layer):
           x = tf.reshape(x, (-1, seq_len, self.num_heads, self.depth))
           return tf.transpose(x, perm=[0, 2, 1, 3])
 
-    def call(self, vkq, training, mask):
+    def call(self, vkq, training, mask, cache=None):
         v, k, q = vkq
         # encoder : x, x, x
         # decoder : enc_output, enc_output, dec
         seq_len_q = tf.shape(q)[1]
         # (batch_size, seq_len, d_model)
         q = self.wq(q)
-        k = self.wk(k)
-        v = self.wv(v)
-        if self.memory_comp:
-            k = self.k_comp(k)
-            v = self.v_comp(v)
-            if mask is not None:
-                mask = mask[...,::self.memory_comp]
-        seq_len_k = tf.shape(k)[1]
-        # (batch_size, num_heads, seq_len_q, depth)
         q = self.split_heads(q, seq_len_q)
-        k = self.split_heads(k, seq_len_k)
-        v = self.split_heads(v, seq_len_k)
+
+        if cache is None:
+            k = self.wk(k)
+            v = self.wv(v)
+            if self.memory_comp:
+                k = self.k_comp(k)
+                v = self.v_comp(v)
+            seq_len_k = tf.shape(k)[1]
+            k = self.split_heads(k, seq_len_k)
+            v = self.split_heads(v, seq_len_k)
+        else:
+            del v, k
+            v, k = cache
+
+        if mask is not None and self.memory_comp:
+            mask = mask[...,::self.memory_comp]
         # scaled_attention.shape == (batch_size, num_heads, seq_len_q, depth)
         # attention_weights.shape == (batch_size, num_heads, seq_len_q, seq_len_k)
         scaled_attention = scaled_dot_product_attention(q, k, v, mask=mask)
@@ -272,7 +284,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         concat_attention = tf.reshape(scaled_attention, (-1, seq_len_q, self.d_model))
         # (batch_size, seq_len_q, d_model)
         output = self.dense(concat_attention)
-        return output
+        return [output, {'cache':(v, k)}]
 
 
 
@@ -282,6 +294,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         super(EncoderLayer, self).__init__(**kwargs)
         self.d_model = hparams.get('d_model') or 256
         self.dff = hparams.get('dff') or 1024
+        self.nff = hparams.get('nff') or 1
         self.dff_type = hparams.get('encoder_dff_type') or hparams.get('dff_type') or 'point_wise'
         self.dff_filter = hparams.get('encoder_dff_filter_width') or hparams.get('dff_filter_width') or 8
         self.dff_pool_size = hparams.get('encoder_dff_pool_size') or hparams.get('dff_pool_size') or 3
@@ -302,13 +315,15 @@ class EncoderLayer(tf.keras.layers.Layer):
         assert len(input_shape) == 3
         self.mha = MultiHeadAttention(hparams=self.hparams)
         if self.dff_type == 'point_wise':
-            self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
+            self.ffn = point_wise_feed_forward_network(self.d_model, self.dff, nff=self.nff)
         elif self.dff_type == 'convolution':
             self.ffn = conv_feed_forward_network(self.d_model, self.dff, self.dff_filter,
-                                pool_size=self.dff_pool_size)
+                                pool_size=self.dff_pool_size,
+                                nff=self.nff)
         elif self.dff_type == 'separable_convolution':
             self.ffn = separable_conv_feed_forward_network(self.d_model, self.dff, self.dff_filter,
-                                pool_size=self.dff_pool_size)
+                                pool_size=self.dff_pool_size,
+                                nff=self.nff)
         else:
             raise NotImplementedError()
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -319,7 +334,7 @@ class EncoderLayer(tf.keras.layers.Layer):
 
     def call(self, input, training, mask):
         # attn_output == (batch_size, input_seq_len, d_model)
-        attn_output = self.mha([input, input, input], training=training, mask=mask)
+        attn_output, _ = self.mha([input, input, input], training=training, mask=mask)
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(input + attn_output)  # (batch_size, input_seq_len, d_model)
         ffn_output = self.ffn(out1)  # (batch_size, input_seq_len, d_model)
@@ -335,6 +350,7 @@ class DecoderLayer(tf.keras.layers.Layer):
         super(DecoderLayer, self).__init__(**kwargs)
         self.d_model = hparams.get('d_model') or 256
         self.dff = hparams.get('dff') or 1024
+        self.nff = hparams.get('nff') or 1
         self.dff_type = hparams.get('decoder_dff_type') or hparams.get('dff_type') or 'point_wise'
         self.dff_filter = hparams.get('decoder_dff_filter_width') or hparams.get('dff_filter_width') or 8
         self.dff_pool_size = hparams.get('decoder_dff_pool_size') or hparams.get('dff_pool_size') or 3
@@ -359,16 +375,18 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.hparams['memory_comp_pad'] = 'same'
         self.mha2 = MultiHeadAttention(hparams=self.hparams)
         if self.dff_type == 'point_wise':
-            self.ffn = point_wise_feed_forward_network(self.d_model, self.dff)
+            self.ffn = point_wise_feed_forward_network(self.d_model, self.dff, nff=self.nff)
         elif self.dff_type == 'convolution':
             self.ffn = conv_feed_forward_network(self.d_model, self.dff, self.dff_filter,
                         pool_size=self.dff_pool_size,
-                        padding='causal')
+                        padding='causal',
+                        nff=self.nff)
         elif self.dff_type == 'separable_convolution':
             self.ffn = separable_conv_feed_forward_network(self.d_model, self.dff,
                     self.dff_filter,
                     pool_size=self.dff_pool_size,
-                    padding='causal')
+                    padding='causal',
+                    nff=self.nff)
         else:
             raise NotImplementedError()
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -379,24 +397,24 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout3 = tf.keras.layers.Dropout(self.rate)
         return super(DecoderLayer, self).build(input_shape)
 
-    def call(self, inputs, training, mask):
+    def call(self, inputs, training, mask, cache=None):
         assert len(inputs) == 4
         x, enc_output, look_ahead_mask, padding_mask = inputs
         # enc_output.shape == (batch_size, input_seq_len, d_model)
         # attn_weights_block1 == (batch_size, target_seq_len, d_model)
-        attn1 = self.mha1([x, x, x],
+        attn1, _ = self.mha1([x, x, x],
                 training=training, mask=look_ahead_mask)
         attn1 = self.dropout1(attn1, training)
         out1 = self.layernorm1(attn1 + x)
         # attn_weights_block2 == (batch_size, target_seq_len, d_model)
-        attn2 = self.mha2([enc_output, enc_output, out1],
-                training=training, mask=padding_mask)
+        attn2, mha2_kwargs = self.mha2([enc_output, enc_output, out1],
+                training=training, mask=padding_mask, cache=cache)
         attn2 = self.dropout2(attn2, training)
         out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
         ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, d_model)
         ffn_output = self.dropout3(ffn_output, training)
         out3 = self.layernorm3(ffn_output + out2)  # (batch_size, target_seq_len, d_model)
-        return out3
+        return [out3, mha2_kwargs]
 
 
 
@@ -615,7 +633,7 @@ class Decoder(tf.keras.layers.Layer):
         self.look_ahead_mask = create_look_ahead_mask(sequence_length)
         return super(Decoder, self).build(input_shape)
 
-    def call(self, input, training, mask):
+    def call(self, input, training=False, mask=None, time_step=None):
         x, enc_output, input_padding_mask, target_padding_mask = input
         # look ahead and dropout masks
         look_ahead_mask = tf.maximum(target_padding_mask, self.look_ahead_mask)
@@ -631,22 +649,36 @@ class Decoder(tf.keras.layers.Layer):
         remainders = tf.zeros(update_shape, name="remainder")
         n_updates = tf.zeros(update_shape, name="n_updates")
         previous_state = tf.zeros_like(state, name="previous_state")
-        step = tf.cast(0, dtype=tf.int32)
+        depth_step = tf.cast(0, dtype=tf.int32)
+
+        # Initial depth_step to fill decoder cache
+        transformed_state = state + self.pos_encoding[:,depth_step,:,:]
+        transformed_state, dec_kwargs = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
+                    training=training, mask=mask, cache=None)
+        update_weights, halting_probability, remainders, n_updates = self.act_layer(
+            [transformed_state, halting_probability, remainders, n_updates],
+            training=training, mask=target_padding_mask)
+        transformed_state = ((transformed_state * update_weights) +
+                            state * (1 - update_weights))
+        transformed_state *= tf.expand_dims(tf.squeeze(1-target_padding_mask), axis=-1)
+        state = transformed_state
+        depth_step += 1
+
         # define update and halt-condition
-        def update_state(state, step, halting_probability, remainders, n_updates):
-            transformed_state = state + self.pos_encoding[:,step,:,:]
-            #if step == tf.cast(0, dtype=tf.int32):
+        def update_state(state, depth_step, halting_probability, remainders, n_updates):
+            transformed_state = state + self.pos_encoding[:,depth_step,:,:]
+            #if depth_step == tf.cast(0, dtype=tf.int32):
             #    transformed_state = self.dropout(transformed_state, training=training)
-            transformed_state = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
-                training=training, mask=mask)
+            transformed_state, _ = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
+                        training=training, mask=mask, **dec_kwargs)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
                 [transformed_state, halting_probability, remainders, n_updates],
                 training=training, mask=target_padding_mask)
             transformed_state = ((transformed_state * update_weights) +
                                 state * (1 - update_weights))
             transformed_state *= tf.expand_dims(tf.squeeze(1-target_padding_mask), axis=-1)
-            step += 1
-            return (transformed_state, step, halting_probability, remainders, n_updates)
+            depth_step += 1
+            return (transformed_state, depth_step, halting_probability, remainders, n_updates)
 
         # While loop stops when this predicate is FALSE.
         # Ie all (probability < 1-eps AND counter < N) are false.
@@ -657,14 +689,17 @@ class Decoder(tf.keras.layers.Layer):
                         tf.less(halting_probability, 1.0 - self.halt_epsilon),
                         tf.less(n_updates, self.max_iterations)))
 
-        # Do while loop iterations until predicate above is false.
-        (new_state, _, _, remainders, n_updates) = tf.while_loop(
-          should_continue, update_state,
-          (state, step, halting_probability, remainders, n_updates),
-          maximum_iterations=self.max_iterations,
-          parallel_iterations=4,
-          swap_memory=False,
-          back_prop=training)
+        if should_continue(state, depth_step, halting_probability, remainders, n_updates):
+            # Do while loop iterations until predicate above is false.
+            (new_state, _, _, remainders, n_updates) = tf.while_loop(
+              should_continue, update_state,
+              (state, depth_step, halting_probability, remainders, n_updates),
+              maximum_iterations=self.max_iterations - 1,
+              parallel_iterations=4,
+              swap_memory=False,
+              back_prop=training)
+        else:
+            new_state = state
         _act_loss = n_updates + remainders
         if target_padding_mask is not None:
             _msk = tf.squeeze(1-target_padding_mask)   # (batch_size, seq_len)
@@ -696,8 +731,11 @@ class TransformerLayer(tf.keras.layers.Layer):
         return config
 
     def compute_output_shape(self, input_shape):
-        assert isinstance(input_shape, list) and len(input_shape) == 4
-        return input_shape[1] # (batch_size, tar_seq_len, d_output)
+        assert isinstance(input_shape, list)
+        if len(input_shape) == 4:
+            return input_shape[1] # (batch_size, tar_seq_len, d_output)
+        elif len(input_shape) == 3:
+            return [(input_shape[2], self.d_output), input_shape[1]]
 
     def build(self, input_shape):
         self.encoder = Encoder(hparams=self.hparams)

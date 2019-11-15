@@ -26,6 +26,7 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, sys, argparse, yaml, time
+import timeit
 import edlib, random, re
 import numpy as np
 import tensorflow as tf
@@ -146,11 +147,12 @@ predict     Predict sequence from raw fast5
                 transformer_hparams = yaml.safe_load(fp)
         else:
             transformer_hparams = {'d_output' : d_output,
-                               'd_model' : 384,
+                               'd_model' : 128,
                                'cnn_kernel' : 16,
                                'cnn_pool_stride' : 3,
                                'cnn_pool_size' : 5,
-                               'dff' : 1536,
+                               'dff' : 512,
+                               'nff' : 4,
                                #'dff_type' : 'point_wise' or 'convolution' or 'separable_convolution'
                                'encoder_dff_type' : 'separable_convolution',
                                'decoder_dff_type' : 'point_wise',
@@ -208,7 +210,9 @@ predict     Predict sequence from raw fast5
             transformer = Transformer(hparams=transformer_hparams)
 
             checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=transformer)
-            ckpt_manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=5)
+            ckpt_manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir,
+                                    max_to_keep=5,
+                                    keep_checkpoint_every_n_hours=1)
             if ckpt_manager.latest_checkpoint:
                 checkpoint.restore(ckpt_manager.latest_checkpoint)
                 print('Latest checkpoint restored!!')
@@ -395,8 +399,9 @@ predict     Predict sequence from raw fast5
         transformer = Transformer(hparams=transformer_hparams)
         input, target = next(iter(ds_val))
         input_data, target_data, input_lengths, target_lengths = input
-        _ = transformer(input)
-        transformer.load_weights(args.weights)
+        predictions = transformer(input)
+        transformer.save_weights('weights_new.h5', save_format='h5')
+        transformer.load_weights(args.weights, by_name=True)
         predictions = transformer(input)
         acc, ref_exp, match_exp, res_exp = next(decode_predictions(input, predictions))
         print('@seq {0:.2f}'.format(acc))
@@ -405,7 +410,10 @@ predict     Predict sequence from raw fast5
         print(res_exp)
 
         #input, input_lengths, target_max = inputs
+        t0 = timeit.default_timer()
         predictions, target_lengths = transformer((input_data, input_lengths, target_max_len+2))
+        t1 = timeit.default_timer()
+        print("T {:.3f}".format(t1-t0))
         with open("algn.txt", 'w') as fp:
             for acc, ref_exp, match_exp, res_exp in decode_predictions(input, predictions):
                 print('@seq {0:.2f}'.format(acc), file=fp)
