@@ -147,11 +147,11 @@ predict     Predict sequence from raw fast5
                 transformer_hparams = yaml.safe_load(fp)
         else:
             transformer_hparams = {'d_output' : d_output,
-                               'd_model' : 128,
+                               'd_model' : 160,
                                'cnn_kernel' : 16,
                                'cnn_pool_stride' : 3,
                                'cnn_pool_size' : 5,
-                               'dff' : 512,
+                               'dff' : 640,
                                'nff' : 4,
                                #'dff_type' : 'point_wise' or 'convolution' or 'separable_convolution'
                                'encoder_dff_type' : 'separable_convolution',
@@ -161,7 +161,7 @@ predict     Predict sequence from raw fast5
                                'encoder_dff_pool_size' : 3,
                                #'decoder_dff_filter_width' : 32,
                                'num_heads' : 8,
-                               'encoder_max_iterations' : 10,
+                               'encoder_max_iterations' : 16,
                                'decoder_max_iterations' : 16,
                                'encoder_time_scale' : 10000,
                                'decoder_time_scale' : 3333,
@@ -172,7 +172,7 @@ predict     Predict sequence from raw fast5
                                'decoder_act_type' : 'point_wise',
                                'act_dff' : 32,
                                #'act_conv_filter' : 5,
-                               'encoder_time_penalty' : 0.00001,
+                               'encoder_time_penalty' : 0.0001,
                                'decoder_time_penalty' : 0.0001,
                                'input_memory_comp' : 5,
                                'target_memory_comp' : None
@@ -400,7 +400,6 @@ predict     Predict sequence from raw fast5
         input, target = next(iter(ds_val))
         input_data, target_data, input_lengths, target_lengths = input
         predictions = transformer(input)
-        transformer.save_weights('weights_new.h5', save_format='h5')
         transformer.load_weights(args.weights, by_name=True)
         predictions = transformer(input)
         acc, ref_exp, match_exp, res_exp = next(decode_predictions(input, predictions))
