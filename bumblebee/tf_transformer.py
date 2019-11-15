@@ -106,7 +106,8 @@ def scaled_dot_product_attention(q, k, v, mask):
 
 
 def point_wise_feed_forward_network(d_model, dff, nff=1):
-    return tf.keras.Sequential([
+    return tf.keras.Sequential(
+    [
       # (batch_size, seq_len, dff)
       tf.keras.layers.Dense(dff,
             activation=tf.nn.leaky_relu),
@@ -122,7 +123,8 @@ def point_wise_feed_forward_network(d_model, dff, nff=1):
 
 
 def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, padding='same'):
-    return tf.keras.Sequential([
+    return tf.keras.Sequential(
+        [
         # (batch_size, seq_len, dff)
         tf.keras.layers.Conv1D(dff, d_filter,
                 padding=padding,
@@ -146,7 +148,8 @@ def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, paddin
 
 
 def separable_conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, padding='same'):
-    return tf.keras.Sequential([
+    return tf.keras.Sequential(
+        [
         # (batch_size, seq_len, dff)
         tf.keras.layers.SeparableConv1D(dff, d_filter,
                 padding=padding,
@@ -259,7 +262,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         # (batch_size, seq_len, d_model)
         q = self.wq(q)
         q = self.split_heads(q, seq_len_q)
-
         if cache is None:
             k = self.wk(k)
             v = self.wv(v)
@@ -272,7 +274,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         else:
             del v, k
             v, k = cache
-
         if mask is not None and self.memory_comp:
             mask = mask[...,::self.memory_comp]
         # scaled_attention.shape == (batch_size, num_heads, seq_len_q, depth)
@@ -541,6 +542,7 @@ class Encoder(tf.keras.layers.Layer):
         n_updates = tf.zeros(update_shape, name="n_updates")
         previous_state = tf.zeros_like(state, name="previous_state")
         step = tf.cast(0, dtype=tf.int32)
+        
         # define update and halt-condition
         def update_state(state, step, halting_probability, remainders, n_updates):
             transformed_state = state + self.pos_encoding[:,step,:,:]
@@ -575,6 +577,8 @@ class Encoder(tf.keras.layers.Layer):
           swap_memory=False,
           back_prop=training)
         _act_loss = n_updates + remainders
+
+        # ponder loss
         if mask is not None:
             _msk = tf.squeeze(1-mask)   # (batch_size, seq_len)
             _lengths = tf.reduce_sum(_msk, axis=-1)
@@ -701,6 +705,8 @@ class Decoder(tf.keras.layers.Layer):
         else:
             new_state = state
         _act_loss = n_updates + remainders
+
+        # ponder loss
         if target_padding_mask is not None:
             _msk = tf.squeeze(1-target_padding_mask)   # (batch_size, seq_len)
             _lengths = tf.reduce_sum(_msk, axis=-1)
