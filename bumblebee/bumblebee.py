@@ -147,17 +147,17 @@ predict     Predict sequence from raw fast5
                 transformer_hparams = yaml.safe_load(fp)
         else:
             transformer_hparams = {'d_output' : d_output,
-                               'd_model' : 160,
+                               'd_model' : 256,
                                'cnn_kernel' : 16,
-                               'cnn_pool_stride' : 3,
                                'cnn_pool_size' : 5,
-                               'dff' : 640,
+                               'cnn_pool_stride' : 3,
+                               'dff' : 1024,
                                'nff' : 4,
                                #'dff_type' : 'point_wise' or 'convolution' or 'separable_convolution'
                                'encoder_dff_type' : 'separable_convolution',
                                'decoder_dff_type' : 'point_wise',
                                #'dff_filter_width' : 16,
-                               'encoder_dff_filter_width' : 48,
+                               'encoder_dff_filter_width' : 32,
                                'encoder_dff_pool_size' : 3,
                                #'decoder_dff_filter_width' : 32,
                                'num_heads' : 8,

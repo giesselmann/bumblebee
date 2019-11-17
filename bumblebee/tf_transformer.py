@@ -401,7 +401,7 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout3 = tf.keras.layers.Dropout(self.rate)
         return super(DecoderLayer, self).build(input_shape)
 
-    def call(self, inputs, training, mask, mha2_kwargs={}}):
+    def call(self, inputs, training, mask, mha2_kwargs={}):
         assert len(inputs) == 4
         x, enc_output, look_ahead_mask, padding_mask = inputs
         # enc_output.shape == (batch_size, input_seq_len, d_model)
@@ -660,7 +660,7 @@ class Decoder(tf.keras.layers.Layer):
 
         # Initial depth_step to fill decoder cache
         transformed_state = state + self.pos_encoding[:,depth_step,:,:]
-        transformed_state, dec_kwargs = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
+        transformed_state, mha2_kwargs = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
                     training=training, mask=mask)
         update_weights, halting_probability, remainders, n_updates = self.act_layer(
             [transformed_state, halting_probability, remainders, n_updates],
@@ -677,7 +677,7 @@ class Decoder(tf.keras.layers.Layer):
             #if depth_step == tf.cast(0, dtype=tf.int32):
             #    transformed_state = self.dropout(transformed_state, training=training)
             transformed_state, _ = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
-                        training=training, mask=mask, **dec_kwargs)
+                        training=training, mask=mask, mha2_kwargs=mha2_kwargs)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
                 [transformed_state, halting_probability, remainders, n_updates],
                 training=training, mask=target_padding_mask)
