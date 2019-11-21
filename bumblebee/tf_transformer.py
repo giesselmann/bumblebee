@@ -25,6 +25,7 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
+import timeit
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -71,7 +72,7 @@ def create_look_ahead_mask(size):
 
 
 
-def scaled_dot_product_attention(q, k, v, mask):
+def scaled_dot_product_attention(q, k, v, mask, step=None):
     """Calculate the attention weights.
     q, k, v must have matching leading dimensions.
     k, v must have matching penultimate dimension, i.e.: seq_len_k = seq_len_v.
@@ -89,13 +90,20 @@ def scaled_dot_product_attention(q, k, v, mask):
     # q, k, v
     # encoder : x, x, x
     # decoder : dec, enc_output, enc_output
-    matmul_qk = tf.matmul(q, k, transpose_b=True)  # (..., seq_len_q, seq_len_k)
+    if step is not None:
+        q_slice = tf.gather(q, [step], axis=-2)
+        matmul_qk = tf.matmul(q_slice, k, transpose_b=True)  # (..., 1, seq_len_k)
+    else:
+        matmul_qk = tf.matmul(q, k, transpose_b=True)  # (..., seq_len_q, seq_len_k)
     # scale matmul_qk
     dk = tf.cast(tf.shape(k)[-1], tf.float32)
     scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
     # add the mask to the scaled tensor.
-    if mask is not None:
+    if mask is not None and (step is None or tf.shape(mask)[-2] == 1):
         scaled_attention_logits += (mask * -1e9)
+    else:
+        mask_slice = tf.gather(mask, [step], axis=-2)
+        scaled_attention_logits += (mask_slice * -1e9)
     # softmax is normalized on the last axis (seq_len_k) so that the scores
     # add up to 1.
     attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)  # (..., seq_len_q, seq_len_k)
@@ -226,7 +234,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
 
     def build(self, input_shape):
         assert isinstance(input_shape, list) and len(input_shape) == 3
-        _, _, d_model = input_shape[-1]
+        _, _, d_model = input_shape[2]  # q.shape
         self.wq = tf.keras.layers.Dense(self.d_model)
         self.wk = tf.keras.layers.Dense(self.d_model)
         self.wv = tf.keras.layers.Dense(self.d_model)
@@ -254,15 +262,22 @@ class MultiHeadAttention(tf.keras.layers.Layer):
           x = tf.reshape(x, (-1, seq_len, self.num_heads, self.depth))
           return tf.transpose(x, perm=[0, 2, 1, 3])
 
-    def call(self, vkq, training, mask, vk_cache=None, qstep=None, ca_cache=None):
-        v, k, q = vkq
+    def call(self, input, training=False, mask=None):
+        if len(input) == 3:
+            v, k, q = input
+            step = None
+            vk_cache = None
+            ca_cache = None
+        else:
+            v, k, q, step, (vk_cache, ca_cache) = input
         # encoder : x, x, x
         # decoder : enc_output, enc_output, dec
         seq_len_q = tf.shape(q)[1]
         # (batch_size, seq_len, d_model)
         q = self.wq(q)
+        # (batch_size, seq_len, num_heads, depth)
         q = self.split_heads(q, seq_len_q)
-        if vk_cache is None:
+        if not tf.is_tensor(vk_cache):
             k = self.wk(k)
             v = self.wv(v)
             if self.memory_comp:
@@ -274,21 +289,32 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         else:
             del v, k
             v, k = vk_cache
+            seq_len_k = tf.shape(k)[1]
         if mask is not None and self.memory_comp:
             mask = mask[...,::self.memory_comp]
         # scaled_attention.shape == (batch_size, num_heads, seq_len_q, depth)
         # attention_weights.shape == (batch_size, num_heads, seq_len_q, seq_len_k)
-        scaled_attention = scaled_dot_product_attention(q, k, v, mask=mask)
-        # (batch_size, seq_len_q, num_heads, depth)
-        scaled_attention = tf.transpose(scaled_attention, perm=[0, 2, 1, 3])
-        # (batch_size, seq_len_q, d_model)
-        concat_attention = tf.reshape(scaled_attention, (-1, seq_len_q, self.d_model))
+        if not tf.is_tensor(step) or not tf.is_tensor(ca_cache):
+            scaled_attention = scaled_dot_product_attention(q, k, v, mask=mask)
+            # (batch_size, seq_len_q, num_heads, depth)
+            scaled_attention = tf.transpose(scaled_attention, perm=[0, 2, 1, 3])
+            # (batch_size, seq_len_q, d_model)
+            concat_attention = tf.reshape(scaled_attention, (-1, seq_len_q, self.d_model))
+        else:
+            scaled_attention_slice = scaled_dot_product_attention(q, k, v, mask=mask, step=step)
+            # (batch_size, seq_len_q, num_heads, depth)
+            scaled_attention_slice = tf.transpose(scaled_attention_slice, perm=[0, 2, 1, 3])
+            # (batch_size, seq_len_q, d_model)
+            concat_attention_slice = tf.reshape(scaled_attention_slice, (-1, 1, self.d_model))
+            #concat_attention = tf.concat([ca_cache[:,:step,:],
+            #                              concat_attention_slice,
+            #                              ca_cache[:,step+1:,:]], axis=-2)
+            concat_attention = tf.concat([tf.gather(ca_cache, tf.range(0,step), axis=-2),
+                                          concat_attention_slice,
+                                          tf.gather(ca_cache, tf.range(step+1,seq_len_q), axis=-2)], axis=-2)
         # (batch_size, seq_len_q, d_model)
         output = self.dense(concat_attention)
-        if qstep is None:
-            return [output, {'vk_cache':(v, k)}]
-        else:
-            return [output, {'vk_cache':(v, k), 'ca_cache':concat_attention}]
+        return [output, (vk_cache if vk_cache is not None else (v,k), concat_attention)]
 
 
 
@@ -336,9 +362,11 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(self.rate)
         return super(EncoderLayer, self).build(input_shape)
 
+    @tf.function
     def call(self, input, training, mask):
         # attn_output == (batch_size, input_seq_len, d_model)
-        attn_output, _ = self.mha([input, input, input], training=training, mask=mask)
+        attn_output, u0 = self.mha([input, input, input], training=training, mask=mask)
+        del u0
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(input + attn_output)  # (batch_size, input_seq_len, d_model)
         ffn_output = self.ffn(out1)  # (batch_size, input_seq_len, d_model)
@@ -379,7 +407,8 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.hparams['memory_comp_pad'] = 'same'
         self.mha2 = MultiHeadAttention(hparams=self.hparams)
         if self.dff_type == 'point_wise':
-            self.ffn = point_wise_feed_forward_network(self.d_model, self.dff, nff=self.nff)
+            self.ffn = point_wise_feed_forward_network(self.d_model, self.dff,
+                        nff=self.nff)
         elif self.dff_type == 'convolution':
             self.ffn = conv_feed_forward_network(self.d_model, self.dff, self.dff_filter,
                         pool_size=self.dff_pool_size,
@@ -387,10 +416,10 @@ class DecoderLayer(tf.keras.layers.Layer):
                         nff=self.nff)
         elif self.dff_type == 'separable_convolution':
             self.ffn = separable_conv_feed_forward_network(self.d_model, self.dff,
-                    self.dff_filter,
-                    pool_size=self.dff_pool_size,
-                    padding='causal',
-                    nff=self.nff)
+                        self.dff_filter,
+                        pool_size=self.dff_pool_size,
+                        padding='causal',
+                        nff=self.nff)
         else:
             raise NotImplementedError()
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -401,24 +430,38 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout3 = tf.keras.layers.Dropout(self.rate)
         return super(DecoderLayer, self).build(input_shape)
 
-    def call(self, inputs, training, mask, mha2_kwargs={}):
-        assert len(inputs) == 4
-        x, enc_output, look_ahead_mask, padding_mask = inputs
+    @tf.function
+    def call(self, inputs, training=False, mask=None):
+        assert len(inputs) == 4 or len(inputs) == 6
+        if len(inputs) == 4:
+            x, enc_output, look_ahead_mask, padding_mask = inputs
+            step = None
+            dec_cache = None
+        else:
+            x, enc_output, look_ahead_mask, padding_mask, step, dec_cache = inputs
         # enc_output.shape == (batch_size, input_seq_len, d_model)
         # attn_weights_block1 == (batch_size, target_seq_len, d_model)
-        attn1, _ = self.mha1([x, x, x],
-                training=training, mask=look_ahead_mask)
+        if not tf.is_tensor(dec_cache):
+            attn1, mha1_cache = self.mha1([x, x, x],
+                    training=training, mask=look_ahead_mask)
+        else:
+            attn1, mha1_cache = self.mha1([x, x, x, step, dec_cache[0]],
+                    training=training, mask=look_ahead_mask)
         attn1 = self.dropout1(attn1, training)
         out1 = self.layernorm1(attn1 + x)
         # attn_weights_block2 == (batch_size, target_seq_len, d_model)
-        attn2, mha2_kwargs = self.mha2([enc_output, enc_output, out1],
-                training=training, mask=padding_mask, **mha2_kwargs)
+        if not tf.is_tensor(dec_cache):
+            attn2, mha2_cache = self.mha2([enc_output, enc_output, out1],
+                    training=training, mask=padding_mask)
+        else:
+            attn2, mha2_cache = self.mha2([enc_output, enc_output, out1, step, dec_cache[1]],
+                    training=training, mask=padding_mask)
         attn2 = self.dropout2(attn2, training)
-        out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
-        ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, d_model)
+        out2 = self.layernorm2(attn2 + out1)            # (batch_size, target_seq_len, d_model)
+        ffn_output = self.ffn(out2)                     # (batch_size, target_seq_len, d_model)
         ffn_output = self.dropout3(ffn_output, training)
-        out3 = self.layernorm3(ffn_output + out2)  # (batch_size, target_seq_len, d_model)
-        return [out3, mha2_kwargs]
+        out3 = self.layernorm3(ffn_output + out2)       # (batch_size, target_seq_len, d_model)
+        return [out3, (mha1_cache, mha2_cache)]
 
 
 
@@ -533,6 +576,7 @@ class Encoder(tf.keras.layers.Layer):
         self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
         return super(Encoder, self).build(input_shape)
 
+    @tf.function
     def call(self, x, training, mask):
         state = x
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
@@ -640,8 +684,14 @@ class Decoder(tf.keras.layers.Layer):
         self.look_ahead_mask = create_look_ahead_mask(sequence_length)
         return super(Decoder, self).build(input_shape)
 
-    def call(self, input, training=False, mask=None, time_step=None):
-        x, enc_output, input_padding_mask, target_padding_mask = input
+    @tf.function
+    def call(self, input, training=False, mask=None):
+        if len(input) == 4:
+            x, enc_output, input_padding_mask, target_padding_mask = input
+            step = None
+            dec_cache = None
+        else:
+            x, enc_output, input_padding_mask, target_padding_mask, step, dec_cache = input
         # look ahead and dropout masks
         look_ahead_mask = tf.maximum(target_padding_mask, self.look_ahead_mask)
         seq_len = tf.shape(x)[1]
@@ -656,28 +706,33 @@ class Decoder(tf.keras.layers.Layer):
         remainders = tf.zeros(update_shape, name="remainder")
         n_updates = tf.zeros(update_shape, name="n_updates")
         previous_state = tf.zeros_like(state, name="previous_state")
-        depth_step = tf.cast(0, dtype=tf.int32)
+        depth_step = tf.cast(0, tf.int32)
 
         # Initial depth_step to fill decoder cache
-        transformed_state = state + self.pos_encoding[:,depth_step,:,:]
-        transformed_state, mha2_kwargs = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
-                    training=training, mask=mask)
-        update_weights, halting_probability, remainders, n_updates = self.act_layer(
-            [transformed_state, halting_probability, remainders, n_updates],
-            training=training, mask=target_padding_mask)
-        transformed_state = ((transformed_state * update_weights) +
-                            state * (1 - update_weights))
-        transformed_state *= tf.expand_dims(tf.squeeze(1-target_padding_mask), axis=-1)
-        state = transformed_state
-        depth_step += 1
+        if not tf.is_tensor(dec_cache):
+            transformed_state = state + tf.gather(self.pos_encoding, depth_step, axis=-3)
+            transformed_state, dec_cache = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
+                        training=training, mask=mask)
+            update_weights, halting_probability, remainders, n_updates = self.act_layer(
+                [transformed_state, halting_probability, remainders, n_updates],
+                training=training, mask=target_padding_mask)
+            transformed_state = ((transformed_state * update_weights) +
+                                state * (1 - update_weights))
+            transformed_state *= tf.expand_dims(tf.squeeze(1-target_padding_mask), axis=-1)
+            state = transformed_state
+            depth_step += 1
 
+        mha1_cache, mha2_cache = dec_cache
         # define update and halt-condition
-        def update_state(state, depth_step, halting_probability, remainders, n_updates):
-            transformed_state = state + self.pos_encoding[:,depth_step,:,:]
+        def update_state(state, depth_step, halting_probability, remainders, n_updates, mha1_cache):
+            #transformed_state = state + self.pos_encoding[:,depth_step,:,:]
+            transformed_state = state + tf.gather(self.pos_encoding, depth_step, axis=-3)
             #if depth_step == tf.cast(0, dtype=tf.int32):
             #    transformed_state = self.dropout(transformed_state, training=training)
-            transformed_state, _ = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
-                        training=training, mask=mask, mha2_kwargs=mha2_kwargs)
+            transformed_state, (mha1_cache, u0) = self.dec_layer(
+                        [transformed_state, enc_output, look_ahead_mask, input_padding_mask, step, (mha1_cache, mha2_cache)],
+                        training=training, mask=mask)
+            del u0
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
                 [transformed_state, halting_probability, remainders, n_updates],
                 training=training, mask=target_padding_mask)
@@ -685,23 +740,23 @@ class Decoder(tf.keras.layers.Layer):
                                 state * (1 - update_weights))
             transformed_state *= tf.expand_dims(tf.squeeze(1-target_padding_mask), axis=-1)
             depth_step += 1
-            return (transformed_state, depth_step, halting_probability, remainders, n_updates)
+            return (transformed_state, depth_step, halting_probability, remainders, n_updates, mha1_cache)
 
         # While loop stops when this predicate is FALSE.
         # Ie all (probability < 1-eps AND counter < N) are false.
-        def should_continue(u0, u1, halting_probability, u2, n_updates):
-            del u0, u1, u2
+        def should_continue(u0, u1, halting_probability, u2, n_updates, u3):
+            del u0, u1, u2, u3
             return tf.reduce_any(
                     tf.logical_and(
                         tf.less(halting_probability, 1.0 - self.halt_epsilon),
                         tf.less(n_updates, self.max_iterations)))
 
-        if should_continue(state, depth_step, halting_probability, remainders, n_updates):
+        if should_continue(state, depth_step, halting_probability, remainders, n_updates, mha1_cache):
             # Do while loop iterations until predicate above is false.
-            (new_state, _, _, remainders, n_updates) = tf.while_loop(
+            (new_state, _, _, remainders, n_updates, mha1_cache) = tf.while_loop(
               should_continue, update_state,
-              (state, depth_step, halting_probability, remainders, n_updates),
-              maximum_iterations=self.max_iterations - 1,
+              (state, depth_step, halting_probability, remainders, n_updates, mha1_cache),
+              maximum_iterations=self.max_iterations -1 if dec_cache is not None else self.max_iterations - 1,
               parallel_iterations=4,
               swap_memory=False,
               back_prop=training)
@@ -722,7 +777,7 @@ class Decoder(tf.keras.layers.Layer):
         tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates_mean))
         #tf.summary.scalar("ponder_loss_decoder", tf.reduce_mean(act_loss))
         # x.shape == (batch_size, seq_len, d_model)
-        return new_state
+        return new_state, (mha1_cache, mha2_cache)
 
 
 
@@ -776,11 +831,12 @@ class TransformerLayer(tf.keras.layers.Layer):
             #if training:
             #    target = self.__flip_target__(target)
             # dec_output.shape == (batch_size, tar_seq_len, d_model)
-            dec_output = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
+            dec_output, _ = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                     training=training, mask=None)
             final_output = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
             return final_output
         else:   # prediction
+            tf.print("===== ENCODER ======")
             input, input_lengths, target_max = inputs
             input_max = input.shape[1]
             target = tf.concat([tf.ones_like(input_lengths) * self.d_output_t - 2, # init with sos token
@@ -791,38 +847,57 @@ class TransformerLayer(tf.keras.layers.Layer):
             dec_input_padding_mask = create_padding_mask(input_lengths, input_max)
             enc_output = self.encoder(input, training=False, mask=enc_padding_mask)
             target_active = tf.ones(target_lengths.shape, dtype=tf.bool)
-            step = tf.cast(0, dtype=tf.int32)
-            predictions = tf.zeros_like(target)
+            step = tf.cast(0, tf.int32)
+
+            # run decoder once to init caches
+            dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
+            tf.print("===== DECODER INIT ======")
+            dec_output, dec_cache = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
+                    training=False, mask=None)
+            predictions = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
+            final_output = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)   # (batch_size, tar_seq_len)
+            target = tf.concat([target[:,:1],
+                                final_output[:,0:-1]], axis=-1, name='concat_init')
+            target_active = tf.logical_and(target_active, tf.expand_dims(tf.not_equal(final_output[:,0], self.d_output_t - 1), -1))
+            target_lengths += tf.cast(target_active, target_lengths.dtype)
+            step += 1
+            tf.print("===== DECODER LOOP ======")
             # update decoder target with new predictions
-            def update_state(step, target, u0, target_lengths, target_active):
+            @tf.function
+            def update_state(step, target, u0, target_lengths, target_active, dec_cache):
                 del u0
                 dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
-                dec_output = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
+                dec_output, dec_cache = self.decoder(
+                        [target, enc_output, dec_input_padding_mask, dec_target_padding_mask, step, dec_cache],
                         training=False, mask=None)
                 predictions = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
                 final_output = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)   # (batch_size, tar_seq_len)
-                target = tf.concat([target[:,:step+1],
-                                    final_output[:,step:-1]], axis=-1)
-                target_active = tf.logical_and(target_active, tf.expand_dims(tf.not_equal(final_output[:,step], self.d_output_t - 1), -1))
+                target_slice = tf.gather(target, tf.range(0, step+1), axis=-1)
+                final_output_slice = tf.gather(final_output, tf.range(step, tf.shape(final_output)[-1] - 1), axis=-1)
+                target = tf.concat([target_slice, final_output_slice], axis=-1)
+                target_active = tf.logical_and(target_active,
+                                               tf.expand_dims(
+                                                    tf.not_equal(
+                                                        tf.gather(final_output, step, axis=-1), self.d_output_t - 1), -1))
                 target_lengths += tf.cast(target_active, target_lengths.dtype)
                 step += 1
-                return (step, target, predictions, target_lengths, target_active)
+                return (step, target, predictions, target_lengths, target_active, dec_cache)
 
             # stop when all sequences yielded eos
-            def should_continue(u0, u1, u2, u3, target_active):
-                del u0, u1, u2, u3
+            @tf.function
+            def should_continue(u0, u1, u2, u3, target_active, u4):
+                del u0, u1, u2, u3, u4
                 return tf.reduce_any(target_active)
 
             # loop over decoder until all sequences stop with eos token or target_max reached
             # Do while loop iterations until predicate above is false.
-            (_, target, predictions, target_lengths, _) = tf.while_loop(
+            (_, target, predictions, target_lengths, _, _) = tf.while_loop(
               should_continue, update_state,
-              (step, target, predictions, target_lengths, target_active),
-              maximum_iterations=target_max-1,
+              (step, target, predictions, target_lengths, target_active, dec_cache),
+              maximum_iterations=target_max-3,  # TODO double check
               parallel_iterations=1,
               swap_memory=False,
               back_prop=False)
-            #target = tf.concat([target[:,:-1], tf.ones_like(input_lengths) * self.d_output_t - 1], axis=-1)
             return [predictions, target_lengths]
 
 

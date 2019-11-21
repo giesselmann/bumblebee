@@ -306,6 +306,7 @@ predict     Predict sequence from raw fast5
             target_lengths = tf.ones((1,), dtype=tf.int32)
             # init model on dummy data
             _ = transformer((input_data, target_data, input_lengths, target_lengths))
+            transformer.summary()
             transformer.save_weights(os.path.join(os.path.dirname(args.config), 'weights.h5'), save_format='h5')
 
     def validate(self, argv):
@@ -318,7 +319,7 @@ predict     Predict sequence from raw fast5
         parser.add_argument("--minibatch_size", type=int, default=16, help="Batch size")
         parser.add_argument("-t", "--threads", type=int, default=16, help="Threads")
         args = parser.parse_args(argv)
-        tf.config.threading.set_inter_op_parallelism_threads(args.threads // 4)
+        tf.config.threading.set_inter_op_parallelism_threads(args.threads)
         tf.config.threading.set_intra_op_parallelism_threads(args.threads)
 
         # Constants
@@ -329,7 +330,7 @@ predict     Predict sequence from raw fast5
         d_output = len(tf_alphabet)
         input_min_len = args.input_min_length
         input_max_len = args.input_max_length
-        target_max_len = input_max_len // 8
+        target_max_len = input_max_len // 6
 
         # Load config
         with open(args.config, 'r') as fp:
@@ -379,13 +380,14 @@ predict     Predict sequence from raw fast5
                         drop_remainder=True)
                     )
 
-        def decode_predictions(input, predictions):
+        def decode_predictions(input, predictions, predicted_lengths=None):
             ret = []
-            input_data, target_data, input_lengths, target_lengths = input
-            for target, target_length, prediction, prediction_length in zip(target_data, target_lengths, predictions, target_lengths):
+            input_data, target_data, input_lengths, _target_lengths = input
+            predicted_lengths = predicted_lengths if predicted_lengths is not None else _target_lengths
+            for target, target_length, prediction, predicted_length in zip(target_data, _target_lengths, predictions, predicted_lengths):
                 logits = tf.argmax(prediction, axis=-1)
                 target_sequence = decode_sequence(target[1:target_length[0]])
-                predicted_sequence = decode_sequence(logits[:prediction_length[0]-1])
+                predicted_sequence = decode_sequence(logits[:predicted_length[0]-1])
                 algn = edlib.align(predicted_sequence, target_sequence, mode='NW', task='path')
                 ref_iter = iter(target_sequence)
                 res_iter = iter(predicted_sequence)
@@ -396,25 +398,36 @@ predict     Predict sequence from raw fast5
                 acc = match_exp.count('|') / len(match_exp) if len(match_exp) else 0.0
                 yield (acc, ref_exp, match_exp, res_exp)
 
+        #@tf.function
+        def validate_batch(input):
+            predictions = transformer(input)
+            return predictions
+
+        #@tf.function
+        def predict_batch(input):
+            predictions, target_lengths = transformer(input)
+            return predictions, target_lengths
+
         transformer = Transformer(hparams=transformer_hparams)
         input, target = next(iter(ds_val))
         input_data, target_data, input_lengths, target_lengths = input
-        predictions = transformer(input)
-        transformer.load_weights(args.weights, by_name=True)
-        predictions = transformer(input)
-        acc, ref_exp, match_exp, res_exp = next(decode_predictions(input, predictions))
-        print('@seq {0:.2f}'.format(acc))
-        print(ref_exp)
-        print(match_exp)
-        print(res_exp)
+        predictions = validate_batch(input)
+        transformer.load_weights(args.weights)
+        predictions = validate_batch(input)
+        with open('algn_val.txt', 'w') as fp:
+            for acc, ref_exp, match_exp, res_exp in decode_predictions(input, predictions):
+                print('@seq {0:.2f}'.format(acc), file=fp)
+                print(ref_exp, file=fp)
+                print(match_exp, file=fp)
+                print(res_exp, file=fp)
 
         #input, input_lengths, target_max = inputs
         t0 = timeit.default_timer()
-        predictions, target_lengths = transformer((input_data, input_lengths, target_max_len+2))
+        predictions, target_lengths = predict_batch((input_data, input_lengths, target_max_len+2))
         t1 = timeit.default_timer()
         print("T {:.3f}".format(t1-t0))
-        with open("algn.txt", 'w') as fp:
-            for acc, ref_exp, match_exp, res_exp in decode_predictions(input, predictions):
+        with open("algn_test.txt", 'w') as fp:
+            for acc, ref_exp, match_exp, res_exp in decode_predictions(input, predictions, predicted_lengths=target_lengths):
                 print('@seq {0:.2f}'.format(acc), file=fp)
                 print(ref_exp, file=fp)
                 print(match_exp, file=fp)
