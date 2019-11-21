@@ -90,7 +90,7 @@ def scaled_dot_product_attention(q, k, v, mask, step=None):
     # q, k, v
     # encoder : x, x, x
     # decoder : dec, enc_output, enc_output
-    if step is not None:
+    if tf.is_tensor(step):
         q_slice = tf.gather(q, [step], axis=-2)
         matmul_qk = tf.matmul(q_slice, k, transpose_b=True)  # (..., 1, seq_len_k)
     else:
@@ -99,7 +99,7 @@ def scaled_dot_product_attention(q, k, v, mask, step=None):
     dk = tf.cast(tf.shape(k)[-1], tf.float32)
     scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
     # add the mask to the scaled tensor.
-    if mask is not None and (step is None or tf.shape(mask)[-2] == 1):
+    if tf.is_tensor(mask) and (not tf.is_tensor(step) or tf.shape(mask)[-2] == 1):
         scaled_attention_logits += (mask * -1e9)
     else:
         mask_slice = tf.gather(mask, [step], axis=-2)
@@ -362,7 +362,6 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(self.rate)
         return super(EncoderLayer, self).build(input_shape)
 
-    @tf.function
     def call(self, input, training, mask):
         # attn_output == (batch_size, input_seq_len, d_model)
         attn_output, u0 = self.mha([input, input, input], training=training, mask=mask)
@@ -430,7 +429,6 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.dropout3 = tf.keras.layers.Dropout(self.rate)
         return super(DecoderLayer, self).build(input_shape)
 
-    @tf.function
     def call(self, inputs, training=False, mask=None):
         assert len(inputs) == 4 or len(inputs) == 6
         if len(inputs) == 4:
@@ -571,8 +569,8 @@ class Encoder(tf.keras.layers.Layer):
                                                             max_timescale=self.max_timescale,
                                                             random_shift=self.random_shift)
         #self.dropout = tf.keras.layers.SpatialDropout1D(self.rate)
-        self.enc_layer = EncoderLayer(hparams=self.hparams)
-        self.act_layer = ACT(hparams=self.hparams)
+        self.enc_layer = EncoderLayer(hparams=self.hparams, name='enc_layer')
+        self.act_layer = ACT(hparams=self.hparams, name='enc_act_layer')
         self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
         return super(Encoder, self).build(input_shape)
 
@@ -678,8 +676,8 @@ class Decoder(tf.keras.layers.Layer):
                                                 random_shift=self.random_shift)
         self.emb_layer = tf.keras.layers.Embedding(self.d_output, self.d_model)
         #self.dropout = tf.keras.layers.SpatialDropout1D(self.rate)
-        self.dec_layer = DecoderLayer(hparams=self.hparams)
-        self.act_layer = ACT(hparams=self.hparams)
+        self.dec_layer = DecoderLayer(hparams=self.hparams, name='dec_layer')
+        self.act_layer = ACT(hparams=self.hparams, name='dec_act_layer')
         self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
         self.look_ahead_mask = create_look_ahead_mask(sequence_length)
         return super(Decoder, self).build(input_shape)
@@ -802,10 +800,10 @@ class TransformerLayer(tf.keras.layers.Layer):
             return [(input_shape[2], self.d_output), input_shape[1]]
 
     def build(self, input_shape):
-        self.encoder = Encoder(hparams=self.hparams)
-        self.decoder = Decoder(hparams=self.hparams)
+        self.encoder = Encoder(hparams=self.hparams, name='Encoder')
+        self.decoder = Decoder(hparams=self.hparams, name='Decoder')
         self.d_output_t = tf.cast(self.d_output, tf.int32)
-        self.final_layer = tf.keras.layers.Dense(self.d_output, activation=None)
+        self.final_layer = tf.keras.layers.Dense(self.d_output, activation=None, name='Dense')
         return super(TransformerLayer, self).build(input_shape)
 
     def __flip_target__(self, target):
@@ -871,6 +869,7 @@ class TransformerLayer(tf.keras.layers.Layer):
                         [target, enc_output, dec_input_padding_mask, dec_target_padding_mask, step, dec_cache],
                         training=False, mask=None)
                 predictions = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
+                predictions = tf.nn.softmax(predictions, axis=-1)
                 final_output = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)   # (batch_size, tar_seq_len)
                 target_slice = tf.gather(target, tf.range(0, step+1), axis=-1)
                 final_output_slice = tf.gather(final_output, tf.range(step, tf.shape(final_output)[-1] - 1), axis=-1)
@@ -879,6 +878,7 @@ class TransformerLayer(tf.keras.layers.Layer):
                                                tf.expand_dims(
                                                     tf.not_equal(
                                                         tf.gather(final_output, step, axis=-1), self.d_output_t - 1), -1))
+                tf.print("targets active: ", tf.reduce_sum(tf.cast(target_active, tf.int32)), final_output_slice[:,0])
                 target_lengths += tf.cast(target_active, target_lengths.dtype)
                 step += 1
                 return (step, target, predictions, target_lengths, target_active, dec_cache)
@@ -904,8 +904,8 @@ class TransformerLayer(tf.keras.layers.Layer):
 
 
 class SignalCNN(tf.keras.Model):
-    def __init__(self, hparams={}):
-        super(SignalCNN, self).__init__()
+    def __init__(self, hparams={}, **kwargs):
+        super(SignalCNN, self).__init__(**kwargs)
         self.d_model = hparams.get("d_model") or 128
         self.kernel_size = hparams.get("cnn_kernel") or 8
         self.pool_stride = hparams.get("cnn_pool_stride") or 1

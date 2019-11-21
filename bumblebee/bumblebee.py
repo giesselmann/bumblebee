@@ -200,8 +200,21 @@ predict     Predict sequence from raw fast5
                 loss_ = loss_object(real, pred) # (batch_size, target_seq_len)
                 mask = tf.sequence_mask(target_lengths, target_max_len+2, dtype=loss_.dtype)
                 loss_ = (loss_ * mask) / tf.cast(target_lengths, loss_.dtype)
+                ###
+                #l = tf.constant([4,7])
+                #b = tf.range(2)
+                #i = tf.stack([b, l], axis=-1)
+                #i = tf.expand_dims(i, axis=1)
+
+                #u = tf.constant([[9], [10]], tf.float32)
+
+                #a = tf.ones([2,14], tf.float32)
+                #a1 = tf.tensor_scatter_nd_update(a, i, u)
+
+                #tf.gather_nd(a1, i)
+                ###
                 return tf.nn.compute_average_loss(loss_,
-                                sample_weight=target_lengths / tf.math.reduce_max(target_lengths),
+                                #sample_weight=target_lengths / tf.math.reduce_max(target_lengths),
                                 global_batch_size=args.minibatch_size)
             train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
             test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
@@ -289,17 +302,20 @@ predict     Predict sequence from raw fast5
         with open(args.config, 'r') as fp:
             transformer_hparams = yaml.safe_load(fp)
         strategy = tf.distribute.MirroredStrategy(devices=['/cpu:0'])
+        tf.config.experimental_run_functions_eagerly(True)
         with strategy.scope():
             transformer = Transformer(hparams=transformer_hparams)
             optimizer = tf.keras.optimizers.Adam(0.0)
             checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=transformer)
             ckpt_manager = tf.train.CheckpointManager(checkpoint, args.checkpoint, max_to_keep=5)
+
             if ckpt_manager.latest_checkpoint:
                 checkpoint.restore(ckpt_manager.latest_checkpoint)
                 print('Latest checkpoint restored!!')
             else:
                 print("Checkpoint not found!!")
                 exit()
+
             input_data = tf.zeros((1, 100, 1), dtype=tf.float32)
             target_data = tf.zeros((1, 10), dtype=tf.int32)
             input_lengths = tf.ones((1,), dtype=tf.int32)
