@@ -574,7 +574,7 @@ class Encoder(tf.keras.layers.Layer):
         self.time_penalty_t = tf.cast(self.time_penalty, tf.float32)
         return super(Encoder, self).build(input_shape)
 
-    @tf.function
+    #@tf.function
     def call(self, x, training, mask):
         state = x
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
@@ -682,7 +682,7 @@ class Decoder(tf.keras.layers.Layer):
         self.look_ahead_mask = create_look_ahead_mask(sequence_length)
         return super(Decoder, self).build(input_shape)
 
-    @tf.function
+    #@tf.function
     def call(self, input, training=False, mask=None):
         if len(input) == 4:
             x, enc_output, input_padding_mask, target_padding_mask = input
@@ -800,8 +800,8 @@ class TransformerLayer(tf.keras.layers.Layer):
             return [(input_shape[2], self.d_output), input_shape[1]]
 
     def build(self, input_shape):
-        self.encoder = Encoder(hparams=self.hparams, name='Encoder')
-        self.decoder = Decoder(hparams=self.hparams, name='Decoder')
+        self.encoder = Encoder(hparams=self.hparams)
+        self.decoder = Decoder(hparams=self.hparams)
         self.d_output_t = tf.cast(self.d_output, tf.int32)
         self.final_layer = tf.keras.layers.Dense(self.d_output, activation=None, name='Dense')
         return super(TransformerLayer, self).build(input_shape)
@@ -826,8 +826,8 @@ class TransformerLayer(tf.keras.layers.Layer):
             # enc_output.shape == # (batch_size, inp_seq_len, d_model)
             enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
             # flip random bases in target sequence with dropout rate
-            #if training:
-            #    target = self.__flip_target__(target)
+            if training:
+                target = self.__flip_target__(target)
             # dec_output.shape == (batch_size, tar_seq_len, d_model)
             dec_output, _ = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                     training=training, mask=None)
@@ -910,15 +910,15 @@ class SignalCNN(tf.keras.Model):
         self.kernel_size = hparams.get("cnn_kernel") or 8
         self.pool_stride = hparams.get("cnn_pool_stride") or 1
         self.pool_size = hparams.get("cnn_pool_size") or 3
-        self.cnn1 = tf.keras.layers.Convolution1D(self.d_model, self.kernel_size,
+        self.cnn1 = tf.keras.layers.SeparableConv1D(self.d_model, self.kernel_size,
             strides=1,
             padding='same',
-            activation=tf.nn.leaky_relu,
+            activation=tf.nn.relu,
             data_format='channels_last')
-        self.cnn2 = tf.keras.layers.Convolution1D(self.d_model, self.kernel_size,
+        self.cnn2 = tf.keras.layers.SeparableConv1D(self.d_model, self.kernel_size,
             strides=1,
             padding='same',
-            activation=tf.nn.leaky_relu,
+            activation=tf.nn.relu,
             data_format='channels_last')
         self.pool = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
             strides=self.pool_stride,
