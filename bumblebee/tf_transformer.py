@@ -72,7 +72,7 @@ def create_look_ahead_mask(size):
 
 
 
-def scaled_dot_product_attention(q, k, v, mask, step=None):
+def scaled_dot_product_attention(q, k, v, mask=None):
     """Calculate the attention weights.
     q, k, v must have matching leading dimensions.
     k, v must have matching penultimate dimension, i.e.: seq_len_k = seq_len_v.
@@ -90,20 +90,13 @@ def scaled_dot_product_attention(q, k, v, mask, step=None):
     # q, k, v
     # encoder : x, x, x
     # decoder : dec, enc_output, enc_output
-    if tf.is_tensor(step):
-        q_slice = tf.gather(q, [step], axis=-2)
-        matmul_qk = tf.matmul(q_slice, k, transpose_b=True)  # (..., 1, seq_len_k)
-    else:
-        matmul_qk = tf.matmul(q, k, transpose_b=True)  # (..., seq_len_q, seq_len_k)
+    matmul_qk = tf.matmul(q, k, transpose_b=True)  # (..., seq_len_q, seq_len_k)
     # scale matmul_qk
     dk = tf.cast(tf.shape(k)[-1], tf.float32)
     scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
     # add the mask to the scaled tensor.
-    if tf.is_tensor(mask) and (not tf.is_tensor(step) or tf.shape(mask)[-2] == 1):
+    if mask is not None:
         scaled_attention_logits += (mask * -1e9)
-    else:
-        mask_slice = tf.gather(mask, [step], axis=-2)
-        scaled_attention_logits += (mask_slice * -1e9)
     # softmax is normalized on the last axis (seq_len_k) so that the scores
     # add up to 1.
     attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)  # (..., seq_len_q, seq_len_k)
@@ -229,11 +222,13 @@ class MultiHeadAttention(tf.keras.layers.Layer):
 
     def compute_output_shape(self, input_shape):
         # input is list of v, k, q
-        assert isinstance(input_shape, list) and len(input_shape) == 3
-        return input_shape[-1]
+        assert isinstance(input_shape, list) and (len(input_shape) == 3 or len(input_shape) == 5)
+        return input_shape[2]
 
     def build(self, input_shape):
-        assert isinstance(input_shape, list) and len(input_shape) == 3
+        # v, k, q or
+        # v, k, q, step, caches
+        assert isinstance(input_shape, list) and (len(input_shape) == 3 or len(input_shape) == 5)
         _, _, d_model = input_shape[2]  # q.shape
         self.wq = tf.keras.layers.Dense(self.d_model)
         self.wk = tf.keras.layers.Dense(self.d_model)
@@ -301,7 +296,10 @@ class MultiHeadAttention(tf.keras.layers.Layer):
             # (batch_size, seq_len_q, d_model)
             concat_attention = tf.reshape(scaled_attention, (-1, seq_len_q, self.d_model))
         else:
-            scaled_attention_slice = scaled_dot_product_attention(q, k, v, mask=mask, step=step)
+            q_slice = tf.gather(q, [step], axis=-2)
+            if mask is not None and mask.shape[-2] != 1:
+                mask = tf.gather(mask, [step], axis=-2)
+            scaled_attention_slice = scaled_dot_product_attention(q_slice, k, v, mask=mask)
             # (batch_size, seq_len_q, num_heads, depth)
             scaled_attention_slice = tf.transpose(scaled_attention_slice, perm=[0, 2, 1, 3])
             # (batch_size, seq_len_q, d_model)
@@ -807,12 +805,13 @@ class TransformerLayer(tf.keras.layers.Layer):
         return super(TransformerLayer, self).build(input_shape)
 
     def __flip_target__(self, target):
+        # target.shape (batch_size, target_seq_len)
         flp_mask = tf.random.uniform(target.shape, 0.0, 1.0, dtype=tf.float32)
         flp_mask = tf.cast(tf.less_equal(flp_mask, self.rate), tf.int32)
         flp_mask = tf.concat([tf.zeros((target.shape[0], 1), dtype=tf.int32), flp_mask[:,1:]],axis=1)  # do not flip SOS character
         flp_val = tf.random.uniform(target.shape, tf.cast(0, tf.int32), self.d_output_t - 2, dtype=tf.int32)
         flp_val *= flp_mask
-        target = (target + flp_val) % self.d_output_t
+        target = (target + flp_val) % (self.d_output_t - 2)
         return target
 
     def call(self, inputs, training=True, mask=None):

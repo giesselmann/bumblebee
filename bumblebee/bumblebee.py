@@ -172,8 +172,8 @@ predict     Predict sequence from raw fast5
                                'decoder_act_type' : 'point_wise',
                                'act_dff' : 32,
                                #'act_conv_filter' : 5,
-                               'encoder_time_penalty' : 0.0005,
-                               'decoder_time_penalty' : 0.0005,
+                               'encoder_time_penalty' : 0.00001,
+                               'decoder_time_penalty' : 0.00001,
                                'input_memory_comp' : 5,
                                'target_memory_comp' : None
                                }
@@ -209,8 +209,9 @@ predict     Predict sequence from raw fast5
                                              axis=-1),
                                              axis=0)
                 eos_mask = tf.gather_nd(mask, target_length_idx)
-                eos_mask *= tf.cast(target_lengths, eos_mask.dtype)
-                eos_mask /= tf.constant(len(alphabet), eos_mask.dtype)  # eos value: read_length / alphabet_size
+                #eos_mask *= tf.cast(target_lengths, eos_mask.dtype)
+                eos_mask *= tf.cast(len(alphabet), eos_mask.dtype)
+                #eos_mask /= tf.constant(len(alphabet), eos_mask.dtype)  # eos value: read_length / alphabet_size
                 mask = tf.tensor_scatter_nd_update(mask, target_length_idx, eos_mask)
                 loss_ = loss_object(real, pred, sample_weight=mask) # (batch_size, target_seq_len)
                 # EOS token accuracy
