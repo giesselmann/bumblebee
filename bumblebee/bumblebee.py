@@ -115,7 +115,7 @@ predict     Predict sequence from raw fast5
             #input, target = eg
             return (input[2] <= tf.cast(input_max_len, tf.int32) and
                     input[2] >= tf.cast(target_min_len, tf.int32) and
-                    input[3] <= tf.cast(target_max_len + 2, tf.int32) and
+                    input[3] <= tf.cast(target_max_len, tf.int32) and
                     input[3] >= tf.cast(target_min_len + 2, tf.int32))[0]
 
         ds_train = tf.data.Dataset.from_tensor_slices(train_files)
@@ -126,7 +126,7 @@ predict     Predict sequence from raw fast5
                     .prefetch(args.minibatch_size * 64)
                     .shuffle(args.minibatch_size * 1024)
                     .padded_batch(args.minibatch_size,
-                        padded_shapes=(([input_max_len, 1], [target_max_len+2,], [1,], [1,]), [target_max_len+2,]),
+                        padded_shapes=(([input_max_len, 1], [target_max_len,], [1,], [1,]), [target_max_len,]),
                         drop_remainder=True)
                     .repeat())
 
@@ -137,7 +137,7 @@ predict     Predict sequence from raw fast5
                     .filter(tf_filter)
                     .prefetch(args.minibatch_size * 32)
                     .padded_batch(args.minibatch_size,
-                        padded_shapes=(([input_max_len, 1], [target_max_len+2,], [1,], [1,]), [target_max_len+2,]),
+                        padded_shapes=(([input_max_len, 1], [target_max_len,], [1,], [1,]), [target_max_len,]),
                         drop_remainder=True)
                     .repeat())
 
@@ -160,9 +160,9 @@ predict     Predict sequence from raw fast5
                                'encoder_dff_filter_width' : 32,
                                'encoder_dff_pool_size' : 3,
                                #'decoder_dff_filter_width' : 32,
-                               'num_heads' : 4,
-                               'encoder_max_iterations' : 14,
-                               'decoder_max_iterations' : 14,
+                               'num_heads' : 6,
+                               'encoder_max_iterations' : 16,
+                               'decoder_max_iterations' : 16,
                                'encoder_time_scale' : 10000,
                                'decoder_time_scale' : 3333,
                                'random_shift' : False,
@@ -172,8 +172,8 @@ predict     Predict sequence from raw fast5
                                'decoder_act_type' : 'point_wise',
                                'act_dff' : 32,
                                #'act_conv_filter' : 5,
-                               'encoder_time_penalty' : 0.0001,
-                               'decoder_time_penalty' : 0.0001,
+                               'encoder_time_penalty' : 0.0005,
+                               'decoder_time_penalty' : 0.0005,
                                'input_memory_comp' : 5,
                                'target_memory_comp' : None
                                }
@@ -196,24 +196,32 @@ predict     Predict sequence from raw fast5
             learning_rate = TransformerLRS(transformer_hparams.get('dff'), warmup_steps=8000)
             optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
             loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
+
             def loss_function(real, pred, target_lengths):
-                loss_ = loss_object(real, pred) # (batch_size, target_seq_len)
-                mask = tf.sequence_mask(target_lengths, target_max_len+2, dtype=loss_.dtype)
-                loss_ = (loss_ * mask) / tf.cast(target_lengths, loss_.dtype)
+                # read length weighted loss with scaling on EOS token
+                target_lengths = tf.squeeze(target_lengths)
+                mask = tf.sequence_mask(target_lengths, target_max_len, dtype=tf.float32)
+                mask = mask * tf.reduce_sum(mask, axis=-1, keepdims=True) / tf.cast(tf.shape(mask)[-1], tf.float32)
+                mask /= tf.cast(tf.shape(mask)[0], tf.float32)
                 target_length_idx = tf.expand_dims(tf.stack(
-                                            [tf.squeeze(target_lengths - 1),
-                                             tf.range(tf.size(target_lengths))],
+                                            [tf.range(tf.size(target_lengths)),
+                                            target_lengths - 1],
                                              axis=-1),
                                              axis=0)
-                eos_loss = tf.gather_nd(loss_, target_length_idx)
-                eos_loss *= (tf.cast(target_lengths, eos_loss.dtype) / tf.constant(len(alphabet), eos_loss.dtype))
-                loss_ = tf.tensor_scatter_nd_update(loss_, target_length_idx, eos_loss)
-                eos_lbl = tf.equal(tf.math.argmax(pred), tf.constant(len(tf_alphabet) - 1, dtype=tf.int64))
-                eos_acc = tf.reduce_mean(tf.cast(eos_lbl, tf.float32))
+                eos_mask = tf.gather_nd(mask, target_length_idx)
+                eos_mask *= tf.cast(target_lengths, eos_mask.dtype)
+                eos_mask /= tf.constant(len(alphabet), eos_mask.dtype)  # eos value: read_length / alphabet_size
+                mask = tf.tensor_scatter_nd_update(mask, target_length_idx, eos_mask)
+                loss_ = loss_object(real, pred, sample_weight=mask) # (batch_size, target_seq_len)
+                # EOS token accuracy
+                pred_lbl = tf.argmax(tf.nn.softmax(pred, axis=-1), axis=-1)
+                eos_lbl = tf.gather_nd(pred_lbl, target_length_idx)
+                eos_acc = tf.equal(eos_lbl, tf.constant(d_output - 1, dtype=tf.int64))
+                eos_acc = tf.reduce_mean(tf.cast(eos_acc, tf.float32))
+                return (tf.nn.compute_average_loss(loss_,
+                                global_batch_size=args.minibatch_size),
+                        eos_acc)
 
-                return tf.nn.compute_average_loss(loss_,
-                                #sample_weight=target_lengths / tf.math.reduce_max(target_lengths),
-                                global_batch_size=args.minibatch_size), eos_acc
             train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
             test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
             eos_accuracy = tf.keras.metrics.Mean(name='eos_accuracy')
@@ -231,7 +239,7 @@ predict     Predict sequence from raw fast5
             def train_step(inputs):
                 input, target = inputs
                 target_lengths = input[3]
-                mask = tf.squeeze(tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32))
+                mask = tf.squeeze(tf.sequence_mask(target_lengths, target_max_len, dtype=tf.float32))
                 with tf.GradientTape() as tape:
                     predictions = transformer(input, training=True)
                     loss, eos_acc = loss_function(target, predictions, target_lengths)
@@ -244,7 +252,7 @@ predict     Predict sequence from raw fast5
             def test_step(inputs):
                 input, target = inputs
                 target_lengths = input[3]
-                mask = tf.squeeze(tf.sequence_mask(target_lengths, target_max_len+2, dtype=tf.float32))
+                mask = tf.squeeze(tf.sequence_mask(target_lengths, target_max_len, dtype=tf.float32))
                 predictions = transformer(input, training=False)
                 t_loss, _ = loss_function(target, predictions, target_lengths)
                 test_accuracy.update_state(target, predictions, mask)
