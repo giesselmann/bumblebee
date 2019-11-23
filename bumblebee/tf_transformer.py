@@ -111,7 +111,7 @@ def point_wise_feed_forward_network(d_model, dff, nff=1):
     [
       # (batch_size, seq_len, dff)
       tf.keras.layers.Dense(dff,
-            activation=tf.nn.leaky_relu),
+            activation=tf.nn.relu),
     ] * nff +
     [
       # (batch_size, seq_len, d_model)
@@ -130,7 +130,7 @@ def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, paddin
         tf.keras.layers.Conv1D(dff, d_filter,
                 padding=padding,
                 data_format='channels_last',
-                activation=tf.nn.leaky_relu
+                activation=tf.nn.relu
                 ),
         tf.keras.layers.MaxPool1D(pool_size=pool_size,
                 strides=1,
@@ -138,6 +138,7 @@ def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, paddin
                 data_format='channels_last'),
         ] * nff +
         [
+        #tf.keras.layers.LayerNormalization(epsilon=1e-6),
         # (batch_size, seq_len, d_model)
         tf.keras.layers.Dense(d_model,
                 activation=None),
@@ -155,7 +156,7 @@ def separable_conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size
         tf.keras.layers.SeparableConv1D(dff, d_filter,
                 padding=padding,
                 data_format='channels_last',
-                activation=tf.nn.leaky_relu
+                activation=tf.nn.relu
                 ),
         tf.keras.layers.MaxPool1D(pool_size=pool_size,
                 strides=1,
@@ -163,6 +164,7 @@ def separable_conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size
                 data_format='channels_last'),
         ] * nff +
         [
+        #tf.keras.layers.LayerNormalization(epsilon=1e-6),
         # (batch_size, seq_len, d_model)
         tf.keras.layers.Dense(d_model,
                 activation=None),
@@ -825,8 +827,8 @@ class TransformerLayer(tf.keras.layers.Layer):
             # enc_output.shape == # (batch_size, inp_seq_len, d_model)
             enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
             # flip random bases in target sequence with dropout rate
-            if training:
-                target = self.__flip_target__(target)
+            #if training:
+            #    target = self.__flip_target__(target)
             # dec_output.shape == (batch_size, tar_seq_len, d_model)
             dec_output, _ = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                     training=training, mask=None)
