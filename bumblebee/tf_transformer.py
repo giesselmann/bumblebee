@@ -51,7 +51,7 @@ def positional_encoding(seq_len, depth, d_model,
     # apply cos to odd indices in the array; 2i+1
     rads[:, 1::2, :] = np.cos(pos_rads[:, 1::2, :]) + np.cos(depth_rads[:, :, :])
     pos_encoding = rads[np.newaxis, ...]
-    return tf.cast(pos_encoding, dtype=tf.float32) # (1, depth, seq_len, d_model)
+    return tf.constant(tf.cast(pos_encoding, dtype=tf.float32)) # (1, depth, seq_len, d_model)
 
 
 
@@ -108,100 +108,106 @@ def scaled_dot_product_attention(q, k, v, mask=None):
 
 def point_wise_feed_forward_network(d_model, dff, nff=1):
     return tf.keras.Sequential(
-    [
-      # (batch_size, seq_len, dff)
-      tf.keras.layers.Dense(dff,
-            activation=tf.nn.relu),
-    ] * nff +
-    [
-      # (batch_size, seq_len, d_model)
-      tf.keras.layers.Dense(d_model,
-            activation=None),
-      #tf.keras.layers.LayerNormalization(epsilon=1e-6)
-    ])
+            [
+              # (batch_size, seq_len, dff)
+              tf.keras.layers.Dense(dff,
+                    activation=tf.nn.relu),
+            ] * nff +
+            [
+              # (batch_size, seq_len, d_model)
+              tf.keras.layers.Dense(d_model,
+                    activation=None),
+              #tf.keras.layers.LayerNormalization(epsilon=1e-6)
+            ]
+        )
 
 
 
 
 def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, padding='same'):
     return tf.keras.Sequential(
-        [
-        # (batch_size, seq_len, dff)
-        tf.keras.layers.Conv1D(dff, d_filter,
-                padding=padding,
-                data_format='channels_last',
-                activation=tf.nn.relu
-                ),
-        tf.keras.layers.MaxPool1D(pool_size=pool_size,
-                strides=1,
-                padding='same',
-                data_format='channels_last'),
-        ] * nff +
-        [
-        #tf.keras.layers.LayerNormalization(epsilon=1e-6),
-        # (batch_size, seq_len, d_model)
-        tf.keras.layers.Dense(d_model,
-                activation=None),
-        #tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        ]
-    )
+            [
+            # (batch_size, seq_len, dff)
+            tf.keras.layers.Conv1D(dff, d_filter,
+                    padding=padding,
+                    data_format='channels_last',
+                    activation=tf.nn.relu
+                    ),
+            tf.keras.layers.MaxPool1D(pool_size=pool_size,
+                    strides=1,
+                    padding='same',
+                    data_format='channels_last'),
+            ] * nff +
+            [
+            #tf.keras.layers.LayerNormalization(epsilon=1e-6),
+            # (batch_size, seq_len, d_model)
+            tf.keras.layers.Dense(d_model,
+                    activation=None),
+            #tf.keras.layers.LayerNormalization(epsilon=1e-6)
+            ]
+        )
 
 
 
 
 def separable_conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, padding='same'):
     return tf.keras.Sequential(
-        [
-        # (batch_size, seq_len, dff)
-        tf.keras.layers.SeparableConv1D(dff, d_filter,
-                padding=padding,
-                data_format='channels_last',
-                activation=tf.nn.relu
-                ),
-        tf.keras.layers.MaxPool1D(pool_size=pool_size,
-                strides=1,
-                padding='same',
-                data_format='channels_last'),
-        ] * nff +
-        [
-        #tf.keras.layers.LayerNormalization(epsilon=1e-6),
-        # (batch_size, seq_len, d_model)
-        tf.keras.layers.Dense(d_model,
-                activation=None),
-        #tf.keras.layers.LayerNormalization(epsilon=1e-6)
-    ])
+            [
+            # (batch_size, seq_len, dff)
+            tf.keras.layers.SeparableConv1D(dff, d_filter,
+                    padding=padding,
+                    data_format='channels_last',
+                    activation=tf.nn.relu
+                    ),
+            tf.keras.layers.MaxPool1D(pool_size=pool_size,
+                    strides=1,
+                    padding='same',
+                    data_format='channels_last'),
+            ] * nff +
+            [
+            #tf.keras.layers.LayerNormalization(epsilon=1e-6),
+            # (batch_size, seq_len, d_model)
+            tf.keras.layers.Dense(d_model,
+                    activation=None),
+            #tf.keras.layers.LayerNormalization(epsilon=1e-6)
+            ]
+        )
 
 
 
 
 def point_wise_act_network(dff, ponder_bias_init=1.0):
-    return tf.keras.Sequential([
-        # (batch_size, seq_len, dff)
-        tf.keras.layers.Dense(dff, activation=tf.nn.relu),
-        # (batch_size, seq_len, 1)
-        tf.keras.layers.Dense(1,
-            use_bias=True,
-            bias_initializer=tf.constant_initializer(ponder_bias_init),
-            activation=tf.nn.sigmoid),
-    ])
+    return tf.keras.Sequential(
+            [
+            # (batch_size, seq_len, dff)
+            tf.keras.layers.Dense(dff, activation=tf.nn.relu),
+            # (batch_size, seq_len, 1)
+            tf.keras.layers.Dense(1,
+                use_bias=True,
+                bias_initializer=tf.constant_initializer(ponder_bias_init),
+                activation=tf.nn.sigmoid),
+            ]
+        )
 
 
 
 
 def separable_conv_act_network(dff, d_filter, ponder_bias_init=1.0):
-    return tf.keras.Sequential([
-        # (batch_size, seq_len, dff)
-        tf.keras.layers.SeparableConv1D(dff, d_filter,
-                padding='causal',   # do not violate timing in decoder
-                data_format='channels_last',
-                activation=None
-                ),
-        # (batch_size, seq_len, 1)
-        tf.keras.layers.Dense(1,
-            use_bias=True,
-            bias_initializer=tf.constant_initializer(ponder_bias_init),
-            activation=tf.nn.sigmoid),
-    ])
+    return tf.keras.Sequential(
+            [
+            # (batch_size, seq_len, dff)
+            tf.keras.layers.SeparableConv1D(dff, d_filter,
+                    padding='causal',   # do not violate timing in decoder
+                    data_format='channels_last',
+                    activation=None
+                    ),
+            # (batch_size, seq_len, 1)
+            tf.keras.layers.Dense(1,
+                use_bias=True,
+                bias_initializer=tf.constant_initializer(ponder_bias_init),
+                activation=tf.nn.sigmoid),
+            ]
+        )
 
 
 

@@ -147,33 +147,33 @@ predict     Predict sequence from raw fast5
                 transformer_hparams = yaml.safe_load(fp)
         else:
             transformer_hparams = {'d_output' : d_output,
-                               'd_model' : 384,
+                               'd_model' : 400,
                                'cnn_kernel' : 32,
-                               'cnn_pool_size' : 9,
+                               'cnn_pool_size' : 7,
                                'cnn_pool_stride' : 3,
-                               'dff' : 1536,
-                               'nff' : 5,
+                               'dff' : 1600,
+                               'nff' : 6,
                                #'dff_type' : 'point_wise' or 'convolution' or 'separable_convolution'
                                'encoder_dff_type' : 'separable_convolution',
                                'decoder_dff_type' : 'point_wise',
                                #'dff_filter_width' : 16,
                                'encoder_dff_filter_width' : 32,
-                               'encoder_dff_pool_size' : 5,
+                               'encoder_dff_pool_size' : 7,
                                #'decoder_dff_filter_width' : 32,
                                'num_heads' : 8,
-                               'encoder_max_iterations' : 12,
-                               'decoder_max_iterations' : 12,
+                               'encoder_max_iterations' : 14,
+                               'decoder_max_iterations' : 14,
                                'encoder_time_scale' : 10000,
                                'decoder_time_scale' : 10000,
                                'random_shift' : False,
-                               'ponder_bias_init' : 5.0,
+                               'ponder_bias_init' : 7.0,
                                #'act_type' : 'separable_convolution',
                                'encoder_act_type' : 'point_wise',
                                'decoder_act_type' : 'point_wise',
                                'act_dff' : 64,
                                #'act_conv_filter' : 5,
-                               'encoder_time_penalty' : 0.00001,
-                               'decoder_time_penalty' : 0.0001,
+                               'encoder_time_penalty' : 0.0001,
+                               'decoder_time_penalty' : 0.001,
                                'input_memory_comp' : 5,
                                'target_memory_comp' : None
                                }
@@ -201,8 +201,8 @@ predict     Predict sequence from raw fast5
                 # read length weighted loss with scaling on EOS token
                 target_lengths = tf.squeeze(target_lengths)
                 mask = tf.sequence_mask(target_lengths, target_max_len, dtype=tf.float32)
-                mask = mask * tf.reduce_sum(mask, axis=-1, keepdims=True) / tf.cast(tf.shape(mask)[-1], tf.float32)
-                mask /= tf.cast(tf.shape(mask)[0], tf.float32)
+                mask = mask * tf.reduce_sum(mask, axis=-1, keepdims=True)
+                mask /= tf.cast(tf.size(mask), tf.float32)
                 target_length_idx = tf.expand_dims(tf.stack(
                                             [tf.range(tf.size(target_lengths)),
                                             target_lengths - 1],
