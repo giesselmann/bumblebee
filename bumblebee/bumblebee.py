@@ -347,6 +347,7 @@ predict     Predict sequence from raw fast5
         args = parser.parse_args(argv)
         tf.config.threading.set_inter_op_parallelism_threads(args.threads)
         tf.config.threading.set_intra_op_parallelism_threads(args.threads)
+        tf.config.experimental_run_functions_eagerly(True)
 
         # Constants
         alphabet = "ACGT"
@@ -424,16 +425,17 @@ predict     Predict sequence from raw fast5
                 acc = match_exp.count('|') / len(match_exp) if len(match_exp) else 0.0
                 yield (acc, ref_exp, match_exp, res_exp)
 
-        #@tf.function
+        @tf.function
         def validate_batch(input):
             predictions = transformer(input)
             return predictions
 
-        #@tf.function
+        @tf.function
         def predict_batch(input):
             predictions, target_lengths = transformer(input)
             return predictions, target_lengths
 
+        transformer_hparams['target_max_len'] = target_max_len + 2
         transformer = Transformer(hparams=transformer_hparams)
         input, target = next(iter(ds_val))
         input_data, target_data, input_lengths, target_lengths = input
@@ -449,7 +451,7 @@ predict     Predict sequence from raw fast5
 
         #input, input_lengths, target_max = inputs
         t0 = timeit.default_timer()
-        predictions, target_lengths = predict_batch((input_data, input_lengths, target_max_len+2))
+        predictions, target_lengths = predict_batch((input_data, input_lengths))
         t1 = timeit.default_timer()
         print("T {:.3f}".format(t1-t0))
         with open("algn_test.txt", 'w') as fp:

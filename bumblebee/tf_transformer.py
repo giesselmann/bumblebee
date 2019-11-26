@@ -265,7 +265,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
           x = tf.reshape(x, (-1, seq_len, self.num_heads, self.depth))
           return tf.transpose(x, perm=[0, 2, 1, 3])
 
-    def call(self, input, training=False, mask=None):
+    def call(self, input, training=False, mask=None, use_vk_cache=False):
         if len(input) == 3:
             v, k, q = input
             step = None
@@ -280,7 +280,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         q = self.wq(q)
         # (batch_size, seq_len, num_heads, depth)
         q = self.split_heads(q, seq_len_q)
-        if not tf.is_tensor(vk_cache):
+        if vk_cache is None or not use_vk_cache:
             k = self.wk(k)
             v = self.wv(v)
             if self.memory_comp:
@@ -303,6 +303,9 @@ class MultiHeadAttention(tf.keras.layers.Layer):
             scaled_attention = tf.transpose(scaled_attention, perm=[0, 2, 1, 3])
             # (batch_size, seq_len_q, d_model)
             concat_attention = tf.reshape(scaled_attention, (-1, seq_len_q, self.d_model))
+            ca_cache = concat_attention
+            # (batch_size, seq_len_q, d_model)
+            output = self.dense(concat_attention)
         else:
             q_slice = tf.gather(q, [step], axis=-2)
             if mask is not None and mask.shape[-2] != 1:
@@ -312,15 +315,14 @@ class MultiHeadAttention(tf.keras.layers.Layer):
             scaled_attention_slice = tf.transpose(scaled_attention_slice, perm=[0, 2, 1, 3])
             # (batch_size, seq_len_q, d_model)
             concat_attention_slice = tf.reshape(scaled_attention_slice, (-1, 1, self.d_model))
-            #concat_attention = tf.concat([ca_cache[:,:step,:],
-            #                              concat_attention_slice,
-            #                              ca_cache[:,step+1:,:]], axis=-2)
-            concat_attention = tf.concat([tf.gather(ca_cache, tf.range(0,step), axis=-2),
-                                          concat_attention_slice,
-                                          tf.gather(ca_cache, tf.range(step+1,seq_len_q), axis=-2)], axis=-2)
-        # (batch_size, seq_len_q, d_model)
-        output = self.dense(concat_attention)
-        return [output, (vk_cache if vk_cache is not None else (v,k), concat_attention)]
+            step_idx = tf.expand_dims(tf.stack([tf.range(tf.shape(ca_cache)[0], dtype=tf.int32),
+                               tf.ones(tf.shape(ca_cache)[0], dtype=tf.int32) * step],
+                               axis=-1), axis=1)
+            # concat_attention.shape (batch_size, seq_len_q, d_model)
+            ca_cache = tf.tensor_scatter_nd_update(ca_cache, step_idx, concat_attention_slice)
+            # (batch_size, seq_len_q, d_model)
+            output = self.dense(ca_cache)
+        return [output, (vk_cache if vk_cache is not None else (v,k), ca_cache)]
 
 
 
@@ -445,21 +447,25 @@ class DecoderLayer(tf.keras.layers.Layer):
             x, enc_output, look_ahead_mask, padding_mask, step, dec_cache = inputs
         # enc_output.shape == (batch_size, input_seq_len, d_model)
         # attn_weights_block1 == (batch_size, target_seq_len, d_model)
-        if not tf.is_tensor(dec_cache):
+        if dec_cache is None or True:
+            #tf.print("MHA1 init cache")
             attn1, mha1_cache = self.mha1([x, x, x],
-                    training=training, mask=look_ahead_mask)
+                    training=training, mask=look_ahead_mask, use_vk_cache=False)
         else:
+            #tf.print("MHA1 use cache")
             attn1, mha1_cache = self.mha1([x, x, x, step, dec_cache[0]],
-                    training=training, mask=look_ahead_mask)
+                    training=training, mask=look_ahead_mask, use_vk_cache=False)
         attn1 = self.dropout1(attn1, training)
         out1 = self.layernorm1(attn1 + x)
         # attn_weights_block2 == (batch_size, target_seq_len, d_model)
-        if not tf.is_tensor(dec_cache):
+        if dec_cache is None:
+            #tf.print("MHA2 init cache")
             attn2, mha2_cache = self.mha2([enc_output, enc_output, out1],
-                    training=training, mask=padding_mask)
+                    training=training, mask=padding_mask, use_vk_cache=True)
         else:
+            #tf.print("MHA2 use cache")
             attn2, mha2_cache = self.mha2([enc_output, enc_output, out1, step, dec_cache[1]],
-                    training=training, mask=padding_mask)
+                    training=training, mask=padding_mask, use_vk_cache=True)
         attn2 = self.dropout2(attn2, training)
         out2 = self.layernorm2(attn2 + out1)            # (batch_size, target_seq_len, d_model)
         ffn_output = self.ffn(out2)                     # (batch_size, target_seq_len, d_model)
@@ -713,7 +719,8 @@ class Decoder(tf.keras.layers.Layer):
         depth_step = tf.cast(0, tf.int32)
 
         # Initial depth_step to fill decoder cache
-        if not tf.is_tensor(dec_cache):
+        if dec_cache is None:
+            tf.print("Decoder init cache")
             transformed_state = state + tf.gather(self.pos_encoding, depth_step, axis=-3)
             transformed_state, dec_cache = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
                         training=training, mask=mask)
@@ -726,17 +733,17 @@ class Decoder(tf.keras.layers.Layer):
             state = transformed_state
             depth_step += 1
 
-        mha1_cache, mha2_cache = dec_cache
+        #mha1_cache, mha2_cache = dec_cache
         # define update and halt-condition
-        def update_state(state, depth_step, halting_probability, remainders, n_updates, mha1_cache):
+        def update_state(state, depth_step, halting_probability, remainders, n_updates, dec_cache):
             #transformed_state = state + self.pos_encoding[:,depth_step,:,:]
             transformed_state = state + tf.gather(self.pos_encoding, depth_step, axis=-3)
             #if depth_step == tf.cast(0, dtype=tf.int32):
             #    transformed_state = self.dropout(transformed_state, training=training)
-            transformed_state, (mha1_cache, u0) = self.dec_layer(
-                        [transformed_state, enc_output, look_ahead_mask, input_padding_mask, step, (mha1_cache, mha2_cache)],
+            transformed_state, dec_cache = self.dec_layer(
+                        [transformed_state, enc_output, look_ahead_mask, input_padding_mask, step, dec_cache],
                         training=training, mask=mask)
-            del u0
+            #del u0
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
                 [transformed_state, halting_probability, remainders, n_updates],
                 training=training, mask=target_padding_mask)
@@ -744,7 +751,7 @@ class Decoder(tf.keras.layers.Layer):
                                 state * (1 - update_weights))
             transformed_state *= tf.expand_dims(tf.squeeze(1-target_padding_mask), axis=-1)
             depth_step += 1
-            return (transformed_state, depth_step, halting_probability, remainders, n_updates, mha1_cache)
+            return (transformed_state, depth_step, halting_probability, remainders, n_updates, dec_cache)
 
         # While loop stops when this predicate is FALSE.
         # Ie all (probability < 1-eps AND counter < N) are false.
@@ -755,19 +762,19 @@ class Decoder(tf.keras.layers.Layer):
                         tf.less(halting_probability, 1.0 - self.halt_epsilon),
                         tf.less(n_updates, self.max_iterations)))
 
-        if should_continue(state, depth_step, halting_probability, remainders, n_updates, mha1_cache):
+        if should_continue(state, depth_step, halting_probability, remainders, n_updates, dec_cache):
             # Do while loop iterations until predicate above is false.
-            (new_state, _, _, remainders, n_updates, mha1_cache) = tf.while_loop(
+            (new_state, depth_step, _, remainders, n_updates, dec_cache) = tf.while_loop(
               should_continue, update_state,
-              (state, depth_step, halting_probability, remainders, n_updates, mha1_cache),
-              maximum_iterations=self.max_iterations -1 if dec_cache is not None else self.max_iterations - 1,
+              (state, depth_step, halting_probability, remainders, n_updates, dec_cache),
+              maximum_iterations=self.max_iterations - 1,
               parallel_iterations=4,
               swap_memory=False,
               back_prop=training)
         else:
             new_state = state
         _act_loss = n_updates + remainders
-
+        tf.print("step", step, "with", depth_step, "iterations")
         # ponder loss
         if target_padding_mask is not None:
             _msk = tf.squeeze(1-target_padding_mask)   # (batch_size, seq_len)
@@ -781,7 +788,7 @@ class Decoder(tf.keras.layers.Layer):
         tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates_mean))
         #tf.summary.scalar("ponder_loss_decoder", tf.reduce_mean(act_loss))
         # x.shape == (batch_size, seq_len, d_model)
-        return new_state, (mha1_cache, mha2_cache)
+        return new_state, dec_cache
 
 
 
@@ -791,6 +798,7 @@ class TransformerLayer(tf.keras.layers.Layer):
         super(TransformerLayer, self).__init__(**kwargs)
         self.d_output = hparams.get('d_output') or 6
         self.rate = hparams.get('rate') or 0.1
+        self.target_max_len = hparams.get('target_max_len') or 100
         self.hparams = hparams.copy()
 
     def get_config(self):
@@ -842,10 +850,10 @@ class TransformerLayer(tf.keras.layers.Layer):
             return final_output
         else:   # prediction
             tf.print("===== ENCODER ======")
-            input, input_lengths, target_max = inputs
+            input, input_lengths = inputs
             input_max = input.shape[1]
             target = tf.concat([tf.ones_like(input_lengths) * self.d_output_t - 2, # init with sos token
-                                tf.zeros((tf.shape(input)[0],) + (target_max-1,), dtype=input_lengths.dtype)], axis=-1)
+                                tf.zeros((tf.shape(input)[0],) + (self.target_max_len-1,), dtype=input_lengths.dtype)], axis=-1)
             target_lengths = tf.ones_like(input_lengths)
             # run encoder once
             enc_padding_mask = create_padding_mask(input_lengths, input_max)
@@ -855,7 +863,7 @@ class TransformerLayer(tf.keras.layers.Layer):
             step = tf.cast(0, tf.int32)
 
             # run decoder once to init caches
-            dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
+            dec_target_padding_mask = create_padding_mask(target_lengths, self.target_max_len)
             tf.print("===== DECODER INIT ======")
             dec_output, dec_cache = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                     training=False, mask=None)
@@ -863,35 +871,44 @@ class TransformerLayer(tf.keras.layers.Layer):
             final_output = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)   # (batch_size, tar_seq_len)
             target = tf.concat([target[:,:1],
                                 final_output[:,0:-1]], axis=-1, name='concat_init')
+
             target_active = tf.logical_and(target_active, tf.expand_dims(tf.not_equal(final_output[:,0], self.d_output_t - 1), -1))
             target_lengths += tf.cast(target_active, target_lengths.dtype)
             step += 1
             tf.print("===== DECODER LOOP ======")
             # update decoder target with new predictions
-            @tf.function
+            #@tf.function
             def update_state(step, target, u0, target_lengths, target_active, dec_cache):
                 del u0
-                dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
+                dec_target_padding_mask = create_padding_mask(target_lengths, self.target_max_len)
                 dec_output, dec_cache = self.decoder(
                         [target, enc_output, dec_input_padding_mask, dec_target_padding_mask, step, dec_cache],
                         training=False, mask=None)
                 predictions = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
                 predictions = tf.nn.softmax(predictions, axis=-1)
                 final_output = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)   # (batch_size, tar_seq_len)
-                target_slice = tf.gather(target, tf.range(0, step+1), axis=-1)
-                final_output_slice = tf.gather(final_output, tf.range(step, tf.shape(final_output)[-1] - 1), axis=-1)
-                target = tf.concat([target_slice, final_output_slice], axis=-1)
+                #target_slice = tf.gather(target, tf.range(0, step+1), axis=-1)
+                #final_output_slice = tf.gather(final_output, tf.range(step, tf.shape(final_output)[-1] - 1), axis=-1)
+                #target = tf.concat([target_slice, final_output_slice], axis=-1)
+                final_output_idx = tf.stack([tf.range(tf.shape(final_output)[0], dtype=tf.int32),
+                                   tf.ones(tf.shape(final_output)[0], dtype=tf.int32) * step],
+                                   axis=-1)
+                target_idx = tf.stack([tf.range(tf.shape(final_output)[0], dtype=tf.int32),
+                                  tf.ones(tf.shape(final_output)[0], dtype=tf.int32) * (step + 1)],
+                                  axis=-1)
+                final_output_slice = tf.gather_nd(final_output, final_output_idx)
+                target = tf.tensor_scatter_nd_update(target, target_idx, final_output_slice)
                 target_active = tf.logical_and(target_active,
                                                tf.expand_dims(
                                                     tf.not_equal(
                                                         tf.gather(final_output, step, axis=-1), self.d_output_t - 1), -1))
-                tf.print("targets active: ", tf.reduce_sum(tf.cast(target_active, tf.int32)), final_output_slice[:,0])
+                tf.print("targets active: ", tf.reduce_sum(tf.cast(target_active, tf.int32)), final_output_slice)
                 target_lengths += tf.cast(target_active, target_lengths.dtype)
                 step += 1
                 return (step, target, predictions, target_lengths, target_active, dec_cache)
 
             # stop when all sequences yielded eos
-            @tf.function
+            #@tf.function
             def should_continue(u0, u1, u2, u3, target_active, u4):
                 del u0, u1, u2, u3, u4
                 return tf.reduce_any(target_active)
@@ -901,7 +918,7 @@ class TransformerLayer(tf.keras.layers.Layer):
             (_, target, predictions, target_lengths, _, _) = tf.while_loop(
               should_continue, update_state,
               (step, target, predictions, target_lengths, target_active, dec_cache),
-              maximum_iterations=target_max-3,  # TODO double check
+              maximum_iterations=self.target_max_len-3,  # TODO double check
               parallel_iterations=1,
               swap_memory=False,
               back_prop=False)
@@ -956,11 +973,11 @@ class Transformer(tf.keras.Model):
             input_lengths = tf.cast(tf.divide(input_lengths, self.strides), tf.int32)
             output = self.transformer_layer([inner, target, input_lengths, target_lengths], training=training)
             return output
-        elif len(inputs) == 3:  # prediction
-            input, input_lengths, target_max = inputs
+        elif len(inputs) == 2:  # prediction
+            input, input_lengths = inputs
             inner = self.signal_cnn(input)
             input_lengths = tf.cast(tf.divide(input_lengths, self.strides), tf.int32)
-            output = self.transformer_layer([inner, input_lengths, target_max])
+            output = self.transformer_layer([inner, input_lengths])
             return output
 
 
