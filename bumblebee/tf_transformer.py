@@ -447,7 +447,7 @@ class DecoderLayer(tf.keras.layers.Layer):
             x, enc_output, look_ahead_mask, padding_mask, step, dec_cache = inputs
         # enc_output.shape == (batch_size, input_seq_len, d_model)
         # attn_weights_block1 == (batch_size, target_seq_len, d_model)
-        if dec_cache is None or True:
+        if dec_cache is None:
             attn1, mha1_cache = self.mha1([x, x, x],
                     training=training, mask=look_ahead_mask, use_vk_cache=False)
         else:
@@ -464,7 +464,7 @@ class DecoderLayer(tf.keras.layers.Layer):
                     training=training, mask=padding_mask, use_vk_cache=True)
         attn2 = self.dropout2(attn2, training)
         out2 = self.layernorm2(attn2 + out1)                # (batch_size, target_seq_len, d_model)
-        if dec_cache is None or step is None or True:
+        if dec_cache is None or step is None:
             ffn_output = self.ffn(out2)                     # (batch_size, target_seq_len, d_model)
             ffn_output = self.dropout3(ffn_output, training)
             out3 = self.layernorm3(ffn_output + out2)       # (batch_size, target_seq_len, d_model)
@@ -716,7 +716,7 @@ class Decoder(tf.keras.layers.Layer):
         state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         # init ACT
         # state.shape (batch_size, seq_len, d_model)
-        if step is not None and False:
+        if step is not None:
             tpm = tf.squeeze(tf.ones_like(target_padding_mask))
             step_idx = tf.stack([tf.range(tf.shape(tpm)[0], dtype=tf.int32),
                               tf.ones(tf.shape(tpm)[0], dtype=tf.int32) * step],
@@ -914,6 +914,8 @@ class TransformerLayer(tf.keras.layers.Layer):
                 tf.print("targets active: ", tf.reduce_sum(tf.cast(target_active, tf.int32)), final_output_slice)
                 target_lengths += tf.cast(target_active, target_lengths.dtype)
                 step += 1
+                #tf.print(tf.argmax(_predictions[0][0:step], axis=-1))
+                #tf.print(tf.argmax(predictions[0][0:step], axis=-1))
                 return (step, target, predictions, target_lengths, target_active, dec_cache)
 
             # stop when all sequences yielded eos
