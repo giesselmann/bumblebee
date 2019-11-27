@@ -733,7 +733,7 @@ class Decoder(tf.keras.layers.Layer):
 
         # Initial depth_step to fill decoder cache
         if dec_cache is None:
-            tf.print("Decoder init cache")
+            #tf.print("Decoder init cache")
             transformed_state = state + tf.gather(self.pos_encoding, depth_step, axis=-3)
             transformed_state, dec_cache = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
                         training=training, mask=mask)
@@ -785,7 +785,7 @@ class Decoder(tf.keras.layers.Layer):
         else:
             new_state = state
         _act_loss = n_updates + remainders
-        tf.print("step", step, "with", depth_step, "iterations")
+        #tf.print("step", step, "with", depth_step, "iterations")
         # ponder loss
         if target_padding_mask is not None:
             _msk = tf.squeeze(1-target_padding_mask)   # (batch_size, seq_len)
@@ -860,7 +860,7 @@ class TransformerLayer(tf.keras.layers.Layer):
             final_output = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
             return final_output
         else:   # prediction
-            tf.print("===== ENCODER ======")
+            #tf.print("===== ENCODER ======")
             input, input_lengths = inputs
             input_max = input.shape[1]
             target = tf.concat([tf.ones_like(input_lengths) * self.d_output_t - 2, # init with sos token
@@ -875,7 +875,7 @@ class TransformerLayer(tf.keras.layers.Layer):
 
             # run decoder once to init caches
             dec_target_padding_mask = create_padding_mask(target_lengths, self.target_max_len)
-            tf.print("===== DECODER INIT ======")
+            #tf.print("===== DECODER INIT ======")
             dec_output, dec_cache = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                     training=False, mask=None)
             predictions = self.final_layer(dec_output)  # (batch_size, tar_seq_len, d_output)
@@ -886,7 +886,7 @@ class TransformerLayer(tf.keras.layers.Layer):
             target_lengths += tf.cast(target_active, target_lengths.dtype)
             step += 1
 
-            tf.print("===== DECODER LOOP ======")
+            #tf.print("===== DECODER LOOP ======")
             # update decoder target with new predictions
             def update_state(step, target, predictions, target_lengths, target_active, dec_cache):
                 dec_target_padding_mask = create_padding_mask(target_lengths, self.target_max_len)
@@ -911,7 +911,7 @@ class TransformerLayer(tf.keras.layers.Layer):
                                                tf.expand_dims(
                                                     tf.not_equal(
                                                         tf.gather(final_output, step, axis=-1), self.d_output_t - 1), -1))
-                tf.print("targets active: ", tf.reduce_sum(tf.cast(target_active, tf.int32)), final_output_slice)
+                #tf.print("targets active: ", tf.reduce_sum(tf.cast(target_active, tf.int32)), final_output_slice)
                 target_lengths += tf.cast(target_active, target_lengths.dtype)
                 step += 1
                 #tf.print(tf.argmax(_predictions[0][0:step], axis=-1))
