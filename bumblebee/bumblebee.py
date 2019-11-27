@@ -347,7 +347,7 @@ predict     Predict sequence from raw fast5
         args = parser.parse_args(argv)
         tf.config.threading.set_inter_op_parallelism_threads(args.threads)
         tf.config.threading.set_intra_op_parallelism_threads(args.threads)
-        tf.config.experimental_run_functions_eagerly(True)
+        #tf.config.experimental_run_functions_eagerly(True)
 
         # Constants
         alphabet = "ACGT"
@@ -357,7 +357,7 @@ predict     Predict sequence from raw fast5
         d_output = len(tf_alphabet)
         input_min_len = args.input_min_length
         input_max_len = args.input_max_length
-        target_max_len = input_max_len // 6
+        target_max_len = input_max_len // 8
 
         # Load config
         with open(args.config, 'r') as fp:
