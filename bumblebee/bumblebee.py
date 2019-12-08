@@ -34,8 +34,8 @@ from tqdm import tqdm
 from util import pore_model
 from tf_transformer import Transformer
 from tf_discriminator import Discriminator
-from tf_transformer_util import decode_sequence, flip_sequence
-from tf_transformer_util import TransformerLRS
+from tf_util import decode_sequence, flip_sequence
+from tf_util import WarmupLRS
 
 
 
@@ -197,8 +197,8 @@ predict     Predict sequence from raw fast5
         summary_writer = tf.summary.create_file_writer(summary_dir)
 
         with strategy.scope(), summary_writer.as_default():
-            tf_lrs = TransformerLRS(transformer_hparams.get('d_model'), warmup_steps=8000)
-            pf_lrs = TransformerLRS(transformer_hparams.get('d_model'), warmup_steps=2000, offset=30000)
+            tf_lrs = WarmupLRS(transformer_hparams.get('d_model'), warmup_steps=8000)
+            pf_lrs = WarmupLRS(transformer_hparams.get('d_model'), warmup_steps=2000, offset=30000)
             tf_optimizer = tf.keras.optimizers.Adam(tf_lrs, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
             pf_optimizer = tf.keras.optimizers.Adam(pf_lrs, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
             cat_cross_entropy = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')

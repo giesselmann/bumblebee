@@ -45,6 +45,7 @@ def decode_sequence(logits, alphabet='ACGT'):
 
 
 
+
 def flip_sequence(target, d_output, rate=0.1):
     # target.shape (batch_size, target_seq_len)
     flp_mask = tf.random.uniform(target.shape, 0.0, 1.0, dtype=tf.float32)
@@ -58,9 +59,9 @@ def flip_sequence(target, d_output, rate=0.1):
 
 
 
-class TransformerLRS(tf.keras.optimizers.schedules.LearningRateSchedule):
+class WarmupLRS(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, d_model, warmup_steps=4000, offset=0):
-        super(TransformerLRS, self).__init__()
+        super(WarmupLRS, self).__init__()
         self.d_model = tf.cast(d_model, tf.float32)
         self.warmup_steps = warmup_steps
         self.offset = offset
