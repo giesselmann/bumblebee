@@ -45,13 +45,31 @@ def decode_sequence(logits, alphabet='ACGT'):
 
 
 
+def flip_sequence(target, d_output, rate=0.1):
+    # target.shape (batch_size, target_seq_len)
+    flp_mask = tf.random.uniform(target.shape, 0.0, 1.0, dtype=tf.float32)
+    flp_mask = tf.cast(tf.less(flp_mask, rate), tf.int32)
+    flp_mask = tf.concat([tf.zeros((target.shape[0], 1), dtype=tf.int32), flp_mask[:,1:]],axis=1)  # do not flip SOS character
+    flp_val = tf.random.uniform(target.shape, tf.cast(0, tf.int32), d_output - 2, dtype=tf.int32)
+    flp_val *= flp_mask
+    target = (target + flp_val) % (d_output - 2)
+    return target
+
+
+
+
 class TransformerLRS(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, d_model, warmup_steps=4000):
+    def __init__(self, d_model, warmup_steps=4000, offset=0):
         super(TransformerLRS, self).__init__()
         self.d_model = tf.cast(d_model, tf.float32)
         self.warmup_steps = warmup_steps
+        self.offset = offset
+
+    def update_offset(self, update):
+        self.offset += update
 
     def __call__(self, step):
+        step = tf.maximum(tf.cast(0, step.dtype), step - tf.cast(self.offset, step.dtype))
         arg1 = tf.math.rsqrt(step)
         arg2 = step * (self.warmup_steps ** -1.5)
         return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
