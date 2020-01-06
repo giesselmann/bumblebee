@@ -29,34 +29,14 @@ import timeit
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-
-
-
-
-def positional_encoding(seq_len, depth, d_model,
-                        max_timescale=10000, random_shift=False):
-    def get_angles(pos, j, max_timescale):
-        angle_rates = 1 / np.power(max_timescale,
-                                   (2 * (j//2)) / np.float32(d_model))
-        return pos * angle_rates
-    j = np.arange(d_model)[np.newaxis, np.newaxis, :]   # (1, 1, d_model)
-    pos_rads = get_angles(np.arange(seq_len)[np.newaxis, :, np.newaxis], j, max_timescale)
-    #depth_rads = get_angles(np.arange(depth)[:, np.newaxis, np.newaxis],
-    #                        np.arange(d_model)[np.newaxis, np.newaxis, :])
-    #depth_rads = get_angles(np.logspace(0, np.log10(max_timescale), depth)[:, np.newaxis, np.newaxis], j)
-    depth_rads = get_angles(np.arange(depth)[:, np.newaxis, np.newaxis], j, depth)
-    rads = pos_rads + depth_rads
-    # apply sin to even indices in the array; 2i
-    rads[:, 0::2, :] = np.sin(pos_rads[:, 0::2, :]) + np.sin(depth_rads[:, :, :])
-    # apply cos to odd indices in the array; 2i+1
-    rads[:, 1::2, :] = np.cos(pos_rads[:, 1::2, :]) + np.cos(depth_rads[:, :, :])
-    pos_encoding = rads[np.newaxis, ...]
-    return tf.constant(tf.cast(pos_encoding, dtype=tf.float32)) # (1, depth, seq_len, d_model)
+from tf_cnn import SignalFeatureCNN
+from tf_util import positional_encoding
 
 
 
 
 def create_padding_mask(lengths, max_len):
+    # mask with 0.0 on valid time steps
     msk = 1 - tf.sequence_mask(lengths, max_len, dtype=tf.float32)
     # add extra dimensions to add the padding
     # to the attention logits.
@@ -107,37 +87,34 @@ def scaled_dot_product_attention(q, k, v, mask=None):
 
 
 def point_wise_feed_forward_network(d_model, dff, nff=1):
+    inner = []
+    for _ in range(nff):
+        inner.append(tf.keras.layers.Dense(dff, activation=tf.nn.elu))
     return tf.keras.Sequential(
-            [
-              # (batch_size, seq_len, dff)
-              tf.keras.layers.Dense(dff,
-                    activation=tf.nn.leaky_relu),
-            ] * nff +
-            [
-              # (batch_size, seq_len, d_model)
-              tf.keras.layers.Dense(d_model,
-                    activation=None),
-              #tf.keras.layers.LayerNormalization(epsilon=1e-6)
-            ]
-        )
+            inner + [tf.keras.layers.Dense(d_model, activation=None)]
+            )
 
 
 
 
 def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, padding='same'):
+    inner = []
+    for _ in range(nff):
+        inner.extend(
+                    [
+                    # (batch_size, seq_len, dff)
+                    tf.keras.layers.Conv1D(dff, d_filter,
+                            padding=padding,
+                            data_format='channels_last',
+                            activation=tf.nn.elu
+                            ),
+                    tf.keras.layers.MaxPool1D(pool_size=pool_size,
+                            strides=1,
+                            padding='same',
+                            data_format='channels_last'),
+                    ])
     return tf.keras.Sequential(
-            [
-            # (batch_size, seq_len, dff)
-            tf.keras.layers.Conv1D(dff, d_filter,
-                    padding=padding,
-                    data_format='channels_last',
-                    activation=tf.nn.leaky_relu
-                    ),
-            tf.keras.layers.MaxPool1D(pool_size=pool_size,
-                    strides=1,
-                    padding='same',
-                    data_format='channels_last'),
-            ] * nff +
+            inner +
             [
             #tf.keras.layers.LayerNormalization(epsilon=1e-6),
             # (batch_size, seq_len, d_model)
@@ -151,19 +128,24 @@ def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, paddin
 
 
 def separable_conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, padding='same'):
+    inner = []
+    for _ in range(nff):
+        inner.extend(
+                    [
+                    # (batch_size, seq_len, dff)
+                    tf.keras.layers.SeparableConv1D(dff, d_filter,
+                            padding=padding,
+                            data_format='channels_last',
+                            activation=tf.nn.elu
+                            ),
+                    tf.keras.layers.MaxPool1D(pool_size=pool_size,
+                            strides=1,
+                            padding='same',
+                            data_format='channels_last'),
+                    ]
+        )
     return tf.keras.Sequential(
-            [
-            # (batch_size, seq_len, dff)
-            tf.keras.layers.SeparableConv1D(dff, d_filter,
-                    padding=padding,
-                    data_format='channels_last',
-                    activation=tf.nn.leaky_relu
-                    ),
-            tf.keras.layers.MaxPool1D(pool_size=pool_size,
-                    strides=1,
-                    padding='same',
-                    data_format='channels_last'),
-            ] * nff +
+            inner +
             [
             #tf.keras.layers.LayerNormalization(epsilon=1e-6),
             # (batch_size, seq_len, d_model)
@@ -176,11 +158,103 @@ def separable_conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size
 
 
 
+class InceptionModule(tf.keras.layers.Layer):
+    def __init__(self, hparams={}, padding='same', **kwargs):
+        super(InceptionModule, self).__init__(**kwargs)
+        dff = hparams.get('dff') or 1024
+        dff_fraction = dff // 32
+        self.filter_x1 = dff_fraction * 8
+        self.filter_x3_reduce = dff_fraction * 4
+        self.filter_x3 = dff_fraction * 8
+        self.filter_x5_reduce = dff_fraction * 4
+        self.filter_x5 = dff_fraction * 8
+        self.filter_pool = dff_fraction * 8
+        self.padding = padding
+        self.hparams = hparams.copy()
+
+    def get_config(self):
+        config = super(InceptionModule, self).get_config()
+        config['hparams'] = self.hparams
+        return config
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[:2] + [self.filter_x1 + self.filter_x3 + self.filter_x5 + self.filter_pool]
+
+    def build(self, input_shape):
+        kernel_init = tf.keras.initializers.glorot_uniform()
+        bias_init = tf.keras.initializers.Constant(value=0.2)
+        self.conv_x1 = tf.keras.layers.SeparableConv1D(self.filter_x1, 1, padding=self.padding,
+                data_format='channels_last', activation=tf.nn.relu,
+                kernel_initializer=kernel_init, bias_initializer=bias_init)
+        self.conv_x3_reduce = tf.keras.layers.SeparableConv1D(self.filter_x3_reduce, 1, padding=self.padding,
+                data_format='channels_last', activation=tf.nn.relu,
+                kernel_initializer=kernel_init, bias_initializer=bias_init)
+        self.conv_x3 = tf.keras.layers.SeparableConv1D(self.filter_x3, 3, padding=self.padding,
+                data_format='channels_last', activation=tf.nn.relu,
+                kernel_initializer=kernel_init, bias_initializer=bias_init)
+        self.conv_x5_reduce = tf.keras.layers.SeparableConv1D(self.filter_x5_reduce, 1, padding=self.padding,
+                data_format='channels_last', activation=tf.nn.relu,
+                kernel_initializer=kernel_init, bias_initializer=bias_init)
+        self.conv_x5 = tf.keras.layers.SeparableConv1D(self.filter_x5, 5, padding=self.padding,
+                data_format='channels_last', activation=tf.nn.relu,
+                kernel_initializer=kernel_init, bias_initializer=bias_init)
+        self.pool = tf.keras.layers.MaxPool1D(pool_size=3, strides=1, padding=self.padding)
+        self.pool_x1 = tf.keras.layers.SeparableConv1D(self.filter_pool, 1, padding=self.padding,
+                data_format='channels_last', activation=tf.nn.relu,
+                kernel_initializer=kernel_init, bias_initializer=bias_init)
+        return super(InceptionModule, self).build(input_shape)
+
+    def call(self, state):
+        c1x = self.conv_x1(state)
+        c3x = self.conv_x3_reduce(state)
+        c3x = self.conv_x3(c3x)
+        c5x = self.conv_x5_reduce(state)
+        c5x = self.conv_x5(c5x)
+        pool = self.pool(state)
+        pool = self.pool_x1(pool)
+        new_state = tf.concat([c1x, c3x, c5x, pool], axis=-1)
+        return new_state
+
+
+
+
+class InceptionFeedForwardNetwork(tf.keras.layers.Layer):
+    def __init__(self, hparams={}, padding='same', **kwargs):
+        super(InceptionFeedForwardNetwork, self).__init__(**kwargs)
+        self.d_model = hparams.get('d_model') or 256
+        self.nff = hparams.get('nff') or 1
+        self.padding = padding
+        self.hparams = hparams.copy()
+
+    def get_config(self):
+        config = super(InceptionFeedForwardNetwork, self).get_config()
+        config['hparams'] = self.hparams
+        return config
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+    def build(self, input_shape):
+        self.inception_modules = []
+        for _ in range(self.nff):
+            self.inception_modules.append(InceptionModule(hparams=self.hparams, padding=self.padding))
+        self.dense = tf.keras.layers.Dense(self.d_model, activation=None)
+        return super(InceptionFeedForwardNetwork, self).build(input_shape)
+
+    def call(self, state, training, mask=None):
+        for im in self.inception_modules:
+            state = im(state)
+        state = self.dense(state)
+        return state
+
+
+
+
 def point_wise_act_network(dff, ponder_bias_init=1.0):
     return tf.keras.Sequential(
             [
             # (batch_size, seq_len, dff)
-            tf.keras.layers.Dense(dff, activation=tf.nn.leaky_relu),
+            tf.keras.layers.Dense(dff, activation=tf.nn.elu),
             # (batch_size, seq_len, 1)
             tf.keras.layers.Dense(1,
                 use_bias=True,
@@ -199,7 +273,7 @@ def separable_conv_act_network(dff, d_filter, ponder_bias_init=1.0):
             tf.keras.layers.SeparableConv1D(dff, d_filter,
                     padding='causal',   # do not violate timing in decoder
                     data_format='channels_last',
-                    activation=tf.nn.leaky_relu
+                    activation=tf.nn.elu
                     ),
             # (batch_size, seq_len, 1)
             tf.keras.layers.Dense(1,
@@ -335,12 +409,13 @@ class EncoderLayer(tf.keras.layers.Layer):
         super(EncoderLayer, self).__init__(**kwargs)
         self.d_model = hparams.get('d_model') or 256
         self.dff = hparams.get('dff') or 1024
-        self.nff = hparams.get('nff') or 1
+        self.nff = hparams.get('encoder_nff') or hparams.get('nff') or 1
         self.dff_type = hparams.get('encoder_dff_type') or hparams.get('dff_type') or 'point_wise'
         self.dff_filter = hparams.get('encoder_dff_filter_width') or hparams.get('dff_filter_width') or 8
         self.dff_pool_size = hparams.get('encoder_dff_pool_size') or hparams.get('dff_pool_size') or 3
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
+        self.hparams['nff'] = self.nff
         self.hparams['memory_comp'] = hparams.get('input_memory_comp')
         self.hparams['memory_comp_pad'] = 'same'
 
@@ -365,6 +440,8 @@ class EncoderLayer(tf.keras.layers.Layer):
             self.ffn = separable_conv_feed_forward_network(self.d_model, self.dff, self.dff_filter,
                                 pool_size=self.dff_pool_size,
                                 nff=self.nff)
+        elif self.dff_type == 'inception':
+            self.ffn = InceptionFeedForwardNetwork(hparams=self.hparams)
         else:
             raise NotImplementedError()
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -379,7 +456,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         del u0
         attn_output = self.dropout1(attn_output, training=training)
         out1 = self.layernorm1(input + attn_output)  # (batch_size, input_seq_len, d_model)
-        ffn_output = self.ffn(out1)  # (batch_size, input_seq_len, d_model)
+        ffn_output = self.ffn(out1, training=training, mask=mask)  # (batch_size, input_seq_len, d_model)
         ffn_output = self.dropout2(ffn_output, training=training)
         out2 = self.layernorm2(out1 + ffn_output)  # (batch_size, input_seq_len, d_model)
         return out2
@@ -392,12 +469,13 @@ class DecoderLayer(tf.keras.layers.Layer):
         super(DecoderLayer, self).__init__(**kwargs)
         self.d_model = hparams.get('d_model') or 256
         self.dff = hparams.get('dff') or 1024
-        self.nff = hparams.get('nff') or 1
+        self.nff = hparams.get('decoder_nff') or hparams.get('nff') or 1
         self.dff_type = hparams.get('decoder_dff_type') or hparams.get('dff_type') or 'point_wise'
         self.dff_filter = hparams.get('decoder_dff_filter_width') or hparams.get('dff_filter_width') or 8
         self.dff_pool_size = hparams.get('decoder_dff_pool_size') or hparams.get('dff_pool_size') or 3
         self.rate = hparams.get('rate') or 0.1
         self.hparams = hparams.copy()
+        self.hparams['nff'] = self.nff
 
     def get_config(self):
         config = super(DecoderLayer, self).get_config()
@@ -431,6 +509,8 @@ class DecoderLayer(tf.keras.layers.Layer):
                         pool_size=self.dff_pool_size,
                         padding='causal',
                         nff=self.nff)
+        elif self.dff_type == 'inception':
+            self.ffn = InceptionFeedForwardNetwork(hparams=self.hparams, padding='causal')
         else:
             raise NotImplementedError()
         self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
@@ -481,7 +561,6 @@ class DecoderLayer(tf.keras.layers.Layer):
             ffn_slice = self.ffn(out2_slice)
             out3_slice = self.layernorm3(ffn_slice + out2_slice)
             out3 = tf.tensor_scatter_nd_update(out3, ffn_idx, out3_slice)
-
         return [out3, (mha1_cache, mha2_cache, out3)]
 
 
@@ -526,7 +605,7 @@ class ACT(tf.keras.layers.Layer):
     def call(self, inputs, training, mask):
         assert isinstance(inputs, list) and len(inputs) == 4
         state, halting_probability, remainders, n_updates = inputs
-        self.halt_threshold = tf.constant(1 - self.halt_epsilon, dtype=tf.float32)
+        self.halt_threshold = tf.constant(1.0 - self.halt_epsilon, dtype=tf.float32)
         p = self.ponder_kernel(state) # (batch_size, seq_len, 1)
         p = tf.squeeze(p, axis=-1) # (batch_size, seq_len)
         # Mask for inputs which have not halted yet
@@ -607,7 +686,6 @@ class Encoder(tf.keras.layers.Layer):
         halting_probability = tf.zeros(update_shape, name="halting_probability")
         remainders = tf.zeros(update_shape, name="remainder")
         n_updates = tf.zeros(update_shape, name="n_updates")
-        previous_state = tf.zeros_like(state, name="previous_state")
         step = tf.cast(0, dtype=tf.int32)
 
         # define update and halt-condition
@@ -637,26 +715,32 @@ class Encoder(tf.keras.layers.Layer):
           should_continue, update_state,
           (state, step, halting_probability, remainders, n_updates),
           maximum_iterations=self.max_iterations,
-          parallel_iterations=4,
+          parallel_iterations=1,
           swap_memory=False,
           back_prop=training)
-        _act_loss = n_updates + remainders      # (batch_size, sig_len)
+        #_act_loss = n_updates + remainders      # (batch_size, sig_len)
 
         # ponder loss
         if mask is not None:
-            _msk = tf.squeeze(1-mask)   # (batch_size, sig_len)
+            _msk = tf.squeeze(1-mask)   # (batch_size, sig_len), 1.0 on valid steps
             _lengths = tf.reduce_sum(_msk, axis=-1)
-            act_loss = tf.reduce_sum(_act_loss, axis=-1) / _lengths * self.time_penalty_t
-            n_updates_mean = tf.reduce_sum(n_updates * _msk, axis=-1) / _lengths
+            n_updates *= _msk
+            remainders *= _msk
+            act_loss = tf.reduce_sum(n_updates + remainders, axis=-1) / _lengths * self.time_penalty_t # + tf.reduce_sum(remainders, axis=-1) / _lengths
+            n_updates_mean = tf.reduce_sum(n_updates, axis=-1) / _lengths
             n_updates_stdv = tf.sqrt(tf.reduce_sum(tf.square(n_updates - tf.expand_dims(n_updates_mean, axis=-1)) * _msk, axis=-1) / _lengths)
+            remainders_mean = tf.reduce_sum(remainders, axis=-1) / _lengths
         else:
-            act_loss = tf.reduce_mean(_act_loss, axis=-1) * self.time_penalty_t
+            act_loss = tf.reduce_mean(n_updates, axis=-1) * self.time_penalty_t + tf.reduce_mean(remainders, axis=-1)
             n_updates_mean = tf.reduce_mean(n_updates, axis=-1)
             n_updates_stdv = tf.reduce_std(n_updates, axis=-1)
-        self.add_loss(act_loss)
-        tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates_mean))
-        tf.summary.scalar("ponder_stdv_encoder", tf.reduce_mean(n_updates_stdv))
-        #tf.summary.scalar("ponder_loss_encoder", tf.reduce_mean(act_loss))
+            remainders_mean = tf.reduce_mean(remainders, axis=-1)
+        if training:
+            self.add_loss(act_loss)
+            tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates_mean))
+            tf.summary.scalar("ponder_stdv_encoder", tf.reduce_mean(n_updates_stdv))
+            tf.summary.scalar("ponder_remainder_encoder", tf.reduce_mean(remainders_mean))
+            #tf.summary.scalar("ponder_loss_encoder", tf.reduce_mean(act_loss))
         # x.shape == (batch_size, sig_len, d_model)
         return new_state
 
@@ -768,37 +852,41 @@ class Decoder(tf.keras.layers.Layer):
             return tf.reduce_any(
                     tf.logical_and(
                         tf.less(halting_probability, 1.0 - self.halt_epsilon),
-                        tf.less(n_updates, self.max_iterations - 1)))
+                        tf.less(n_updates, self.max_iterations)))
 
         sc = should_continue(state, depth_step, halting_probability, remainders, n_updates, dec_cache)
-        if sc:
-            # Do while loop iterations until predicate above is false.
-            (new_state, depth_step, _, remainders, n_updates, dec_cache) = tf.while_loop(
+        (new_state, depth_step, _, remainders, n_updates, dec_cache) = tf.cond(sc,
+            lambda: tf.while_loop(
               should_continue, update_state,
               (state, depth_step, halting_probability, remainders, n_updates, dec_cache),
               maximum_iterations=self.max_iterations - 1,
-              parallel_iterations=4,
+              parallel_iterations=1,
               swap_memory=False,
-              back_prop=training)
-        else:
-            new_state = state
-        _act_loss = n_updates + remainders      # (batch_size, seq_len)
+              back_prop=training),
+             lambda: (state, depth_step, halting_probability, remainders, n_updates, dec_cache))
+        #_act_loss = n_updates + remainders      # (batch_size, seq_len)
 
         # ponder loss
         if target_padding_mask is not None:
-            _msk = tf.squeeze(1-target_padding_mask)   # (batch_size, seq_len)
+            _msk = tf.squeeze(1-target_padding_mask)   # (batch_size, seq_len), 1.0 on valid steps
             _lengths = tf.reduce_sum(_msk, axis=-1)
-            act_loss = tf.reduce_sum(_act_loss, axis=-1) / _lengths * self.time_penalty_t
-            n_updates_mean = tf.reduce_sum(n_updates * _msk, axis=-1) / _lengths
+            n_updates *= _msk
+            remainders *= _msk
+            act_loss = tf.reduce_sum(n_updates + remainders, axis=-1) / _lengths * self.time_penalty_t # + tf.reduce_sum(remainders, axis=-1) / _lengths
+            n_updates_mean = tf.reduce_sum(n_updates, axis=-1) / _lengths
             n_updates_stdv = tf.sqrt(tf.reduce_sum(tf.square(n_updates - tf.expand_dims(n_updates_mean, axis=-1)) * _msk, axis=-1) / _lengths)
+            remainders_mean = tf.reduce_sum(remainders, axis=-1) / _lengths
         else:
-            act_loss = tf.reduce_mean(_act_loss, axis=-1) * self.time_penalty_t
+            act_loss = tf.reduce_mean(n_updates, axis=-1) * self.time_penalty_t + tf.reduce_mean(remainders, axis=-1)
             n_updates_mean = tf.reduce_mean(n_updates, axis=-1)
             n_updates_stdv = tf.reduce_std(n_updates, axis=-1)
-        #self.add_loss(act_loss)
-        tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates_mean))
-        tf.summary.scalar("ponder_stdv_decoder", tf.reduce_mean(n_updates_stdv))
-        #tf.summary.scalar("ponder_loss_decoder", tf.reduce_mean(act_loss))
+            remainders_mean = tf.reduce_mean(remainders, axis=-1)
+        if training:
+            #self.add_loss(act_loss)
+            tf.summary.scalar("ponder_times_decoder", tf.reduce_mean(n_updates_mean))
+            tf.summary.scalar("ponder_stdv_decoder", tf.reduce_mean(n_updates_stdv))
+            tf.summary.scalar("ponder_remainder_decoder", tf.reduce_mean(remainders_mean))
+            #tf.summary.scalar("ponder_loss_decoder", tf.reduce_mean(act_loss))
         # x.shape == (batch_size, seq_len, d_model)
         return new_state, act_loss, dec_cache
 
@@ -834,7 +922,7 @@ class TransformerLayer(tf.keras.layers.Layer):
         return super(TransformerLayer, self).build(input_shape)
 
     def call(self, inputs, training=True, mask=None):
-        if len(inputs) == 4:    # trainig
+        if len(inputs) == 4:    # training
             input, target, input_lengths, target_lengths = inputs
             input_max = input.shape[1]
             target_max = target.shape[1]
@@ -925,43 +1013,12 @@ class TransformerLayer(tf.keras.layers.Layer):
 
 
 
-class SignalCNN(tf.keras.Model):
-    def __init__(self, hparams={}, **kwargs):
-        super(SignalCNN, self).__init__(**kwargs)
-        self.d_model = hparams.get("d_model") or 128
-        self.kernel_size = hparams.get("cnn_kernel") or 8
-        self.pool_stride = hparams.get("cnn_pool_stride") or 1
-        self.pool_size = hparams.get("cnn_pool_size") or 3
-        self.cnn1 = tf.keras.layers.SeparableConv1D(self.d_model, self.kernel_size,
-            strides=1,
-            padding='same',
-            activation=tf.nn.relu,
-            data_format='channels_last')
-        self.cnn2 = tf.keras.layers.SeparableConv1D(self.d_model, self.kernel_size,
-            strides=1,
-            padding='same',
-            activation=tf.nn.relu,
-            data_format='channels_last')
-        self.pool = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
-            strides=self.pool_stride,
-            padding='same',
-            data_format='channels_last')
-        self.norm = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-
-    def call(self, input):
-        cnn1 = self.cnn1(input)
-        cnn2 = self.cnn2(cnn1)
-        output = self.norm(self.pool(cnn1 + cnn2))
-        return output
-
-
-
 
 class Transformer(tf.keras.Model):
     def __init__(self, hparams={}, **kwargs):
         super(Transformer, self).__init__(**kwargs)
         self.strides = hparams.get("cnn_pool_stride") or 1
-        self.signal_cnn = SignalCNN(hparams)
+        self.signal_cnn = SignalFeatureCNN(hparams)
         self.transformer_layer = TransformerLayer(hparams)
 
     def call(self, inputs, training=True, mask=None):

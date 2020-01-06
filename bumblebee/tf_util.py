@@ -39,6 +39,29 @@ from util import pore_model
 
 
 
+def positional_encoding(seq_len, depth, d_model,
+                        max_timescale=10000, random_shift=False):
+    def get_angles(pos, j, max_timescale):
+        angle_rates = 1 / np.power(max_timescale,
+                                   (2 * (j//2)) / np.float32(d_model))
+        return pos * angle_rates
+    j = np.arange(d_model)[np.newaxis, np.newaxis, :]   # (1, 1, d_model)
+    pos_rads = get_angles(np.arange(seq_len)[np.newaxis, :, np.newaxis], j, max_timescale)
+    #depth_rads = get_angles(np.arange(depth)[:, np.newaxis, np.newaxis],
+    #                        np.arange(d_model)[np.newaxis, np.newaxis, :])
+    #depth_rads = get_angles(np.logspace(0, np.log10(max_timescale), depth)[:, np.newaxis, np.newaxis], j)
+    depth_rads = get_angles(np.arange(depth)[:, np.newaxis, np.newaxis], j, depth)
+    rads = pos_rads + depth_rads
+    # apply sin to even indices in the array; 2i
+    rads[:, 0::2, :] = np.sin(pos_rads[:, 0::2, :]) + np.sin(depth_rads[:, :, :])
+    # apply cos to odd indices in the array; 2i+1
+    rads[:, 1::2, :] = np.cos(pos_rads[:, 1::2, :]) + np.cos(depth_rads[:, :, :])
+    pos_encoding = rads[np.newaxis, ...]
+    return tf.constant(tf.cast(pos_encoding, dtype=tf.float32)) # (1, depth, seq_len, d_model)
+
+
+
+
 def decode_sequence(logits, alphabet='ACGT'):
     return ''.join([alphabet[i] if i < len(alphabet) else '' for i in logits])
 

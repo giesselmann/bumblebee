@@ -66,7 +66,7 @@ class tf_data_basecalling():
                     tf.io.parse_tensor(example['signal'][0], tf.float16),
                     tf.float32),
                 axis=-1)
-        seq_len = tf.cast(tf.expand_dims(tf.size(seq), axis=-1) - 1, tf.int32)
+        seq_len = tf.cast(tf.expand_dims(tf.size(seq), axis=-1), tf.int32)
         sig_len = tf.cast(tf.expand_dims(tf.size(sig), axis=-1), tf.int32)
         return ((sig, sig_len), (seq, seq_len))
 
@@ -84,7 +84,7 @@ class tf_data_basecalling():
         ds_train = (ds_train
                     .filter(self.tf_filter)
                     .prefetch(minibatch_size * 64)
-                    .shuffle(minibatch_size * 128) # 1024
+                    .shuffle(minibatch_size * 512) # 1024
                     .padded_batch(minibatch_size,
                         padded_shapes=(([self.input_max_len, 1], [1,]), ([self.target_max_len,], [1,])),
                         drop_remainder=True)
@@ -103,3 +103,56 @@ class tf_data_basecalling():
                         drop_remainder=True)
                     .repeat())
         return ds_test
+
+
+
+
+if __name__ == "__main__":
+    import os, argparse
+    import matplotlib.pyplot as plt
+    from util import pore_model
+    from tf_util import decode_sequence
+    parser = argparse.ArgumentParser(description="tf_data")
+    parser.add_argument("records", help="TF record output prefix")
+    parser.add_argument("--minibatch_size", type=int, default=64, help="TF records per file")
+    parser.add_argument("--batches_train", type=int, default=10000, help="Training batches")
+    parser.add_argument("--batches_val", type=int, default=1000, help="Validation batches")
+    parser.add_argument("--model", help="Pore model for plots")
+    args = parser.parse_args()
+
+    if args.model:
+        pm = pore_model(args.model)
+    else:
+        pm = None
+
+    # tfRecord files
+    record_files = [os.path.join(dirpath, f) for dirpath, _, files
+                        in os.walk(args.records) for f in files if f.endswith('.tfrec')]
+
+    val_rate = args.batches_train // args.batches_val
+    val_split = int(max(1, args.batches_val / args.batches_train * len(record_files)))
+    test_files = record_files[:val_split]
+    train_files = record_files[val_split:]
+
+    print("Training files {}".format(len(train_files)))
+    print("Test files {}".format(len(test_files)))
+
+    tf_data = tf_data_basecalling(alphabet='ACGT', use_sos=False, use_eos=False,
+                        input_min_len=500, input_max_len=1000,
+                        target_min_len=50, target_max_len=100)
+    tf_data_train = tf_data.get_ds_train(train_files, minibatch_size=args.minibatch_size)
+    tf_data_test = tf_data.get_ds_test(test_files, minibatch_size=args.minibatch_size)
+
+    tf_data_train_iter = iter(tf_data_train)
+    tf_data_test_iter = iter(tf_data_test)
+
+    for batch in tf_data_train_iter:
+        if pm:
+            input, target = batch
+            input_seq, input_len = input
+            target_seq, target_len = target
+            sequence = decode_sequence(target_seq[0][:target_len[0].numpy()[0]])
+            f, ax = plt.subplots(2)
+            ax[0].plot(pm.generate_signal(sequence, samples=None), 'k-')
+            ax[1].plot(input_seq[0][:input_len[0].numpy()[0]].numpy(), 'b-')
+            plt.show()

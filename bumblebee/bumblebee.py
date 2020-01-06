@@ -126,7 +126,7 @@ predict     Predict sequence from raw fast5
         ds_train = (ds_train
                     .filter(tf_filter)
                     .prefetch(args.minibatch_size * 64)
-                    .shuffle(args.minibatch_size * 128) # 1024
+                    .shuffle(args.minibatch_size * 512) # 1024
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len,], [1,], [1,]), [target_max_len,]),
                         drop_remainder=True)
@@ -149,36 +149,36 @@ predict     Predict sequence from raw fast5
                 transformer_hparams = yaml.safe_load(fp)
         else:
             transformer_hparams = {'d_output' : d_output,
-                               'target_max_len' : target_max_len,
-                               'disc_min_acc' : 0.70,
-                               'd_model' : 400,
-                               'cnn_kernel' : 32,
-                               'cnn_pool_size' : 6,
-                               'cnn_pool_stride' : 4,
-                               'dff' : 1600,
-                               'nff' : 6,
-                               #'dff_type' : 'point_wise' or 'convolution' or 'separable_convolution'
-                               'encoder_dff_type' : 'separable_convolution',
+                               'd_model' : 256,
+                               'cnn_kernel' : 56,
+                               'cnn_pool_size' : 8,
+                               'cnn_pool_stride' : 8,
+                               'dff' : 1024,
+                               'nff' : 3,
+                               'encoder_nff' : 2,
+                               'decoder_nff' : 4,
+                               #'dff_type' : 'point_wise' or 'convolution' or 'separable_convolution' or 'inception'
+                               'encoder_dff_type' : 'inception',
                                'decoder_dff_type' : 'point_wise',
                                #'dff_filter_width' : 16,
-                               'encoder_dff_filter_width' : 32,
-                               'encoder_dff_pool_size' : 5,
+                               'encoder_dff_filter_width' : 24,
+                               'encoder_dff_pool_size' : 4,
                                #'decoder_dff_filter_width' : 32,
                                'num_heads' : 8,
                                'encoder_max_iterations' : 8,   # 14
-                               'decoder_max_iterations' : 5,
-                               'encoder_time_scale' : 10000,
-                               'decoder_time_scale' : 10000,
+                               'decoder_max_iterations' : 16,
+                               'encoder_time_scale' : 5000,
+                               'decoder_time_scale' : 5000,
                                'random_shift' : False,
-                               'ponder_bias_init' : 5.0,
+                               'ponder_bias_init' : 1.0,
                                #'act_type' : 'separable_convolution',
                                'encoder_act_type' : 'point_wise',
                                'decoder_act_type' : 'point_wise',
-                               'act_dff' : 64,
+                               'act_dff' : 8,
                                #'act_conv_filter' : 5,
-                               'encoder_time_penalty' : 0.01,
-                               'decoder_time_penalty' : 0.01,
-                               'input_memory_comp' : 5,
+                               'encoder_time_penalty' : 0.05,
+                               'decoder_time_penalty' : 0.05,
+                               'input_memory_comp' : None,
                                'target_memory_comp' : None
                                }
             os.makedirs(os.path.dirname(transformer_hparams_file), exist_ok=True)
@@ -198,9 +198,7 @@ predict     Predict sequence from raw fast5
 
         with strategy.scope(), summary_writer.as_default():
             tf_lrs = WarmupLRS(transformer_hparams.get('d_model'), warmup_steps=8000)
-            pf_lrs = WarmupLRS(transformer_hparams.get('d_model'), warmup_steps=2000, offset=30000)
             tf_optimizer = tf.keras.optimizers.Adam(tf_lrs, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
-            pf_optimizer = tf.keras.optimizers.Adam(pf_lrs, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
             cat_cross_entropy = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
             cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True, reduction='none')
             # Transformer loss function
@@ -225,39 +223,18 @@ predict     Predict sequence from raw fast5
                 return (tf.nn.compute_average_loss(loss_, global_batch_size=args.minibatch_size),
                         eos_acc)
 
-            # fool discriminator with free-run output
-            def tf_fool_function(fr_class, mask):
-                mask = mask * tf.reduce_sum(mask, axis=-1, keepdims=True)
-                mask /= tf.cast(tf.size(mask), tf.float32)
-                loss_ = cross_entropy(tf.ones_like(fr_class), fr_class, sample_weight=mask)
-                return tf.nn.compute_average_loss(loss_, global_batch_size=args.minibatch_size)
-
-            # Discriminator loss function
-            def pf_loss_function(tf_class, fr_class):
-                tf_loss = cross_entropy(tf.ones_like(tf_class), tf_class)
-                fr_loss = cross_entropy(tf.zeros_like(fr_class), fr_class)
-                loss_ = tf_loss + fr_loss
-                return tf.nn.compute_average_loss(loss_, global_batch_size=args.minibatch_size)
-
             train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
             test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
             eos_accuracy = tf.keras.metrics.Mean(name='eos_accuracy')
-            pf_accuracy = tf.keras.metrics.BinaryAccuracy(name='prof_accuracy', threshold=0.5)
 
             transformer = Transformer(hparams=transformer_hparams, name='Transformer')
-            discriminator = Discriminator(hparams=transformer_hparams, name='Discriminator')
 
-            tf_checkpoint = tf.train.Checkpoint(tf_optimizer=tf_optimizer, transformer=transformer)
-            pf_checkpoint = tf.train.Checkpoint(pf_optimizer=pf_optimizer, discriminator=discriminator)
+            tf_checkpoint = tf.train.Checkpoint(optimizer=tf_optimizer, transformer=transformer)
             tf_ckpt_manager = tf.train.CheckpointManager(tf_checkpoint, os.path.join(checkpoint_dir, 'transformer'), max_to_keep=5)
-            pf_ckpt_manager = tf.train.CheckpointManager(pf_checkpoint, os.path.join(checkpoint_dir, 'discriminator'), max_to_keep=5)
 
             if tf_ckpt_manager.latest_checkpoint:
                 tf_checkpoint.restore(tf_ckpt_manager.latest_checkpoint)
                 print('Latest transformer checkpoint restored!!')
-            if pf_ckpt_manager.latest_checkpoint:
-                pf_checkpoint.restore(pf_ckpt_manager.latest_checkpoint)
-                print('Latest discriminator checkpoint restored!!')
 
             def train_step(inputs):
                 input, target = inputs
@@ -266,46 +243,16 @@ predict     Predict sequence from raw fast5
                 # Transformer gradient
                 with tf.GradientTape() as tape:
                     tf_predictions, _, tf_decoder_state, _dec_loss = transformer(input, training=True)
-                    fr_predictions, fr_target_lengths, fr_decoder_state, _ = tf.cond(
-                                train_accuracy.result() >= tf.cast(transformer_hparams.get('disc_min_acc'), tf.float32),
-                            lambda: transformer([input_data, input_lengths], training=True),
-                            lambda: (tf_predictions, target_lengths, tf_decoder_state, _dec_loss))
                     tf_loss, eos_acc = tf_loss_function(target, tf_predictions, target_lengths, mask)
                     dec_loss = tf.nn.compute_average_loss(_dec_loss, global_batch_size=args.minibatch_size)
-                    #fr_mask = tf.sequence_mask(tf.squeeze(fr_target_lengths), target_max_len, dtype=tf.float32)
-                    #fr_loss, _ = tf_loss_function(target, fr_predictions, fr_target_lengths, fr_mask)
-                    # (batch_size, target_seq_len, 1)
-                    fr_class = discriminator(tf.concat([fr_predictions,
-                                                        fr_decoder_state], axis=-1), training=False)
-                    #tf_class_loss = tf_fool_function(tf_class, mask)
-                    fr_class_loss = tf_fool_function(fr_class, mask)
-                    fr_class_loss = tf.cond(
-                                        tf.logical_and(
-                                           pf_accuracy.result() >= tf.cast(transformer_hparams.get('disc_min_acc'), tf.float32),
-                                           train_accuracy.result() >= tf.cast(transformer_hparams.get('disc_min_acc'), tf.float32)),
-                                        lambda: fr_class_loss,
-                                        lambda: fr_class_loss * 0)
-                tf_gradients = tape.gradient([tf_loss, fr_class_loss, dec_loss], transformer.trainable_variables)
-
-                # Discriminator gradient
-                with tf.GradientTape() as tape:
-                    tf_class = discriminator(tf.concat([tf_predictions,
-                                                        tf_decoder_state], axis=-1), training=True)
-                    fr_class = discriminator(tf.concat([fr_predictions,
-                                                        fr_decoder_state], axis=-1), training=True)
-                    pf_loss = pf_loss_function(tf_class, fr_class)
-                pf_gradients = tape.gradient(pf_loss, discriminator.trainable_variables)
+                    enc_loss = tf.nn.compute_average_loss(transformer.losses, global_batch_size=args.minibatch_size)
+                tf_gradients = tape.gradient([tf_loss, enc_loss, dec_loss], transformer.trainable_variables)
                 # Apply gradients
                 tf_optimizer.apply_gradients(zip(tf_gradients, transformer.trainable_variables))
-                pf_optimizer.apply_gradients(zip(pf_gradients, discriminator.trainable_variables))
                 # reset and update accuracies
-                pf_accuracy.reset_states()
-                train_accuracy.reset_states()
                 train_accuracy.update_state(target, tf_predictions, mask)
-                pf_accuracy.update_state(tf.ones_like(tf_class), tf_class)
-                pf_accuracy.update_state(tf.zeros_like(fr_class), fr_class)
                 eos_accuracy.update_state(eos_acc)
-                return tf_loss, pf_loss
+                return tf_loss
 
             def test_step(inputs):
                 input, target = inputs
@@ -320,9 +267,8 @@ predict     Predict sequence from raw fast5
             # with the distributed input.
             @tf.function
             def distributed_train_step(dataset_inputs):
-                per_replica_tf_losses, per_replica_pf_losses = strategy.experimental_run_v2(train_step, args=(dataset_inputs,))
-                return (strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_tf_losses, axis=None),
-                        strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_pf_losses, axis=None))
+                per_replica_tf_losses = strategy.experimental_run_v2(train_step, args=(dataset_inputs,))
+                return strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_tf_losses, axis=None)
 
             @tf.function
             def distributed_test_step(dataset_inputs):
@@ -338,32 +284,26 @@ predict     Predict sequence from raw fast5
                 for batch in tqdm(range(args.batches_train), desc='Training', ncols=0):
                     tf.summary.experimental.set_step(tf_optimizer.iterations)
                     batch_input = next(ds_train_dist_iter)
-                    tf_loss, pf_loss = distributed_train_step(batch_input)
+                    tf_loss = distributed_train_step(batch_input)
                     if epoch == 0 and batch == 0:
                         print("========== Transformer model ==========")
                         transformer.summary()
-                        print("")
-                        print("========== Discriminator model ==========")
-                        discriminator.summary()
                     if tf_loss <= max(best_losses):
                         tf_ckpt_manager.save()
-                        pf_ckpt_manager.save()
                         best_losses[best_losses.index(max(best_losses))] = tf_loss
                     num_batches += 1
                     total_loss += tf_loss
                     train_loss = total_loss / num_batches
                     tf.summary.scalar("loss", tf_loss)
-                    tf.summary.scalar("loss_disc", pf_loss)
-                    tf.summary.scalar("lr_tf", tf_lrs(tf_optimizer.iterations.numpy().astype(np.float32)))
-                    tf.summary.scalar("lr_pf", pf_lrs(pf_optimizer.iterations.numpy().astype(np.float32)))
+                    tf.summary.scalar("lr", tf_lrs(tf_optimizer.iterations.numpy().astype(np.float32)))
                     if batch % val_rate == 0:
                         batch_input = next(ds_test_dist_iter)
                         test_loss = distributed_test_step(batch_input)
                         tf.summary.scalar("loss_val", test_loss)
                         tf.summary.scalar('acc_train', train_accuracy.result())
-                        tf.summary.scalar("acc_disc", pf_accuracy.result())
                         tf.summary.scalar("acc_val", test_accuracy.result())
                         tf.summary.scalar("acc_eos", eos_accuracy.result())
+                        train_accuracy.reset_states()
                         test_accuracy.reset_states()
                         eos_accuracy.reset_states()
                 print("Epoch {}: train loss: {}".format(epoch, train_loss))
@@ -478,6 +418,7 @@ predict     Predict sequence from raw fast5
             ret = []
             input_data, target_data, input_lengths, _target_lengths = input
             predicted_lengths = predicted_lengths if predicted_lengths is not None else _target_lengths
+            print(len(predicted_lengths))
             for target, target_length, prediction, predicted_length in zip(target_data, _target_lengths, predictions, predicted_lengths):
                 logits = tf.argmax(prediction, axis=-1)
                 target_sequence = decode_sequence(target[1:target_length[0]])
@@ -492,33 +433,43 @@ predict     Predict sequence from raw fast5
                 acc = match_exp.count('|') / len(match_exp) if len(match_exp) else 0.0
                 yield (acc, ref_exp, match_exp, res_exp)
 
-        @tf.function
+        #@tf.function
         def validate_batch(input):
-            predictions, _ = transformer(input)
+            # input_data, target_data, input_lengths, target_lengths = input
+            predictions, _, _, _ = transformer(input, training=False)
             return predictions
 
         @tf.function
-        def predict_batch(input):
-            predictions, target_lengths, _ = transformer(input)
+        def predict_batch_v1(input):
+            # input_data, target_data, input_lengths, target_lengths = input
+            pass
+
+        @tf.function
+        def predict_batch_v2(input):
+            # input_data, input_lengths = input
+            predictions, target_lengths, _, _ = transformer(input, training=False)
             return predictions, target_lengths
 
         transformer_hparams['target_max_len'] = target_max_len + 2
         transformer = Transformer(hparams=transformer_hparams)
         input, target = next(iter(ds_val))
         input_data, target_data, input_lengths, target_lengths = input
+        print("init")
         predictions = validate_batch(input)
         transformer.load_weights(args.weights)
+        print("validate")
         predictions = validate_batch(input)
+        print("decode")
         with open('algn_val.txt', 'w') as fp:
             for acc, ref_exp, match_exp, res_exp in decode_predictions(input, predictions):
                 print('@seq {0:.2f}'.format(acc), file=fp)
                 print(ref_exp, file=fp)
                 print(match_exp, file=fp)
                 print(res_exp, file=fp)
-
+        exit(0)
         #input, input_lengths, target_max = inputs
         t0 = timeit.default_timer()
-        predictions, target_lengths = predict_batch((input_data, input_lengths))
+        predictions, target_lengths = predict_batch_v2((input_data, input_lengths))
         t1 = timeit.default_timer()
         print("T {:.3f}".format(t1-t0))
         with open("algn_test.txt", 'w') as fp:

@@ -28,10 +28,12 @@
 import os, sys, argparse
 import yaml
 import random
+import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
 from tf_data import tf_data_basecalling
 from tf_util import WarmupLRS
+from tf_models import OptimusPrime
 
 
 
@@ -68,11 +70,11 @@ predict     Predict sequence from raw fast5
         parser.add_argument("--gpus", nargs='+', type=int, default=[], help="GPUs to use")
         args = parser.parse_args(argv)
 
+        #tf.config.experimental_run_functions_eagerly(True)
+
         # Constants
         alphabet = "ACGT"
-
-        # Model
-        d_output = len(alphabet)
+        d_output = len(alphabet) + 1    # alphabet + blank label
 
         # tfRecord files
         record_files = [os.path.join(dirpath, f) for dirpath, _, files
@@ -90,13 +92,22 @@ predict     Predict sequence from raw fast5
             with open(hparams_file, 'r') as fp:
                 hparams = yaml.safe_load(fp)
         else:
-            hparams = { 'd_model' : 16,
+            hparams = {
+                        'd_model' : 512,
                         'd_output' : d_output,
                         'cnn_kernel' : 32,
                         'cnn_pool_size' : 6,
-                        'cnn_pool_stride' : 4,
-                        'target_max_len' : target_max_len
-                       }
+                        'cnn_pool_stride' : 5,
+                        'dff' : 2048,
+                        'nff' : 2,
+                        'ff_filter' : 32,
+                        'ff_pool_size' : 3,
+                        'act_type' : 'point_wise',
+                        'act_dff' : 32,
+                        'ponder_bias_init' : 2.0,
+                        'max_iterations' : 6,
+                        'time_penalty' : 0.01
+                      }
             os.makedirs(os.path.dirname(hparams_file), exist_ok=True)
             with open(hparams_file, 'w') as fp:
                 print(yaml.dump(hparams), file=fp)
@@ -105,7 +116,7 @@ predict     Predict sequence from raw fast5
                             input_min_len=args.input_min_len, input_max_len=args.input_max_len,
                             target_min_len=args.target_min_len, target_max_len=args.target_max_len)
         tf_data_train = tf_data.get_ds_train(train_files, minibatch_size=args.minibatch_size)
-        tf_data_test = tf_data.get_ds_train(test_files, minibatch_size=args.minibatch_size)
+        tf_data_test = tf_data.get_ds_test(test_files, minibatch_size=args.minibatch_size)
 
         strategy = tf.distribute.MirroredStrategy(devices=['/gpu:' + str(i) for i in args.gpus] if args.gpus else ['/cpu:0'])
 
@@ -119,25 +130,52 @@ predict     Predict sequence from raw fast5
         summary_writer = tf.summary.create_file_writer(summary_dir)
 
         with strategy.scope(), summary_writer.as_default():
-            lrs = WarmupLRS(hparams.get('d_model'), warmup_steps=8000)
-            checkpoint = tf.train.Checkpoint(tf_optimizer=optimizer, model=optimus)
+            lrs = WarmupLRS(hparams.get('dff'), warmup_steps=1)
+            #optimizer = tf.keras.optimizers.Adam(lrs, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
+            #optimizer = tf.keras.optimizers.SGD(lrs, momentum=0.9, clipnorm=2.0, nesterov=True)
+            optimizer = tf.keras.optimizers.RMSprop(0.0001, momentum=0.9, clipnorm=2.0)
+            optimus = OptimusPrime(hparams=hparams, name='OptimusPrime')
+            checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=optimus)
             ckpt_manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, max_to_keep=5)
             if ckpt_manager.latest_checkpoint:
                 checkpoint.restore(ckpt_manager.latest_checkpoint)
                 print('Latest checkpoint restored!!')
 
+            edit_train = tf.keras.metrics.Mean(name='edit distance training')
+            edit_test = tf.keras.metrics.Mean(name='edit distance test')
+
             def train_step(inputs):
                 input, target = inputs
                 input_seq, input_len = input
                 target_seq, target_len = target
+                with tf.GradientTape() as tape:
+                    predictions, pred_len, act_loss = optimus(input, training=True)
+                    loss_ = tf.nn.ctc_loss(target_seq, predictions, tf.squeeze(target_len), pred_len,
+                                           logits_time_major=False, blank_index=-1)
+                loss = loss_ / tf.cast(pred_len, loss_.dtype) + act_loss
+                gradients = tape.gradient([loss_, act_loss], optimus.trainable_variables)
+                optimizer.apply_gradients(zip(gradients, optimus.trainable_variables))
+                #decoded, _ = tf.nn.ctc_greedy_decoder(tf.transpose(predictions, [1,0,2]), pred_len)
+                #target = tf.sparse.from_dense((target_seq + 1) * tf.sequence_mask(tf.squeeze(target_len), args.target_max_len, dtype=target_seq.dtype))
+                #target = tf.sparse.SparseTensor(target.indices, target.values - 1, target.dense_shape)
+                #dist = tf.edit_distance(tf.cast(decoded[0], target_seq.dtype), target, normalize=True)
+                #edit_train.update_state(dist)
+                return tf.nn.compute_average_loss(loss, global_batch_size=args.minibatch_size)
 
             def test_step(inputs):
                 input, target = inputs
                 input_seq, input_len = input
                 target_seq, target_len = target
-                predictions = optimus(input, training=False)
-                t_loss = loss_function(target_seq, target_len, predictions, input_len)
-                return loss
+                predictions, pred_len, act_loss = optimus(input, training=False)
+                loss_ = tf.nn.ctc_loss(target_seq, predictions, tf.squeeze(target_len), pred_len,
+                                       logits_time_major=False, blank_index=-1)
+                loss = loss_ / tf.cast(pred_len, loss_.dtype) + act_loss
+                #decoded, _ = tf.nn.ctc_greedy_decoder(tf.transpose(predictions, [1,0,2]), pred_len)
+                #target = tf.sparse.from_dense((target_seq + 1) * tf.sequence_mask(tf.squeeze(target_len), args.target_max_len, dtype=target_seq.dtype))
+                #target = tf.sparse.SparseTensor(target.indices, target.values - 1, target.dense_shape)
+                #dist = tf.edit_distance(tf.cast(decoded[0], target_seq.dtype), target, normalize=True)
+                #edit_test.update_state(dist)
+                return tf.nn.compute_average_loss(loss, global_batch_size=args.minibatch_size)
 
             # `experimental_run_v2` replicates the provided computation and runs it
             # with the distributed input.
@@ -172,11 +210,14 @@ predict     Predict sequence from raw fast5
                     train_loss = total_loss / num_batches
                     tf.summary.scalar("loss", loss)
                     tf.summary.scalar("lr", lrs(optimizer.iterations.numpy().astype(np.float32)))
+                    tf.summary.scalar("edit distance training", edit_train.result())
                     if batch % val_rate == 0:
-                        batch_input = next(ds_test_dist_iter)
+                        batch_input = next(tf_data_test_dist_iter)
                         test_loss = distributed_test_step(batch_input)
                         tf.summary.scalar("loss_val", test_loss)
-
+                        tf.summary.scalar("edit distance test", edit_test.result())
+                    edit_train.reset_states()
+                    edit_test.reset_states()
             print("Epoch {}: train loss: {}".format(epoch, train_loss))
 
 
