@@ -175,6 +175,7 @@ class InceptionModule(tf.keras.layers.Layer):
     def get_config(self):
         config = super(InceptionModule, self).get_config()
         config['hparams'] = self.hparams
+        config['padding'] = self.padding
         return config
 
     def compute_output_shape(self, input_shape):
@@ -189,13 +190,13 @@ class InceptionModule(tf.keras.layers.Layer):
         self.conv_x3_reduce = tf.keras.layers.SeparableConv1D(self.filter_x3_reduce, 1, padding=self.padding,
                 data_format='channels_last', activation=tf.nn.relu,
                 kernel_initializer=kernel_init, bias_initializer=bias_init)
-        self.conv_x3 = tf.keras.layers.SeparableConv1D(self.filter_x3, 3, padding=self.padding,
+        self.conv_x3 = tf.keras.layers.SeparableConv1D(self.filter_x3, 5, padding=self.padding,
                 data_format='channels_last', activation=tf.nn.relu,
                 kernel_initializer=kernel_init, bias_initializer=bias_init)
         self.conv_x5_reduce = tf.keras.layers.SeparableConv1D(self.filter_x5_reduce, 1, padding=self.padding,
                 data_format='channels_last', activation=tf.nn.relu,
                 kernel_initializer=kernel_init, bias_initializer=bias_init)
-        self.conv_x5 = tf.keras.layers.SeparableConv1D(self.filter_x5, 5, padding=self.padding,
+        self.conv_x5 = tf.keras.layers.SeparableConv1D(self.filter_x5, 7, padding=self.padding,
                 data_format='channels_last', activation=tf.nn.relu,
                 kernel_initializer=kernel_init, bias_initializer=bias_init)
         self.pool = tf.keras.layers.MaxPool1D(pool_size=3, strides=1, padding=self.padding)
@@ -229,6 +230,7 @@ class InceptionFeedForwardNetwork(tf.keras.layers.Layer):
     def get_config(self):
         config = super(InceptionFeedForwardNetwork, self).get_config()
         config['hparams'] = self.hparams
+        config['padding'] = self.padding
         return config
 
     def compute_output_shape(self, input_shape):
@@ -251,17 +253,20 @@ class InceptionFeedForwardNetwork(tf.keras.layers.Layer):
 
 
 def point_wise_act_network(dff, ponder_bias_init=1.0):
-    return tf.keras.Sequential(
-            [
-            # (batch_size, seq_len, dff)
-            tf.keras.layers.Dense(dff, activation=tf.nn.elu),
-            # (batch_size, seq_len, 1)
-            tf.keras.layers.Dense(1,
-                use_bias=True,
-                bias_initializer=tf.constant_initializer(ponder_bias_init),
-                activation=tf.nn.sigmoid),
-            ]
-        )
+    layers = []
+    if dff:
+        layers += [
+                    # (batch_size, seq_len, dff)
+                    tf.keras.layers.Dense(dff, activation=tf.nn.relu),
+                    ]
+    layers += [
+                # (batch_size, seq_len, 1)
+                tf.keras.layers.Dense(1,
+                    use_bias=True,
+                    bias_initializer=tf.constant_initializer(ponder_bias_init),
+                    activation=tf.nn.sigmoid),
+                ]
+    return tf.keras.Sequential(layers)
 
 
 
@@ -483,7 +488,6 @@ class DecoderLayer(tf.keras.layers.Layer):
         return config
 
     def compute_output_shape(self, input_shape):
-        exit(0)
         assert isinstance(input_shape, list) and (len(input_shape) == 4 or len(input_shape) == 6)
         return input_shape[0]
 
@@ -572,7 +576,7 @@ class ACT(tf.keras.layers.Layer):
         self.halt_epsilon = hparams.get('halt_epsilon') or 0.01
         self.ponder_bias_init = hparams.get('ponder_bias_init') or 1.0
         self.act_type = hparams.get('act_type') or 'point_wise'
-        self.act_dff = hparams.get('act_dff') or 8
+        self.act_dff = hparams.get('act_dff')
         self.act_conv_filter = hparams.get('act_conv_filter') or 4
         self.hparams = hparams.copy()
 
@@ -690,7 +694,7 @@ class Encoder(tf.keras.layers.Layer):
 
         # define update and halt-condition
         def update_state(state, step, halting_probability, remainders, n_updates):
-            transformed_state = state + self.pos_encoding[:,step,:,:]
+            transformed_state = state + tf.gather(self.pos_encoding, step, axis=-3)
             transformed_state = self.enc_layer(transformed_state,
                     training=training, mask=mask)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
@@ -731,7 +735,7 @@ class Encoder(tf.keras.layers.Layer):
             n_updates_stdv = tf.sqrt(tf.reduce_sum(tf.square(n_updates - tf.expand_dims(n_updates_mean, axis=-1)) * _msk, axis=-1) / _lengths)
             remainders_mean = tf.reduce_sum(remainders, axis=-1) / _lengths
         else:
-            act_loss = tf.reduce_mean(n_updates, axis=-1) * self.time_penalty_t + tf.reduce_mean(remainders, axis=-1)
+            act_loss = tf.reduce_mean(n_updates + remainders, axis=-1) * self.time_penalty_t
             n_updates_mean = tf.reduce_mean(n_updates, axis=-1)
             n_updates_stdv = tf.reduce_std(n_updates, axis=-1)
             remainders_mean = tf.reduce_mean(remainders, axis=-1)
@@ -794,6 +798,7 @@ class Decoder(tf.keras.layers.Layer):
             dec_cache = None
         else:
             x, enc_output, input_padding_mask, target_padding_mask, step, dec_cache = input
+            step = None
         # look ahead and dropout masks
         look_ahead_mask = tf.maximum(target_padding_mask, self.look_ahead_mask)
         seq_len = tf.shape(x)[1]
@@ -877,7 +882,7 @@ class Decoder(tf.keras.layers.Layer):
             n_updates_stdv = tf.sqrt(tf.reduce_sum(tf.square(n_updates - tf.expand_dims(n_updates_mean, axis=-1)) * _msk, axis=-1) / _lengths)
             remainders_mean = tf.reduce_sum(remainders, axis=-1) / _lengths
         else:
-            act_loss = tf.reduce_mean(n_updates, axis=-1) * self.time_penalty_t + tf.reduce_mean(remainders, axis=-1)
+            act_loss = tf.reduce_mean(n_updates + remainders, axis=-1) * self.time_penalty_t
             n_updates_mean = tf.reduce_mean(n_updates, axis=-1)
             n_updates_stdv = tf.reduce_std(n_updates, axis=-1)
             remainders_mean = tf.reduce_mean(remainders, axis=-1)

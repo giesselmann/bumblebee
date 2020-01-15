@@ -37,12 +37,12 @@ class SignalFeatureCNN(tf.keras.Model):
         self.kernel_size = hparams.get("cnn_kernel") or 8
         self.pool_stride = hparams.get("cnn_pool_stride") or 1
         self.pool_size = hparams.get("cnn_pool_size") or 3
-        self.cnn1 = tf.keras.layers.SeparableConv1D(self.d_model, self.kernel_size,
+        self.cnn1 = tf.keras.layers.Conv1D(self.d_model, self.kernel_size,
             strides=1,
             padding='same',
             activation=tf.nn.relu,
             data_format='channels_last')
-        self.cnn2 = tf.keras.layers.SeparableConv1D(self.d_model, self.kernel_size,
+        self.cnn2 = tf.keras.layers.Conv1D(self.d_model, self.kernel_size,
             strides=1,
             padding='same',
             activation=tf.nn.relu,

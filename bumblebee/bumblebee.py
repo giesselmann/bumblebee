@@ -149,11 +149,11 @@ predict     Predict sequence from raw fast5
                 transformer_hparams = yaml.safe_load(fp)
         else:
             transformer_hparams = {'d_output' : d_output,
-                               'd_model' : 256,
-                               'cnn_kernel' : 56,
+                               'd_model' : 320,
+                               'cnn_kernel' : 12,
                                'cnn_pool_size' : 8,
                                'cnn_pool_stride' : 8,
-                               'dff' : 1024,
+                               'dff' : 1280,
                                'nff' : 3,
                                'encoder_nff' : 2,
                                'decoder_nff' : 4,
@@ -165,18 +165,18 @@ predict     Predict sequence from raw fast5
                                'encoder_dff_pool_size' : 4,
                                #'decoder_dff_filter_width' : 32,
                                'num_heads' : 8,
-                               'encoder_max_iterations' : 8,   # 14
-                               'decoder_max_iterations' : 16,
-                               'encoder_time_scale' : 5000,
-                               'decoder_time_scale' : 5000,
+                               'encoder_max_iterations' : 6,   # 14
+                               'decoder_max_iterations' : 12,
+                               'encoder_time_scale' : 10000,
+                               'decoder_time_scale' : 10000,
                                'random_shift' : False,
-                               'ponder_bias_init' : 1.0,
+                               'ponder_bias_init' : 0.5,
                                #'act_type' : 'separable_convolution',
                                'encoder_act_type' : 'point_wise',
                                'decoder_act_type' : 'point_wise',
-                               'act_dff' : 8,
+                               'act_dff' : 16,
                                #'act_conv_filter' : 5,
-                               'encoder_time_penalty' : 0.05,
+                               'encoder_time_penalty' : 0.005,
                                'decoder_time_penalty' : 0.05,
                                'input_memory_comp' : None,
                                'target_memory_comp' : None
@@ -245,7 +245,7 @@ predict     Predict sequence from raw fast5
                     tf_predictions, _, tf_decoder_state, _dec_loss = transformer(input, training=True)
                     tf_loss, eos_acc = tf_loss_function(target, tf_predictions, target_lengths, mask)
                     dec_loss = tf.nn.compute_average_loss(_dec_loss, global_batch_size=args.minibatch_size)
-                    enc_loss = tf.nn.compute_average_loss(transformer.losses, global_batch_size=args.minibatch_size)
+                    enc_loss = tf.nn.compute_average_loss(transformer.losses[0], global_batch_size=args.minibatch_size)
                 tf_gradients = tape.gradient([tf_loss, enc_loss, dec_loss], transformer.trainable_variables)
                 # Apply gradients
                 tf_optimizer.apply_gradients(zip(tf_gradients, transformer.trainable_variables))
@@ -418,7 +418,7 @@ predict     Predict sequence from raw fast5
             ret = []
             input_data, target_data, input_lengths, _target_lengths = input
             predicted_lengths = predicted_lengths if predicted_lengths is not None else _target_lengths
-            print(len(predicted_lengths))
+            #print(len(predicted_lengths))
             for target, target_length, prediction, predicted_length in zip(target_data, _target_lengths, predictions, predicted_lengths):
                 logits = tf.argmax(prediction, axis=-1)
                 target_sequence = decode_sequence(target[1:target_length[0]])
@@ -433,7 +433,7 @@ predict     Predict sequence from raw fast5
                 acc = match_exp.count('|') / len(match_exp) if len(match_exp) else 0.0
                 yield (acc, ref_exp, match_exp, res_exp)
 
-        #@tf.function
+        @tf.function
         def validate_batch(input):
             # input_data, target_data, input_lengths, target_lengths = input
             predictions, _, _, _ = transformer(input, training=False)
@@ -457,28 +457,33 @@ predict     Predict sequence from raw fast5
         print("init")
         predictions = validate_batch(input)
         transformer.load_weights(args.weights)
-        print("validate")
+
+        t0 = timeit.default_timer()
         predictions = validate_batch(input)
-        print("decode")
+        t1 = timeit.default_timer()
+        accs = []
         with open('algn_val.txt', 'w') as fp:
             for acc, ref_exp, match_exp, res_exp in decode_predictions(input, predictions):
                 print('@seq {0:.2f}'.format(acc), file=fp)
                 print(ref_exp, file=fp)
                 print(match_exp, file=fp)
                 print(res_exp, file=fp)
-        exit(0)
+                accs.append(acc)
+        print("validation in {:.3f} with {:.2f} mean, {:.2f} median accuracy".format(t1-t0, np.mean(accs), np.median(accs)))
+
         #input, input_lengths, target_max = inputs
         t0 = timeit.default_timer()
         predictions, target_lengths = predict_batch_v2((input_data, input_lengths))
         t1 = timeit.default_timer()
-        print("T {:.3f}".format(t1-t0))
+        accs = []
         with open("algn_test.txt", 'w') as fp:
             for acc, ref_exp, match_exp, res_exp in decode_predictions(input, predictions, predicted_lengths=target_lengths):
                 print('@seq {0:.2f}'.format(acc), file=fp)
                 print(ref_exp, file=fp)
                 print(match_exp, file=fp)
                 print(res_exp, file=fp)
-
+                accs.append(acc)
+        print("prediction in {:.3f} with {:.2f} mean, {:.2f} median accuracy".format(t1-t0, np.mean(accs), np.median(accs)))
         exit(0)
 
 
