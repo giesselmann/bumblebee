@@ -1,0 +1,107 @@
+# CUDA 10.2
+cd /project/miniondev/src/cuda/
+wget http://developer.download.nvidia.com/compute/cuda/10.2/Prod/local_installers/cuda_10.2.89_440.33.01_linux.run
+
+sh cuda_10.2.89_440.33.01_linux.run --help
+sh cuda_10.2.89_440.33.01_linux.run --silent --toolkit --toolkitpath=/project/miniondev/src/cuda/cuda-10.2 --installpath=/project/miniondev/src/cuda/cuda-10.2/ --no-opengl-libs --no-drm --no-man-page
+
+
+
+
+# CuDNN7
+# download CuDNN7 from NVIDIA developer zone (login required)
+cd /project/miniondev/src/cudnn
+
+mkdir -p cudnn7.6.5_cuda10.2 && cd cudnn7.6.5_cuda10.2
+tar -xzvf cudnn-10.2-linux-x64-v7.6.5.32.tgz
+cp cuda/include/* /project/miniondev/src/cuda/cuda-10.2/include/
+cp cuda/lib64/* /project/miniondev/src/cuda/cuda-10.2/lib64/
+
+
+
+
+# Bazel
+cd /project/miniondev/src
+wget https://github.com/bazelbuild/bazel/releases/download/2.0.0/bazel-2.0.0-installer-linux-x86_64.sh
+./bazel-2.0.0-installer-linux-x86_64.sh --prefix=/project/miniondev/
+
+
+
+
+# Tensorflow 2.0 build
+cd /project/miniondev/src/tensorflow
+git pull
+git tag
+git checkout v2.2.0-rc0
+
+
+# check required bazel
+cat configure.py | grep BAZEL
+bazel --version
+
+
+mkdir -p /scratch/local2/giesselm/.cache/
+rm -rf /scratch/local2/giesselm/.cache/bazel
+export TEST_TMPDIR=/scratch/local2/giesselm/.cache
+export LD_LIBRARY_PATH=/project/miniondev/src/cuda/cuda-10.2/extras/CUPTI/lib64:$LD_LIBRARY_PATH
+export PATH=/project/miniondev/bin:/project/miniondev/src/cuda/cuda-10.2/bin:/project/miniondev/src/cuda/cuda-10.2/include:$PATH
+
+
+python3.7 -m venv /project/miniondev/virtual/tf2_build
+source /project/miniondev/virtual/tf2_build/bin/activate
+pip install pip six numpy wheel setuptools mock
+pip install keras_applications --no-deps
+pip install keras_preprocessing --no-deps
+
+
+./configure
+# non defaults:
+# cuda yes
+# cuda 10.2
+# cuda path /project/miniondev/src/cuda/cuda-10.2
+
+bazel build --config=opt --config=cuda --config=v2 //tensorflow/tools/pip_package:build_pip_package
+./bazel-bin/tensorflow/tools/pip_package/build_pip_package /scratch/local2/giesselm/.cache/tensorflow_pkg
+
+cp /scratch/local2/giesselm/.cache/tensorflow_pkg/tensorflow-2.2.0rc0-cp37-cp37m-linux_x86_64.whl /project/miniondev/src/
+deactivate
+
+# delete build environment if not needed anymore
+# rm -rf /project/miniondev/virtual/tf2_build/
+
+
+
+
+# production virtual environment
+python3.7 -m venv /project/miniondev/virtual/tf_gpu2
+
+# modify LD_LIBRARY_PATH in python profile
+nano /project/miniondev/virtual/tf_gpu2/bin/activate
+```
+if [ -n "${_OLD_LD_LIBRARY_PATH:-}" ] ; then
+    LD_LIBRARY_PATH="${_OLD_LD_LIBRARY_PATH:-}"
+    export LD_LIBRARY_PATH
+    unset _OLD_LD_LIBRARY_PATH
+fi
+```
+# and
+```
+_OLD_LD_LIBRARY_PATH="$LD_LIBRARY_PATH"
+LD_LIBRARY_PATH="/project/miniondev/src/cuda/cuda-10.2/lib64/:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH
+```
+
+
+source /project/miniondev/virtual/tf_gpu2/bin/activate
+pip3 install --upgrade pip
+pip3 install edlib tqdm h5py matplotlib pyyaml
+pip3 install /project/miniondev/src/tensorflow-2.2.0rc0-cp37-cp37m-linux_x86_64.whl --no-deps
+
+
+python3
+```
+import tensorflow as tf
+
+assert tf.test.is_gpu_available()
+assert tf.test.is_built_with_cuda()
+```
