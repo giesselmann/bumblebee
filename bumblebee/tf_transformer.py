@@ -35,6 +35,11 @@ from tf_util import positional_encoding
 
 
 
+kernel_initializer = 'he_uniform'
+
+
+
+
 def create_padding_mask(lengths, max_len):
     # mask with 0.0 on valid time steps
     msk = 1 - tf.sequence_mask(lengths, max_len, dtype=tf.float32)
@@ -47,6 +52,7 @@ def create_padding_mask(lengths, max_len):
 
 def create_look_ahead_mask(size):
     mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
+    #mask += tf.eye(size)
     return mask  # (seq_len, seq_len)
 
 
@@ -89,9 +95,19 @@ def scaled_dot_product_attention(q, k, v, mask=None):
 def point_wise_feed_forward_network(d_model, dff, nff=1):
     inner = []
     for _ in range(nff):
-        inner.append(tf.keras.layers.Dense(dff, activation=tf.nn.elu))
+        inner.extend([
+                    tf.keras.layers.Dense(dff,
+                    kernel_initializer='he_uniform',
+                    activation=tf.nn.relu),
+                    tf.keras.layers.LayerNormalization(epsilon=1e-6)
+                    ])
     return tf.keras.Sequential(
-            inner + [tf.keras.layers.Dense(d_model, activation=None)]
+            inner + [
+                    tf.keras.layers.Dense(d_model,
+                            kernel_initializer='glorot_uniform',
+                            activation=None),
+                    #tf.keras.layers.LayerNormalization(epsilon=1e-6)
+                    ]
             )
 
 
@@ -105,9 +121,11 @@ def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, paddin
                     # (batch_size, seq_len, dff)
                     tf.keras.layers.Conv1D(dff, d_filter,
                             padding=padding,
+                            kernel_initializer=kernel_initializer,
                             data_format='channels_last',
-                            activation=tf.nn.elu
+                            activation=tf.nn.relu
                             ),
+                    tf.keras.layers.LayerNormalization(epsilon=1e-6),
                     tf.keras.layers.MaxPool1D(pool_size=pool_size,
                             strides=1,
                             padding='same',
@@ -119,6 +137,7 @@ def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, paddin
             #tf.keras.layers.LayerNormalization(epsilon=1e-6),
             # (batch_size, seq_len, d_model)
             tf.keras.layers.Dense(d_model,
+                    kernel_initializer='glorot_uniform',
                     activation=None),
             #tf.keras.layers.LayerNormalization(epsilon=1e-6)
             ]
@@ -135,9 +154,11 @@ def separable_conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size
                     # (batch_size, seq_len, dff)
                     tf.keras.layers.SeparableConv1D(dff, d_filter,
                             padding=padding,
+                            kernel_initializer=kernel_initializer,
                             data_format='channels_last',
-                            activation=tf.nn.elu
+                            activation=tf.nn.relu
                             ),
+                    tf.keras.layers.LayerNormalization(epsilon=1e-6),
                     tf.keras.layers.MaxPool1D(pool_size=pool_size,
                             strides=1,
                             padding='same',
@@ -150,8 +171,8 @@ def separable_conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size
             #tf.keras.layers.LayerNormalization(epsilon=1e-6),
             # (batch_size, seq_len, d_model)
             tf.keras.layers.Dense(d_model,
+                    kernel_initializer='glorot_uniform',
                     activation=None),
-            #tf.keras.layers.LayerNormalization(epsilon=1e-6)
             ]
         )
 
@@ -238,14 +259,16 @@ class InceptionFeedForwardNetwork(tf.keras.layers.Layer):
 
     def build(self, input_shape):
         self.inception_modules = []
+        self.norm_layer = []
         for _ in range(self.nff):
             self.inception_modules.append(InceptionModule(hparams=self.hparams, padding=self.padding))
-        self.dense = tf.keras.layers.Dense(self.d_model, activation=None)
+            self.norm_layer.append(tf.keras.layers.LayerNormalization(epsilon=1e-6))
+        self.dense = tf.keras.layers.Dense(self.d_model, activation=tf.nn.elu)
         return super(InceptionFeedForwardNetwork, self).build(input_shape)
 
     def call(self, state, training, mask=None):
-        for im in self.inception_modules:
-            state = im(state)
+        for im, nrm in zip(self.inception_modules, self.norm_layer):
+            state = nrm(im(state))
         state = self.dense(state)
         return state
 
@@ -257,11 +280,15 @@ def point_wise_act_network(dff, ponder_bias_init=1.0):
     if dff:
         layers += [
                     # (batch_size, seq_len, dff)
-                    tf.keras.layers.Dense(dff, activation=tf.nn.relu),
+                    tf.keras.layers.Dense(dff,
+                        kernel_initializer='he_uniform',
+                        activation=tf.nn.relu),
+                    tf.keras.layers.LayerNormalization(epsilon=1e-6)
                     ]
     layers += [
                 # (batch_size, seq_len, 1)
                 tf.keras.layers.Dense(1,
+                    kernel_initializer='he_uniform',
                     use_bias=True,
                     bias_initializer=tf.constant_initializer(ponder_bias_init),
                     activation=tf.nn.sigmoid),
@@ -277,11 +304,13 @@ def separable_conv_act_network(dff, d_filter, ponder_bias_init=1.0):
             # (batch_size, seq_len, dff)
             tf.keras.layers.SeparableConv1D(dff, d_filter,
                     padding='causal',   # do not violate timing in decoder
+                    kernel_initializer=kernel_initializer,
                     data_format='channels_last',
-                    activation=tf.nn.elu
+                    activation=tf.nn.relu
                     ),
             # (batch_size, seq_len, 1)
             tf.keras.layers.Dense(1,
+                kernel_initializer=kernel_initializer,
                 use_bias=True,
                 bias_initializer=tf.constant_initializer(ponder_bias_init),
                 activation=tf.nn.sigmoid),
@@ -320,24 +349,35 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         # v, k, q, step, caches
         assert isinstance(input_shape, list) and (len(input_shape) == 3 or len(input_shape) == 5)
         _, _, d_model = input_shape[2]  # q.shape
-        self.wq = tf.keras.layers.Dense(self.d_model)
-        self.wk = tf.keras.layers.Dense(self.d_model)
-        self.wv = tf.keras.layers.Dense(self.d_model)
+        kernel_init = 'glorot_uniform'
+        act = None
+        self.wq = tf.keras.layers.Dense(self.d_model,
+                        activation=act,
+                        kernel_initializer=kernel_init)
+        self.wk = tf.keras.layers.Dense(self.d_model,
+                        activation=act,
+                        kernel_initializer=kernel_init)
+        self.wv = tf.keras.layers.Dense(self.d_model,
+                        activation=act,
+                        kernel_initializer=kernel_init)
         if self.memory_comp:
             self.k_comp = tf.keras.layers.SeparableConv1D(self.d_model,
+                                kernel_initializer=kernel_init,
                                 kernel_size=self.memory_comp,
                                 strides=self.memory_comp,
                                 padding=self.memory_comp_pad,
                                 #activation=tf.nn.leaky_relu,
                                 data_format='channels_last')
             self.v_comp = tf.keras.layers.SeparableConv1D(self.d_model,
+                                kernel_initializer=kernel_init,
                                 kernel_size=self.memory_comp,
                                 strides=self.memory_comp,
                                 padding=self.memory_comp_pad,
                                 #activation=tf.nn.leaky_relu,
                                 data_format='channels_last')
         self.dense = tf.keras.layers.Dense(self.d_model,
-                                activation=None)
+                                kernel_initializer=kernel_init,
+                                activation=tf.nn.tanh)
         return super(MultiHeadAttention, self).build(input_shape)
 
     def split_heads(self, x, seq_len):
@@ -682,7 +722,7 @@ class Encoder(tf.keras.layers.Layer):
 
     def call(self, x, training, mask):
         state = x
-        state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+        #state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         # init ACT
         state_shape_static = state.get_shape() # (batch_size, sig_len, d_model)
         state_slice = slice(0, 2)
@@ -740,13 +780,13 @@ class Encoder(tf.keras.layers.Layer):
             n_updates_stdv = tf.reduce_std(n_updates, axis=-1)
             remainders_mean = tf.reduce_mean(remainders, axis=-1)
         if training:
-            self.add_loss(act_loss)
+            #self.add_loss(act_loss)
             tf.summary.scalar("ponder_times_encoder", tf.reduce_mean(n_updates_mean))
             tf.summary.scalar("ponder_stdv_encoder", tf.reduce_mean(n_updates_stdv))
             tf.summary.scalar("ponder_remainder_encoder", tf.reduce_mean(remainders_mean))
             #tf.summary.scalar("ponder_loss_encoder", tf.reduce_mean(act_loss))
         # x.shape == (batch_size, sig_len, d_model)
-        return new_state
+        return new_state, act_loss
 
 
 
@@ -779,6 +819,7 @@ class Decoder(tf.keras.layers.Layer):
     def build(self, input_shape):
         assert isinstance(input_shape, list) and len(input_shape) == 4
         _, sequence_length = input_shape[0]
+        self.norm_layer = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.pos_encoding = positional_encoding(int(sequence_length),
                                                 self.max_iterations,
                                                 int(self.d_model),
@@ -804,7 +845,8 @@ class Decoder(tf.keras.layers.Layer):
         seq_len = tf.shape(x)[1]
         # dropout/flip and embedding
         state = self.emb_layer(tf.cast(x, tf.int32))
-        state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+        #state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+        state = self.norm_layer(state)
         # init ACT
         # state.shape (batch_size, seq_len, d_model)
         if step is not None:
@@ -923,7 +965,9 @@ class TransformerLayer(tf.keras.layers.Layer):
         self.encoder = Encoder(hparams=self.hparams)
         self.decoder = Decoder(hparams=self.hparams)
         self.d_output_t = tf.cast(self.d_output, tf.int32)
-        self.final_layer = tf.keras.layers.Dense(self.d_output, activation=None, name='Dense')
+        self.final_layer = tf.keras.layers.Dense(self.d_output,
+                kernel_initializer='glorot_uniform', activation=None,
+                name='Dense')
         return super(TransformerLayer, self).build(input_shape)
 
     def call(self, inputs, training=True, mask=None):
@@ -935,7 +979,7 @@ class TransformerLayer(tf.keras.layers.Layer):
             dec_input_padding_mask = create_padding_mask(input_lengths, input_max)
             dec_target_padding_mask = create_padding_mask(target_lengths, target_max)
             # enc_output.shape == # (batch_size, inp_seq_len, d_model)
-            enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
+            enc_output, enc_loss = self.encoder(input, training=training, mask=enc_padding_mask)
             # dec_output.shape == (batch_size, tar_seq_len, d_model)
             dec_output, dec_loss, _ = self.decoder([target, enc_output, dec_input_padding_mask, dec_target_padding_mask],
                     training=training, mask=None)
@@ -951,7 +995,7 @@ class TransformerLayer(tf.keras.layers.Layer):
             # run encoder once
             enc_padding_mask = create_padding_mask(input_lengths, input_max)
             dec_input_padding_mask = create_padding_mask(input_lengths, input_max)
-            enc_output = self.encoder(input, training=training, mask=enc_padding_mask)
+            enc_output, enc_loss = self.encoder(input, training=training, mask=enc_padding_mask)
             target_active = tf.ones(target_lengths.shape, dtype=tf.bool)
             step = tf.cast(0, tf.int32)
 
@@ -1014,7 +1058,7 @@ class TransformerLayer(tf.keras.layers.Layer):
               swap_memory=False,
               back_prop=training)
         #self.add_loss(dec_loss)
-        return predictions, target_lengths, dec_output, dec_loss
+        return predictions, target_lengths, dec_output, dec_loss, enc_loss
 
 
 

@@ -30,6 +30,11 @@ import tensorflow as tf
 
 
 
+kernel_initializer = 'glorot_uniform'
+
+
+
+
 class SignalFeatureCNN(tf.keras.Model):
     def __init__(self, hparams={}, **kwargs):
         super(SignalFeatureCNN, self).__init__(**kwargs)
@@ -38,23 +43,26 @@ class SignalFeatureCNN(tf.keras.Model):
         self.pool_stride = hparams.get("cnn_pool_stride") or 1
         self.pool_size = hparams.get("cnn_pool_size") or 3
         self.cnn1 = tf.keras.layers.Conv1D(self.d_model, self.kernel_size,
+            kernel_initializer=kernel_initializer,
             strides=1,
             padding='same',
-            activation=tf.nn.relu,
+            activation=tf.nn.elu,
             data_format='channels_last')
         self.cnn2 = tf.keras.layers.Conv1D(self.d_model, self.kernel_size,
+            kernel_initializer=kernel_initializer,
             strides=1,
             padding='same',
-            activation=tf.nn.relu,
+            activation=tf.nn.elu,
             data_format='channels_last')
         self.pool = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
             strides=self.pool_stride,
             padding='same',
             data_format='channels_last')
-        self.norm = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.norm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.norm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
 
     def call(self, input):
-        cnn1 = self.cnn1(input)
-        cnn2 = self.cnn2(cnn1)
-        output = self.norm(self.pool(cnn1 + cnn2))
+        inner = self.cnn1(input)
+        inner = self.cnn2(self.norm1(inner))
+        output = self.norm2(self.pool(inner))
         return output

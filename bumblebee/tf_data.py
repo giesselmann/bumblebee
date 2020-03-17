@@ -84,7 +84,7 @@ class tf_data_basecalling():
         ds_train = (ds_train
                     .filter(self.tf_filter)
                     .prefetch(minibatch_size * 64)
-                    .shuffle(minibatch_size * 512) # 1024
+                    .shuffle(minibatch_size * 1024) # 1024
                     .padded_batch(minibatch_size,
                         padded_shapes=(([self.input_max_len, 1], [1,]), ([self.target_max_len,], [1,])),
                         drop_remainder=True)
