@@ -68,6 +68,7 @@ predict     Predict sequence from raw fast5
         parser.add_argument("--minibatch_size", type=int, default=32, help="Minibatch size")
         parser.add_argument("--batches_train", type=int, default=10000, help="Training batches")
         parser.add_argument("--batches_val", type=int, default=1000, help="Validation batches")
+        parser.add_argument("--epochs", type=int, default=1, help="Training epochs")
         parser.add_argument("--gpus", nargs='+', type=int, default=[], help="GPUs to use")
         args = parser.parse_args(argv)
         #tf.config.experimental_run_functions_eagerly(True)
@@ -126,7 +127,7 @@ predict     Predict sequence from raw fast5
         ds_train = (ds_train
                     .filter(tf_filter)
                     .prefetch(args.minibatch_size * 64)
-                    .shuffle(args.minibatch_size * 1024) # 1024
+                    .shuffle(args.minibatch_size * 2048) # 1024
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len,], [1,], [1,]), [target_max_len,]),
                         drop_remainder=True)
@@ -150,35 +151,36 @@ predict     Predict sequence from raw fast5
         else:
             transformer_hparams = {'d_output' : d_output,
                                'd_model' : 256,
-                               'cnn_kernel' : 24,
+                               'n_features' : 64,
+                               'cnn_kernel' : 32,
                                'cnn_pool_size' : 8,
                                'cnn_pool_stride' : 8,
-                               'dff' : 2048,
-                               'nff' : 2,
-                               'encoder_nff' : 2,
-                               'decoder_nff' : 2,
+                               'dff' : 1024,
+                               'nff' : 1,
+                               'encoder_nff' : 2,   # overwrites nff
+                               'decoder_nff' : 2,   # overwrites nff
                                #'dff_type' : 'point_wise' or 'convolution' or 'separable_convolution' or 'inception'
-                               'encoder_dff_type' : 'point_wise',
+                               'encoder_dff_type' : 'separable_convolution',
                                'decoder_dff_type' : 'point_wise',
                                #'dff_filter_width' : 16,
-                               'encoder_dff_filter_width' : 6,
-                               'encoder_dff_pool_size' : 1,
+                               'encoder_dff_filter_width' : 8,
+                               'encoder_dff_pool_size' : 8,
                                #'decoder_dff_filter_width' : 32,
                                'num_heads' : 8,
                                #'mha_qk_equal' : True,
                                'encoder_max_iterations' : 8,   # 14
-                               'decoder_max_iterations' : 16,
-                               'encoder_time_scale' : 10000,
-                               'decoder_time_scale' : 10000,
+                               'decoder_max_iterations' : 8,
+                               'encoder_time_scale' : 2000,
+                               'decoder_time_scale' : 2000,
                                'random_shift' : False,
-                               'ponder_bias_init' : 1.0,
+                               'ponder_bias_init' : 0.0,
                                #'act_type' : 'separable_convolution',
                                'encoder_act_type' : 'point_wise',
                                'decoder_act_type' : 'point_wise',
                                'act_dff' : None,
                                #'act_conv_filter' : 5,
-                               'encoder_time_penalty' : 0.01,
-                               'decoder_time_penalty' : 0.01,
+                               'encoder_time_penalty' : 0.007,
+                               'decoder_time_penalty' : 0.015,
                                'input_memory_comp' : None,
                                'target_memory_comp' : None
                                }
@@ -249,9 +251,9 @@ predict     Predict sequence from raw fast5
                     tf_predictions, _, tf_decoder_state, _dec_loss, _enc_loss = transformer(input, training=True)
                     loss_, loss_mask, eos_acc = tf_loss_function(target, tf_predictions, target_lengths, mask)
                     tf_loss = loss_ + _dec_loss + _enc_loss
-                    loss = tf.nn.compute_average_loss(tf_loss * loss_mask, global_batch_size=args.minibatch_size)
+                    loss = tf.nn.compute_average_loss(tf_loss, global_batch_size=args.minibatch_size)
                 tf_gradients = tape.gradient([loss], transformer.trainable_variables)
-                tf_gradients, _ = tf.clip_by_global_norm(tf_gradients, 5.0)
+                #tf_gradients, _ = tf.clip_by_global_norm(tf_gradients, 10.0)
                 # Apply gradients
                 tf_optimizer.apply_gradients(zip(tf_gradients, transformer.trainable_variables))
                 # reset and update accuracies
@@ -263,7 +265,7 @@ predict     Predict sequence from raw fast5
                 input, target = inputs
                 target_lengths = input[3]
                 mask = tf.sequence_mask(tf.squeeze(target_lengths), target_max_len, dtype=tf.float32)
-                predictions, _, _, _, _ = transformer(input, training=False)
+                predictions = transformer(input, training=False)[0]
                 loss_, _, _ = tf_loss_function(target, predictions, target_lengths, mask)
                 loss = tf.nn.compute_average_loss(loss_, global_batch_size=args.minibatch_size)
                 test_accuracy.update_state(target, predictions, mask)
@@ -284,7 +286,7 @@ predict     Predict sequence from raw fast5
             best_losses = [float("inf")] * 5
             min_steps = 250
             steps = 0
-            for epoch in range(20):
+            for epoch in range(args.epochs):
                 total_loss = 0.0
                 num_batches = 0
                 ds_train_dist_iter = iter(ds_train_dist)

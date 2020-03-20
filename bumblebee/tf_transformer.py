@@ -29,13 +29,13 @@ import timeit
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-from tf_cnn import SignalFeatureCNN
+from tf_cnn import SignalFeatureCNN, SignalFeatureMorph
 from tf_util import positional_encoding
 
 
 
 
-kernel_initializer = 'he_uniform'
+kernel_initializer = 'glorot_uniform'
 
 
 
@@ -97,8 +97,8 @@ def point_wise_feed_forward_network(d_model, dff, nff=1):
     for _ in range(nff):
         inner.extend([
                     tf.keras.layers.Dense(dff,
-                    kernel_initializer='he_uniform',
-                    activation=tf.nn.relu),
+                    kernel_initializer='glorot_uniform',
+                    activation=None),
                     tf.keras.layers.LayerNormalization(epsilon=1e-6)
                     ])
     return tf.keras.Sequential(
@@ -121,9 +121,9 @@ def conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size=3, paddin
                     # (batch_size, seq_len, dff)
                     tf.keras.layers.Conv1D(dff, d_filter,
                             padding=padding,
-                            kernel_initializer=kernel_initializer,
+                            kernel_initializer='glorot_uniform',
                             data_format='channels_last',
-                            activation=tf.nn.relu
+                            activation=None
                             ),
                     tf.keras.layers.LayerNormalization(epsilon=1e-6),
                     tf.keras.layers.MaxPool1D(pool_size=pool_size,
@@ -154,9 +154,9 @@ def separable_conv_feed_forward_network(d_model, dff, d_filter, nff=1, pool_size
                     # (batch_size, seq_len, dff)
                     tf.keras.layers.SeparableConv1D(dff, d_filter,
                             padding=padding,
-                            kernel_initializer=kernel_initializer,
+                            kernel_initializer='glorot_uniform',
                             data_format='channels_last',
-                            activation=tf.nn.relu
+                            activation=None
                             ),
                     tf.keras.layers.LayerNormalization(epsilon=1e-6),
                     tf.keras.layers.MaxPool1D(pool_size=pool_size,
@@ -282,7 +282,7 @@ def point_wise_act_network(dff, ponder_bias_init=1.0):
                     # (batch_size, seq_len, dff)
                     tf.keras.layers.Dense(dff,
                         kernel_initializer='he_uniform',
-                        activation=tf.nn.relu),
+                        activation=None),
                     tf.keras.layers.LayerNormalization(epsilon=1e-6)
                     ]
     layers += [
@@ -304,7 +304,7 @@ def separable_conv_act_network(dff, d_filter, ponder_bias_init=1.0):
             # (batch_size, seq_len, dff)
             tf.keras.layers.SeparableConv1D(dff, d_filter,
                     padding='causal',   # do not violate timing in decoder
-                    kernel_initializer=kernel_initializer,
+                    kernel_initializer='he_uniform',
                     data_format='channels_last',
                     activation=tf.nn.relu
                     ),
@@ -376,8 +376,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
                                 #activation=tf.nn.leaky_relu,
                                 data_format='channels_last')
         self.dense = tf.keras.layers.Dense(self.d_model,
-                                kernel_initializer=kernel_init,
-                                activation=tf.nn.tanh)
+                                kernel_initializer='glorot_uniform',
+                                activation=None)
         return super(MultiHeadAttention, self).build(input_shape)
 
     def split_heads(self, x, seq_len):
@@ -647,10 +647,11 @@ class ACT(tf.keras.layers.Layer):
         return super(ACT, self).build(input_shape)
 
     def call(self, inputs, training, mask):
-        assert isinstance(inputs, list) and len(inputs) == 4
-        state, halting_probability, remainders, n_updates = inputs
+        assert isinstance(inputs, list) and len(inputs) == 5
+        #state, halting_probability, remainders, n_updates = inputs
+        state, previous_state, halting_probability, remainders, n_updates = inputs
         self.halt_threshold = tf.constant(1.0 - self.halt_epsilon, dtype=tf.float32)
-        p = self.ponder_kernel(state) # (batch_size, seq_len, 1)
+        p = self.ponder_kernel(tf.concat([state, previous_state], axis=-1)) # (batch_size, seq_len, 1)
         p = tf.squeeze(p, axis=-1) # (batch_size, seq_len)
         # Mask for inputs which have not halted yet
         still_running = tf.cast(tf.less(halting_probability, 1.0), tf.float32)
@@ -738,7 +739,7 @@ class Encoder(tf.keras.layers.Layer):
             transformed_state = self.enc_layer(transformed_state,
                     training=training, mask=mask)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
-                    [transformed_state, halting_probability, remainders, n_updates],
+                    [transformed_state, state, halting_probability, remainders, n_updates],
                     training=training, mask=mask)
             transformed_state = ((transformed_state * update_weights) +
                                 state * (1 - update_weights))
@@ -819,7 +820,7 @@ class Decoder(tf.keras.layers.Layer):
     def build(self, input_shape):
         assert isinstance(input_shape, list) and len(input_shape) == 4
         _, sequence_length = input_shape[0]
-        self.norm_layer = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        #self.norm_layer = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.pos_encoding = positional_encoding(int(sequence_length),
                                                 self.max_iterations,
                                                 int(self.d_model),
@@ -845,8 +846,8 @@ class Decoder(tf.keras.layers.Layer):
         seq_len = tf.shape(x)[1]
         # dropout/flip and embedding
         state = self.emb_layer(tf.cast(x, tf.int32))
-        #state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
-        state = self.norm_layer(state)
+        state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+        #state = self.norm_layer(state)
         # init ACT
         # state.shape (batch_size, seq_len, d_model)
         if step is not None:
@@ -871,7 +872,7 @@ class Decoder(tf.keras.layers.Layer):
             transformed_state, dec_cache = self.dec_layer([transformed_state, enc_output, look_ahead_mask, input_padding_mask],
                         training=training, mask=mask)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
-                [transformed_state, halting_probability, remainders, n_updates],
+                [transformed_state, state, halting_probability, remainders, n_updates],
                 training=training, mask=target_padding_mask)
             transformed_state = ((transformed_state * update_weights) +
                                 state * (1 - update_weights))
@@ -885,7 +886,7 @@ class Decoder(tf.keras.layers.Layer):
                         [transformed_state, enc_output, look_ahead_mask, input_padding_mask, step, dec_cache],
                         training=training, mask=mask)
             update_weights, halting_probability, remainders, n_updates = self.act_layer(
-                [transformed_state, halting_probability, remainders, n_updates],
+                [transformed_state, state, halting_probability, remainders, n_updates],
                 training=training, mask=target_padding_mask)
             transformed_state = ((transformed_state * update_weights) +
                                 state * (1 - update_weights))
@@ -1067,7 +1068,8 @@ class Transformer(tf.keras.Model):
     def __init__(self, hparams={}, **kwargs):
         super(Transformer, self).__init__(**kwargs)
         self.strides = hparams.get("cnn_pool_stride") or 1
-        self.signal_cnn = SignalFeatureCNN(hparams)
+        self.signal_cnn = SignalFeatureMorph(hparams)
+        self.d_output = hparams.get('d_output') or 6
         self.transformer_layer = TransformerLayer(hparams)
 
     def call(self, inputs, training=True, mask=None):
