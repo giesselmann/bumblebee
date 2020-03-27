@@ -30,6 +30,7 @@ import timeit
 import edlib, random, re
 import numpy as np
 import tensorflow as tf
+from scipy.signal import medfilt
 from tqdm import tqdm
 from util import pore_model
 from tf_transformer import Transformer
@@ -106,10 +107,8 @@ predict     Predict sequence from raw fast5
                     'signal': tf.io.FixedLenFeature(shape=(), dtype=tf.string)})
             seq = tf.py_function(encode_sequence, [example['sequence'][0]], tf.int32)
             sig = tf.expand_dims(
-                    tf.cast(
-                        tf.io.parse_tensor(example['signal'][0], tf.float16),
-                        tf.float32),
-                    axis=-1)
+                        tf.cast(tf.io.parse_tensor(example['signal'][0], tf.float16), tf.float32),
+                        axis=-1)
             seq_len = tf.cast(tf.expand_dims(tf.size(seq), axis=-1) - 1, tf.int32)
             sig_len = tf.cast(tf.expand_dims(tf.size(sig), axis=-1), tf.int32)
             return ((sig, seq[:-1], sig_len, seq_len), seq[1:])
@@ -139,6 +138,7 @@ predict     Predict sequence from raw fast5
         ds_test = (ds_test
                     .filter(tf_filter)
                     .prefetch(args.minibatch_size * 32)
+                    .shuffle(args.minibatch_size * 256)
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len,], [1,], [1,]), [target_max_len,]),
                         drop_remainder=True)
@@ -151,35 +151,34 @@ predict     Predict sequence from raw fast5
         else:
             transformer_hparams = {'d_output' : d_output,
                                'd_model' : 256,
-                               'n_features' : 64,
-                               'cnn_kernel' : 32,
-                               'cnn_pool_size' : 8,
+                               'cnn_features' : 128,
+                               'cnn_kernel' : 24,
+                               'cnn_pool_size' : 16,
                                'cnn_pool_stride' : 8,
                                'dff' : 1024,
                                'nff' : 1,
-                               'encoder_nff' : 2,   # overwrites nff
+                               'encoder_nff' : 1,   # overwrites nff
                                'decoder_nff' : 2,   # overwrites nff
-                               #'dff_type' : 'point_wise' or 'convolution' or 'separable_convolution' or 'inception'
+                               #'dff_type' : 'point_wise' or 'separable_convolution' or 'inception'
                                'encoder_dff_type' : 'separable_convolution',
                                'decoder_dff_type' : 'point_wise',
-                               #'dff_filter_width' : 16,
-                               'encoder_dff_filter_width' : 8,
-                               'encoder_dff_pool_size' : 8,
-                               #'decoder_dff_filter_width' : 32,
+                               #'dff_filter_width' 'dff_pool_size'
+                               'encoder_dff_filter_width' : 16,
+                               'encoder_dff_pool_size' : 4,
                                'num_heads' : 8,
                                #'mha_qk_equal' : True,
                                'encoder_max_iterations' : 8,   # 14
                                'decoder_max_iterations' : 8,
-                               'encoder_time_scale' : 2000,
-                               'decoder_time_scale' : 2000,
+                               'encoder_time_scale' : 10000,
+                               'decoder_time_scale' : 10000,
                                'random_shift' : False,
-                               'ponder_bias_init' : 0.0,
+                               'ponder_bias_init' : 1.0,
                                #'act_type' : 'separable_convolution',
                                'encoder_act_type' : 'point_wise',
                                'decoder_act_type' : 'point_wise',
                                'act_dff' : None,
                                #'act_conv_filter' : 5,
-                               'encoder_time_penalty' : 0.007,
+                               'encoder_time_penalty' : 0.005,
                                'decoder_time_penalty' : 0.015,
                                'input_memory_comp' : None,
                                'target_memory_comp' : None
@@ -248,7 +247,7 @@ predict     Predict sequence from raw fast5
                 mask = tf.sequence_mask(tf.squeeze(target_lengths), target_max_len, dtype=tf.float32)
                 # Transformer gradient
                 with tf.GradientTape() as tape:
-                    tf_predictions, _, tf_decoder_state, _dec_loss, _enc_loss = transformer(input, training=True)
+                    tf_predictions, _, _, _dec_loss, _enc_loss = transformer(input, training=True)
                     loss_, loss_mask, eos_acc = tf_loss_function(target, tf_predictions, target_lengths, mask)
                     tf_loss = loss_ + _dec_loss + _enc_loss
                     loss = tf.nn.compute_average_loss(tf_loss, global_batch_size=args.minibatch_size)
@@ -265,9 +264,10 @@ predict     Predict sequence from raw fast5
                 input, target = inputs
                 target_lengths = input[3]
                 mask = tf.sequence_mask(tf.squeeze(target_lengths), target_max_len, dtype=tf.float32)
-                predictions = transformer(input, training=False)[0]
+                predictions, _, _, _dec_loss, _enc_loss = transformer(input, training=False)
                 loss_, _, _ = tf_loss_function(target, predictions, target_lengths, mask)
-                loss = tf.nn.compute_average_loss(loss_, global_batch_size=args.minibatch_size)
+                tf_loss = loss_ + _dec_loss + _enc_loss
+                loss = tf.nn.compute_average_loss(tf_loss, global_batch_size=args.minibatch_size)
                 test_accuracy.update_state(target, predictions, mask)
                 return loss
 

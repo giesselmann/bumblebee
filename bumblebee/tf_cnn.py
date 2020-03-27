@@ -26,26 +26,56 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import tensorflow as tf
+import numpy as np
 
 
 
 
-kernel_initializer = 'glorot_uniform'
+def opening1d(input, d=3):
+    se = tf.reshape(tf.ones(3), (1, 3, 1))
+    inner = tf.expand_dims(input, axis=-3)
+    strides = [1, 1, 1, 1]
+    dilations = [1, 1, 1, 1]
+    inner = tf.nn.erosion2d(inner, se, strides=strides, padding='SAME', data_format='NHWC', dilations=dilations)
+    inner = tf.nn.dilation2d(inner, se, strides=strides, padding='SAME', data_format='NHWC', dilations=dilations)
+    inner = tf.squeeze(inner, axis=-3)
+    return inner
+
+
+
+
+def closing1d(input, d=3):
+    se = tf.reshape(tf.ones(3), (1, 3, 1))
+    inner = tf.expand_dims(input, axis=-3)
+    strides = [1, 1, 1, 1]
+    dilations = [1, 1, 1, 1]
+    inner = tf.nn.dilation2d(inner, se, strides=strides, padding='SAME', data_format='NHWC', dilations=dilations)
+    inner = tf.nn.erosion2d(inner, se, strides=strides, padding='SAME', data_format='NHWC', dilations=dilations)
+    inner = tf.squeeze(inner, axis=-3)
+    return inner
+
+
+
+
+def smooth1d(input, d=3):
+    return closing1d(opening1d(input, d=d), d=d)
 
 
 
 
 class Morphological(tf.keras.layers.Layer):
-    def __init__(self, hparams={}, mode='opening', d_filter=2, **kwargs):
+    def __init__(self, hparams={}, mode='opening', d_filter=2, trainable=True, **kwargs):
         super(Morphological, self).__init__(**kwargs)
         self.mode = mode
         self.d_filter = d_filter
+        self.trainable = trainable
         self.hparams = hparams.copy()
 
     def get_config(self):
         config = super(Morphological, self).get_config()
         config['mode'] = self.mode
         config['d_filter'] = self.d_filter
+        config['trainable'] = self.trainable
         config['hparams'] = self.hparams
         return config
 
@@ -56,10 +86,10 @@ class Morphological(tf.keras.layers.Layer):
     def build(self, input_shape):
         self.erosion_filters = self.add_weight("{name}_erosion".format(name=self.name),
             shape=(1, self.d_filter, input_shape[-1]),
-            initializer='he_uniform', trainable=True)
+            initializer='glorot_uniform', trainable=self.trainable)
         self.dilation_filters = self.add_weight("{name}_dilation".format(name=self.name),
             shape=(1, self.d_filter, input_shape[-1]),
-            initializer='he_uniform', trainable=True)
+            initializer='glorot_uniform', trainable=self.trainable)
         return super(Morphological, self).build(input_shape)
 
     def call(self, input, training=True, mask=None):
@@ -88,66 +118,63 @@ class Morphological(tf.keras.layers.Layer):
 class SignalFeatureMorph(tf.keras.Model):
     def __init__(self, hparams={}, **kwargs):
         super(SignalFeatureMorph, self).__init__(**kwargs)
-        self.d_filter = [2, 4, 8, 16, 32]
-        self.n_features = hparams.get('n_features') or 1
+        self.cnn_features = hparams.get("cnn_features") or 64
         self.kernel_size = hparams.get("cnn_kernel") or 8
         self.pool_size = hparams.get("cnn_pool_size") or 3
         self.pool_stride = hparams.get("cnn_pool_stride") or 1
         self.d_model = hparams.get('d_model') or 256
-        self.opening_layer1 = [Morphological(hparams=hparams, mode='opening', d_filter=d, name="opening1_{}".format(d)) for d in self.d_filter]
-        self.closing_layer1 = [Morphological(hparams=hparams, mode='closing', d_filter=d, name="closing1_{}".format(d)) for d in self.d_filter]
-        #self.opening_layer2 = [Morphological(hparams=hparams, mode='opening', d_filter=d, name="opening2_{}".format(d)) for d in self.d_filter]
-        #self.closing_layer2 = [Morphological(hparams=hparams, mode='closing', d_filter=d, name="closing2_{}".format(d)) for d in self.d_filter]
-        self.conv_1 = tf.keras.layers.Conv1D(self.d_model // 4, self.kernel_size,
-            kernel_initializer=kernel_initializer,
-            strides=1, padding='same',
-            activation=None,
-            data_format='channels_last')
-        self.conv_2 = tf.keras.layers.Conv1D(self.d_model // 4, self.kernel_size,
-            kernel_initializer=kernel_initializer,
+        # convolutional layer
+        def feature_Conv1D(kernel_size):
+            return tf.keras.layers.SeparableConv1D(self.cnn_features // 4, kernel_size,
+                kernel_initializer='glorot_uniform',
+                strides=1, padding='same',
+                activation=None,
+                data_format='channels_last')
+        self.conv_1a = feature_Conv1D(self.kernel_size // 4)
+        self.conv_1b = feature_Conv1D(self.kernel_size // 3)
+        self.conv_1c = feature_Conv1D(self.kernel_size // 2)
+        self.conv_1d = feature_Conv1D(self.kernel_size)
+        self.norm_layer = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.conv_2 = tf.keras.layers.Conv1D(self.d_model, self.kernel_size,
+            kernel_initializer='glorot_uniform',
             strides=1, padding='same',
             activation=None,
             data_format='channels_last')
         self.conv_3 = tf.keras.layers.SeparableConv1D(self.d_model, self.kernel_size,
-            kernel_initializer=kernel_initializer,
+            kernel_initializer='glorot_uniform',
             strides=1, padding='same',
             activation=None,
             data_format='channels_last')
-        self.norm0 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        self.norm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        self.norm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        self.norm3 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        self.pool1 = tf.keras.layers.MaxPool1D(pool_size=16,
-            strides=1,
-            padding='same',
-            data_format='channels_last')
-        self.pool2 = tf.keras.layers.MaxPool1D(pool_size=16,
-            strides=1,
-            padding='same',
-            data_format='channels_last')
-        self.pool3 = tf.keras.layers.MaxPool1D(pool_size=8,
-            strides=self.pool_stride,
-            padding='same',
-            data_format='channels_last')
+        # pool layer
+        self.pool_1 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
+            strides=2, padding='same', data_format='channels_last')
+        #self.pool_1b = tf.keras.layers.MaxPool1D(pool_size=8,
+        #    strides=self.cnn_features // self.d_model, padding='same', data_format='channels_first')
+        self.pool_2 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size // 2,
+            strides=self.pool_stride // 2, padding='same', data_format='channels_last')
+        self.pool_3 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size // 2,
+            strides=1, padding='same', data_format='channels_last')
+        self.act_layer = tf.keras.layers.Activation(tf.nn.elu)
 
     def call(self, input, training=False):
-        inner = tf.tile(input, [1, 1, self.n_features]) # (batch_size, sig_len, n_features)
-        # smoothing I
-        opened_shards = [layer(inner) for layer in self.opening_layer1]
-        inner = tf.concat([layer(shard) for layer, shard in zip(self.closing_layer1, opened_shards)], axis=-1)
-        # smoothing II
-        #opened_shards = [layer(inner) for layer in self.opening_layer2]
-        #inner = tf.concat([layer(shard) for layer, shard in zip(self.closing_layer2, opened_shards)], axis=-1)
-        inner = self.norm0(inner)
+        #smooth_1 = smooth1d(input, d=5)
+        #smooth_2 = smooth1d(input, d=9)
+        #smooth_3 = smooth1d(input, d=13)
         # convolutional I
-        inner = self.norm1(self.conv_1(inner)) # (batch_size, sig_len, d_model)
-        inner = self.pool1(inner) # (batch_size, sig_len, d_model)
+        inner_1a = self.conv_1a(input)
+        inner_1b = self.conv_1b(input)
+        inner_1c = self.conv_1c(input)
+        inner_1d = self.conv_1d(input)
+        inner = self.norm_layer(tf.concat([inner_1a, inner_1b, inner_1c, inner_1d], axis=-1))
+        #inner = self.act_layer(inner)
+        inner = self.pool_1(inner) # (batch_size, sig_len // 2, cnn_features)
         # convolutional II
-        inner = self.norm2(self.conv_2(inner)) # (batch_size, sig_len, d_model)
-        inner = self.pool2(inner) # (batch_size, sig_len, d_model)
+        inner = self.conv_2(inner) # (batch_size, sig_len, d_model)
+        inner = self.pool_2(inner)
         # convolutional III
-        inner = self.norm3(self.conv_3(inner)) # (batch_size, sig_len, d_model)
-        output = self.pool3(inner) # (batch_size, sig_len, d_model)
+        inner = self.conv_3(inner) # (batch_size, sig_len, d_model)
+        output = self.pool_3(inner)
+        #output = self.act_layer(inner)
         return output
 
 
@@ -160,6 +187,7 @@ class SignalFeatureCNN(tf.keras.Model):
         self.kernel_size = hparams.get("cnn_kernel") or 8
         self.pool_stride = hparams.get("cnn_pool_stride") or 1
         self.pool_size = hparams.get("cnn_pool_size") or 3
+        kernel_initializer = 'glorot_uniform'
         self.cnn1 = tf.keras.layers.Conv1D(self.d_model, self.kernel_size,
             kernel_initializer=kernel_initializer,
             strides=1,
@@ -176,11 +204,11 @@ class SignalFeatureCNN(tf.keras.Model):
             strides=self.pool_stride,
             padding='same',
             data_format='channels_last')
-        self.norm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
-        self.norm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        #self.norm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        #self.norm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
 
-    def call(self, input):
+    def call(self, input, training=True):
         inner = self.cnn1(input)
-        inner = self.cnn2(self.norm1(inner))
-        output = self.norm2(self.pool(inner))
+        inner = self.cnn2(inner) + inner
+        output = self.pool(inner)
         return output
