@@ -1,3 +1,10 @@
+# CUDA 10.1
+cd /project/miniondev/src/cuda/
+wget http://developer.download.nvidia.com/compute/cuda/10.1/Prod/local_installers/cuda_10.1.243_418.87.00_linux.run
+
+sh cuda_10.1.243_418.87.00_linux.run --help
+sh cuda_10.1.243_418.87.00_linux.run --silent --toolkit --toolkitpath=/project/miniondev/src/cuda/cuda-10.1 --installpath=/project/miniondev/src/cuda/cuda-10.1/ --no-opengl-libs --no-drm --no-man-page
+
 # CUDA 10.2
 cd /project/miniondev/src/cuda/
 wget http://developer.download.nvidia.com/compute/cuda/10.2/Prod/local_installers/cuda_10.2.89_440.33.01_linux.run
@@ -11,6 +18,11 @@ sh cuda_10.2.89_440.33.01_linux.run --silent --toolkit --toolkitpath=/project/mi
 # CuDNN7
 # download CuDNN7 from NVIDIA developer zone (login required)
 cd /project/miniondev/src/cudnn
+
+mkdir -p cudnn7.6.5_cuda10.1 && cd cudnn7.6.5_cuda10.1
+tar -xzvf cudnn-10.2-linux-x64-v7.6.5.32.tgz
+cp cuda/include/* /project/miniondev/src/cuda/cuda-10.1/include/
+cp cuda/lib64/* /project/miniondev/src/cuda/cuda-10.1/lib64/
 
 mkdir -p cudnn7.6.5_cuda10.2 && cd cudnn7.6.5_cuda10.2
 tar -xzvf cudnn-10.2-linux-x64-v7.6.5.32.tgz
@@ -44,7 +56,9 @@ mkdir -p /scratch/local2/giesselm/.cache/
 rm -rf /scratch/local2/giesselm/.cache/bazel
 export TEST_TMPDIR=/scratch/local2/giesselm/.cache
 export LD_LIBRARY_PATH=/project/miniondev/src/cuda/cuda-10.2/extras/CUPTI/lib64:$LD_LIBRARY_PATH
-export PATH=/project/miniondev/bin:/project/miniondev/src/cuda/cuda-10.2/bin:/project/miniondev/src/cuda/cuda-10.2/include:$PATH
+export PATH=/project/miniondev/bin:$PATH
+export PATH=/project/miniondev/src/cuda/cuda-10.2/bin:$PATH
+export PATH=/project/miniondev/src/cuda/cuda-10.2/include:$PATH
 
 
 python3.7 -m venv /project/miniondev/virtual/tf2_build
@@ -95,7 +109,7 @@ export LD_LIBRARY_PATH
 source /project/miniondev/virtual/tf_gpu2/bin/activate
 pip3 install --upgrade pip
 pip3 install edlib tqdm h5py matplotlib pyyaml
-pip3 install /project/miniondev/src/tensorflow-2.2.0rc0-cp37-cp37m-linux_x86_64.whl --no-deps
+pip3 install /project/miniondev/src/tensorflow-2.2.0rc0-cp37-cp37m-linux_x86_64.whl --upgrade --no-deps
 
 
 python3
