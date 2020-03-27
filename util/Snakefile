@@ -50,6 +50,13 @@ if hasattr(workflow, "shadow_prefix") and workflow.shadow_prefix:
 
 
 
+def get_tag_barcode(tag):
+    bcs = [config['barcode_map'][bc] for bc in config['barcode_map'].keys() if bc in tag]
+    return bcs[-1]
+
+
+
+
 def get_raw_batch(wildcards):
     prefix = '{raw}/{runname}/reads/{batch}'.format(
         raw=config['storage_data_raw'],
@@ -57,8 +64,13 @@ def get_raw_batch(wildcards):
         batch=wildcards.batch)
     if os.path.isfile(prefix + '.fast5'):
         return prefix + '.fast5'
-    else:
+    elif os.path.isfile(prefix + '.tar'):
         return prefix + '.tar'
+    else:
+        return 'demux/guppy/barcodes/{runname}/{barcode}/{batch}.txt'.format(
+            runname=wildcards.runname,
+            barcode=get_tag_barcode(wildcards.tag),
+            batch=wildcards.batch)
 
 
 
@@ -71,7 +83,8 @@ rule segmentation:
     output:
         tfrec = "events/{aligner, [^.\/]*}/{sequence_workflow}/batches/{tag, [^\/]*}/{runname, [^\/]*}/{batch}.{reference}.tfrec"
     params:
-        format = lambda wildcards, input : os.path.splitext(input.raw)[1]
+        format = lambda wildcards, input : os.path.splitext(input.raw)[1],
+        index = lambda wildcards : '--index ' + os.path.join(config['storage_data_raw'], wildcards.runname, 'reads.fofn')
     threads: 32
     resources:
         mem_mb = lambda wildcards, threads, attempt : int(threads * 2000),
@@ -80,11 +93,7 @@ rule segmentation:
     shell:
         """
         mkdir raw
-        if [ \'{params.format}\' == '.tar' ]; then
-            {config[py_env]}/bin/python3 {config[storage_fast5Index]} extract {input.raw} raw/ --output_format bulk
-        else
-            cp {input.raw} raw/
-        fi
+        {config[py_env]}/bin/python3 {config[storage_fast5Index]} extract {input.raw} raw/ {params.index} --output_format bulk
         /project/minion/bin/samtools view -F 2308 {input.bam} | {config[py_env]}/bin/python3 {config[segmentation_script]} {config[pore_model]} `ls raw/*.fast5` {output.tfrec} --slicer 8 --mapper {threads}
         """
 
@@ -120,4 +129,4 @@ rule tag_tag:
                 reference=wildcards.reference)
             for tag, runnames in config['tag_map'].items() for runname in runnames]
     output:
-        tag = touch("events/{aligner, [^.\/]*}/{sequence_workflow, ((?!batches).)*}/{tag}.{reference}.events")
+        tag = touch("events/{aligner, [^.\/]*}/{sequence_workflow, ((?!batches).)*}/{tag, [^\/]*}.{reference, [^.]*}.events")

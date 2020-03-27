@@ -418,7 +418,7 @@ class sam_parser():
 class signal_slicer():
     def __init__(self, model_file, fast5_file,
                  slice_width=500,
-                 drop_quantile=(0.0, 0.7),
+                 drop_quantile=(0.0, 0.9),
                  buffer_size=128,):
         self.fast5_file = fast5_file
         self.pm = pore_model(model_file)
@@ -465,7 +465,7 @@ class signal_slicer():
 # precise signal alignment using profile HMMs
 class signal_aligner():
     def __init__(self, model_file,
-                 drop_quantile=(0.0, 0.7),
+                 drop_quantile=(0.0, 0.9),
                  buffer_size=128,
                  min_sequence_length=50,
                  max_sequence_length=250,
@@ -621,17 +621,17 @@ if __name__ == '__main__':
     parser.add_argument("--slicer", type=int, default=1, help="Signal slice worker")
     parser.add_argument("--mapper", type=int, default=1, help="Signal alignment worker")
     parser.add_argument("--max_read_length", type=int, default=50000, help="Maximum read length for input")
-    parser.add_argument("--min_seq_length", type=int, default=50, help="Minimum sequence length in training samples")
-    parser.add_argument("--max_seq_length", type=int, default=250, help="Maximum sequence length in training samples")
+    parser.add_argument("--min_seq_length", type=int, default=100, help="Minimum sequence length in training samples")
+    parser.add_argument("--max_seq_length", type=int, default=500, help="Maximum sequence length in training samples")
     args = parser.parse_args()
 
     job_list = [
         (1, sam_parser, [],
-            {'drop_quantile':0.4,
+            {'drop_quantile':0.1,
              'min_sequence_length':1000,
              'max_sequence_length':args.max_read_length}),
         (args.slicer, signal_slicer, [args.model, args.fast5],
-            {'slice_width':args.max_seq_length*2,
+            {'slice_width':args.max_seq_length + 50,
              'buffer_size':64}),
         (args.mapper, signal_aligner, [args.model],
             {'min_sequence_length':args.min_seq_length,
