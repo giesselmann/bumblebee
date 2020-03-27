@@ -157,7 +157,7 @@ predict     Predict sequence from raw fast5
                                'cnn_pool_stride' : 8,
                                'dff' : 1024,
                                'nff' : 1,
-                               'encoder_nff' : 1,   # overwrites nff
+                               'encoder_nff' : 2,   # overwrites nff
                                'decoder_nff' : 2,   # overwrites nff
                                #'dff_type' : 'point_wise' or 'separable_convolution' or 'inception'
                                'encoder_dff_type' : 'separable_convolution',

@@ -27,6 +27,7 @@
 # ---------------------------------------------------------------------------------
 import tensorflow as tf
 import numpy as np
+from tf_util import gelu
 
 
 
@@ -59,6 +60,16 @@ def closing1d(input, d=3):
 
 def smooth1d(input, d=3):
     return closing1d(opening1d(input, d=d), d=d)
+
+
+
+
+def antirectifier(x):
+    x -= tf.math.reduce_mean(x, axis=1, keepdims=True)
+    x = tf.nn.l2_normalize(x, axis=1)
+    pos = gelu(x)
+    neg = gelu(-x)
+    return tf.concat([pos, neg], axis=-1)
 
 
 
@@ -134,7 +145,7 @@ class SignalFeatureMorph(tf.keras.Model):
         self.conv_1b = feature_Conv1D(self.kernel_size // 3)
         self.conv_1c = feature_Conv1D(self.kernel_size // 2)
         self.conv_1d = feature_Conv1D(self.kernel_size)
-        self.norm_layer = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.norm_layer_1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.conv_2 = tf.keras.layers.Conv1D(self.d_model, self.kernel_size,
             kernel_initializer='glorot_uniform',
             strides=1, padding='same',
@@ -154,7 +165,9 @@ class SignalFeatureMorph(tf.keras.Model):
             strides=self.pool_stride // 2, padding='same', data_format='channels_last')
         self.pool_3 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size // 2,
             strides=1, padding='same', data_format='channels_last')
-        self.act_layer = tf.keras.layers.Activation(tf.nn.elu)
+        self.norm_layer_2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        #self.act_layer = tf.keras.layers.Activation(tf.nn.elu)
+        self.act_layer = tf.keras.layers.Lambda(gelu)
 
     def call(self, input, training=False):
         #smooth_1 = smooth1d(input, d=5)
@@ -165,17 +178,18 @@ class SignalFeatureMorph(tf.keras.Model):
         inner_1b = self.conv_1b(input)
         inner_1c = self.conv_1c(input)
         inner_1d = self.conv_1d(input)
-        inner = self.norm_layer(tf.concat([inner_1a, inner_1b, inner_1c, inner_1d], axis=-1))
-        #inner = self.act_layer(inner)
+        inner = self.norm_layer_1(tf.concat([inner_1a, inner_1b, inner_1c, inner_1d], axis=-1))
+        inner = self.act_layer(inner)
         inner = self.pool_1(inner) # (batch_size, sig_len // 2, cnn_features)
         # convolutional II
         inner = self.conv_2(inner) # (batch_size, sig_len, d_model)
         inner = self.pool_2(inner)
         # convolutional III
         inner = self.conv_3(inner) # (batch_size, sig_len, d_model)
-        output = self.pool_3(inner)
-        #output = self.act_layer(inner)
-        return output
+        inner = self.pool_3(inner)
+        inner = self.norm_layer_2(inner)
+        #inner = self.act_layer(inner)
+        return inner
 
 
 

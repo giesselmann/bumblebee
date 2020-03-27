@@ -30,7 +30,7 @@ import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 from tf_cnn import SignalFeatureCNN, SignalFeatureMorph
-from tf_util import positional_encoding
+from tf_util import gelu, positional_encoding
 
 
 
@@ -113,10 +113,11 @@ class point_wise_feed_forward_network(tf.keras.layers.Layer):
     def build(self, input_shape):
         assert len(input_shape) == 3
         self.ffs = [tf.keras.layers.Dense(self.dff,
-                         kernel_initializer='glorot_uniform' if i < self.nff -1 else 'glorot_uniform',
+                         kernel_initializer='glorot_uniform' if i < self.nff -1 else 'he_uniform',
                          activation=None) for i in range(self.nff)]
         #self.norm_layer = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         #self.act_layer = tf.keras.layers.Activation(tf.nn.elu)
+        self.act_layer = tf.keras.layers.Lambda(gelu)
         self.final_layer = tf.keras.layers.Dense(self.d_model,
                         kernel_initializer='glorot_uniform',
                         activation=None)
@@ -127,8 +128,9 @@ class point_wise_feed_forward_network(tf.keras.layers.Layer):
         for ff in self.ffs:
             inner = ff(inner)
         #inner = self.norm_layer(inner)
-        #inner = self.act_layer(inner)
+        inner = self.act_layer(inner)
         output = self.final_layer(inner)
+        #inner = self.act_layer(inner)
         return output
 
 
@@ -163,12 +165,13 @@ class separable_conv_feed_forward_network(tf.keras.layers.Layer):
         assert len(input_shape) == 3
         self.ffs = [tf.keras.layers.SeparableConv1D(self.dff, self.d_filter,
                         padding=self.padding,
-                        depth_multiplier=4,
-                        kernel_initializer='glorot_uniform' if i < self.nff -1 else 'glorot_uniform',
+                        depth_multiplier=1,
+                        kernel_initializer='glorot_uniform' if i < self.nff -1 else 'he_uniform',
                         data_format='channels_last',
-                        activation=None) for i in range(self.nff)]
+                        activation=gelu) for i in range(self.nff)]
         #self.norm_layer = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         #self.act_layer = tf.keras.layers.Activation(tf.nn.elu)
+        self.act_layer = tf.keras.layers.Lambda(gelu)
         self.final_layer = tf.keras.layers.SeparableConv1D(self.d_model, self.d_filter,
                         padding=self.padding,
                         kernel_initializer='glorot_uniform',
@@ -181,8 +184,9 @@ class separable_conv_feed_forward_network(tf.keras.layers.Layer):
         for ff in self.ffs:
             inner = ff(inner)   # (batch_size, seq_len, dff)
         #inner = self.norm_layer(inner)
-        #inner = self.act_layer(inner)
+        inner = self.act_layer(inner)
         inner = self.final_layer(inner) # (batch_size, seq_len, d_model)
+        #inner = self.act_layer(inner)
         return inner
 
 
@@ -722,7 +726,6 @@ class Encoder(tf.keras.layers.Layer):
 
     def call(self, x, training, mask):
         state = x
-        #state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         # init ACT
         state_shape_static = state.get_shape() # (batch_size, sig_len, d_model)
         state_slice = slice(0, 2)
@@ -819,7 +822,6 @@ class Decoder(tf.keras.layers.Layer):
     def build(self, input_shape):
         assert isinstance(input_shape, list) and len(input_shape) == 4
         _, sequence_length = input_shape[0]
-        #self.norm_layer = tf.keras.layers.LayerNormalization(epsilon=1e-6)
         self.pos_encoding = positional_encoding(int(sequence_length),
                                                 self.max_iterations,
                                                 int(self.d_model),
@@ -845,8 +847,7 @@ class Decoder(tf.keras.layers.Layer):
         seq_len = tf.shape(x)[1]
         # dropout/flip and embedding
         state = self.emb_layer(tf.cast(x, tf.int32))
-        #state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
-        #state = self.norm_layer(state)
+        state *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         # init ACT
         # state.shape (batch_size, seq_len, d_model)
         if step is not None:

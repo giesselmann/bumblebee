@@ -29,12 +29,24 @@ import os, argparse, re, timeit
 import time
 import random
 import h5py
+import math
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from collections import deque
 from tqdm import tqdm
 from util import pore_model
+
+
+
+
+def gelu(x):
+    """
+    GELU activation, described in paper "Gaussian Error Linear Units (GELUs)"
+    https://arxiv.org/pdf/1606.08415.pdf
+    """
+    c = math.sqrt(2 / math.pi)
+    return 0.5 * x * (1 + tf.math.tanh(c * (x + 0.044715 * tf.math.pow(x, 3))))
 
 
 
