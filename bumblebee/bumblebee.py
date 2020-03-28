@@ -35,7 +35,7 @@ from tqdm import tqdm
 from util import pore_model
 from tf_transformer import Transformer
 from tf_discriminator import Discriminator
-from tf_util import decode_sequence, flip_sequence
+from tf_util import decode_sequence
 from tf_util import WarmupLRS
 
 
@@ -72,7 +72,11 @@ predict     Predict sequence from raw fast5
         parser.add_argument("--epochs", type=int, default=1, help="Training epochs")
         parser.add_argument("--gpus", nargs='+', type=int, default=[], help="GPUs to use")
         args = parser.parse_args(argv)
+
         #tf.config.experimental_run_functions_eagerly(True)
+        policy = tf.keras.mixed_precision.experimental.Policy('mixed_float16')
+        tf.keras.mixed_precision.experimental.set_policy(policy)
+
         # Constants
         alphabet = "ACGT"
         tf_alphabet = alphabet + '^$'
@@ -107,7 +111,7 @@ predict     Predict sequence from raw fast5
                     'signal': tf.io.FixedLenFeature(shape=(), dtype=tf.string)})
             seq = tf.py_function(encode_sequence, [example['sequence'][0]], tf.int32)
             sig = tf.expand_dims(
-                        tf.cast(tf.io.parse_tensor(example['signal'][0], tf.float16), tf.float32),
+                        tf.cast(tf.io.parse_tensor(example['signal'][0], tf.float16), tf.float16),
                         axis=-1)
             seq_len = tf.cast(tf.expand_dims(tf.size(seq), axis=-1) - 1, tf.int32)
             sig_len = tf.cast(tf.expand_dims(tf.size(sig), axis=-1), tf.int32)
@@ -126,7 +130,7 @@ predict     Predict sequence from raw fast5
         ds_train = (ds_train
                     .filter(tf_filter)
                     .prefetch(args.minibatch_size * 64)
-                    .shuffle(args.minibatch_size * 2048) # 1024
+                    .shuffle(args.minibatch_size * 128) # 2048
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len,], [1,], [1,]), [target_max_len,]),
                         drop_remainder=True)
@@ -138,7 +142,7 @@ predict     Predict sequence from raw fast5
         ds_test = (ds_test
                     .filter(tf_filter)
                     .prefetch(args.minibatch_size * 32)
-                    .shuffle(args.minibatch_size * 256)
+                    .shuffle(args.minibatch_size * 128)
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len,], [1,], [1,]), [target_max_len,]),
                         drop_remainder=True)
@@ -200,14 +204,12 @@ predict     Predict sequence from raw fast5
 
         with strategy.scope(), summary_writer.as_default():
             tf_lrs = WarmupLRS(transformer_hparams.get('d_model'), warmup_steps=4000)
-            tf_optimizer = tf.keras.optimizers.Adam(tf_lrs, beta_1=0.9, beta_2=0.98, epsilon=1e-9, amsgrad=False)
+            tf_optimizer = tf.keras.optimizers.Adam(tf_lrs, beta_1=0.9, beta_2=0.98, epsilon=1e-6, amsgrad=False)
+            tf_optimizer = tf.keras.mixed_precision.experimental.LossScaleOptimizer(tf_optimizer, loss_scale='dynamic')
             cat_cross_entropy = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
-            cross_entropy = tf.keras.losses.BinaryCrossentropy(from_logits=True, reduction='none')
             # Transformer loss function
             def tf_loss_function(real, pred, target_lengths, mask):
                 mask = mask / tf.reduce_sum(mask, axis=-1, keepdims=True)
-                #mask = mask * tf.reduce_sum(mask, axis=-1, keepdims=True)
-                #mask /= tf.cast(tf.size(mask), tf.float32)
                 # read length weighted loss with scaling on EOS token
                 target_length_idx = tf.expand_dims(tf.stack(
                                             [tf.range(tf.size(target_lengths)),
@@ -219,20 +221,18 @@ predict     Predict sequence from raw fast5
                 mask = tf.tensor_scatter_nd_update(mask, target_length_idx, eos_mask)
                 loss_ = cat_cross_entropy(real, pred, sample_weight=mask) # (batch_size, target_seq_len)
                 loss_ = tf.reduce_sum(loss_, axis=-1) # (batch_size)
-                loss_sorted = tf.sort(loss_, axis=0, direction='DESCENDING')
-                loss_mask = tf.cast(tf.less_equal(loss_, loss_sorted[3]), tf.float32)
                 # EOS token accuracy
                 pred_lbl = tf.argmax(tf.nn.softmax(pred, axis=-1), axis=-1)
                 eos_lbl = tf.gather_nd(pred_lbl, target_length_idx)
                 eos_acc = tf.equal(eos_lbl, tf.constant(d_output - 1, dtype=tf.int64))
                 eos_acc = tf.reduce_mean(tf.cast(eos_acc, tf.float32))
-                return (loss_, loss_mask, eos_acc)
+                return (loss_, eos_acc)
 
             train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
             test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
             eos_accuracy = tf.keras.metrics.Mean(name='eos_accuracy')
 
-            transformer = Transformer(hparams=transformer_hparams, name='Transformer')
+            transformer = Transformer(hparams=transformer_hparams, name='Transformer', dtype=policy)
 
             tf_checkpoint = tf.train.Checkpoint(optimizer=tf_optimizer, transformer=transformer)
             tf_ckpt_manager = tf.train.CheckpointManager(tf_checkpoint, os.path.join(checkpoint_dir, 'transformer'), max_to_keep=5)
@@ -248,10 +248,13 @@ predict     Predict sequence from raw fast5
                 # Transformer gradient
                 with tf.GradientTape() as tape:
                     tf_predictions, _, _, _dec_loss, _enc_loss = transformer(input, training=True)
-                    loss_, loss_mask, eos_acc = tf_loss_function(target, tf_predictions, target_lengths, mask)
-                    tf_loss = loss_ + _dec_loss + _enc_loss
+                    loss_, eos_acc = tf_loss_function(target, tf_predictions, target_lengths, mask)
+                    tf_loss = loss_  + _dec_loss + _enc_loss
+                    scaled_tf_loss = tf_optimizer.get_scaled_loss(tf_loss)
+                    scaled_loss = tf.nn.compute_average_loss(scaled_tf_loss, global_batch_size=args.minibatch_size)
                     loss = tf.nn.compute_average_loss(tf_loss, global_batch_size=args.minibatch_size)
-                tf_gradients = tape.gradient([loss], transformer.trainable_variables)
+                scaled_tf_gradients = tape.gradient([scaled_loss], transformer.trainable_variables)
+                tf_gradients = tf_optimizer.get_unscaled_gradients(scaled_tf_gradients)
                 #tf_gradients, _ = tf.clip_by_global_norm(tf_gradients, 10.0)
                 # Apply gradients
                 tf_optimizer.apply_gradients(zip(tf_gradients, transformer.trainable_variables))
@@ -265,7 +268,7 @@ predict     Predict sequence from raw fast5
                 target_lengths = input[3]
                 mask = tf.sequence_mask(tf.squeeze(target_lengths), target_max_len, dtype=tf.float32)
                 predictions, _, _, _dec_loss, _enc_loss = transformer(input, training=False)
-                loss_, _, _ = tf_loss_function(target, predictions, target_lengths, mask)
+                loss_, _ = tf_loss_function(target, predictions, target_lengths, mask)
                 tf_loss = loss_ + _dec_loss + _enc_loss
                 loss = tf.nn.compute_average_loss(tf_loss, global_batch_size=args.minibatch_size)
                 test_accuracy.update_state(target, predictions, mask)
@@ -307,7 +310,8 @@ predict     Predict sequence from raw fast5
                     total_loss += tf_loss
                     train_loss = total_loss / num_batches
                     tf.summary.scalar("loss", tf_loss)
-                    tf.summary.scalar("lr", tf_lrs(tf_optimizer.iterations.numpy().astype(np.float32)))
+                    #tf.summary.scalar("lr", tf_lrs(tf_optimizer.iterations.numpy().astype(np.float32)))
+                    tf.summary.scalar("lr", tf_lrs(tf_optimizer.iterations))
                     if batch % val_rate == 0:
                         batch_input = next(ds_test_dist_iter)
                         test_loss = distributed_test_step(batch_input)

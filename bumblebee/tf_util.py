@@ -46,13 +46,49 @@ def gelu(x):
     https://arxiv.org/pdf/1606.08415.pdf
     """
     c = math.sqrt(2 / math.pi)
-    return 0.5 * x * (1 + tf.math.tanh(c * (x + 0.044715 * tf.math.pow(x, 3))))
+    x = 0.5 * x * (1 + tf.math.tanh(c * (x + 0.044715 * tf.math.pow(x, 3))))
+    return x
+
+
+
+
+class LayerNormalization(tf.keras.layers.Layer):
+    def __init__(self, epsilon=1e-6, **kwargs):
+        super(LayerNormalization, self).__init__(**kwargs)
+        self.epsilon = epsilon
+
+    def get_config(self):
+        config = super(LayerNormalization, self).get_config()
+        return config
+
+    def compute_output_shape(self, input_shape):
+        assert len(input_shape) == 3
+        return input_shape
+
+    def build(self, input_shape):
+        assert len(input_shape) == 3
+        d_input = input_shape[-1]
+        self.gain = self.add_weight(
+            name='gain', shape=(d_input,), dtype=self.dtype,
+            initializer='ones', trainable=True)
+        self.bias = self.add_weight(
+            name='bias', shape=(d_input,), dtype=self.dtype,
+            initializer='zeros', trainable=True)
+        return super(LayerNormalization, self).build(input_shape)
+
+    def call(self, input, training=True, mask=None):
+        mean = tf.reduce_mean(input, axis=-1, keepdims=True)
+        variance = tf.reduce_mean(
+            tf.square(input - mean), axis=-1, keepdims=True)
+        normalized_inputs = (input - mean) / tf.sqrt(variance + self.epsilon)
+        output = tf.cast(self.gain, input.dtype) * normalized_inputs + tf.cast(self.bias, input.dtype)
+        return output
 
 
 
 
 def positional_encoding(seq_len, depth, d_model,
-                        max_timescale=10000, random_shift=False):
+                        max_timescale=10000, random_shift=False, dtype=tf.float32):
     def get_angles(pos, j, max_timescale):
         angle_rates = 1 / np.power(max_timescale,
                                    (2 * (j//2)) / np.float32(d_model))
@@ -69,7 +105,7 @@ def positional_encoding(seq_len, depth, d_model,
     # apply cos to odd indices in the array; 2i+1
     rads[:, 1::2, :] = np.cos(pos_rads[:, 1::2, :]) + np.cos(depth_rads[:, :, :])
     pos_encoding = rads[np.newaxis, ...]
-    return tf.constant(tf.cast(pos_encoding, dtype=tf.float32)) # (1, depth, seq_len, d_model)
+    return tf.constant(tf.cast(pos_encoding, dtype=dtype)) # (1, depth, seq_len, d_model)
 
 
 
@@ -80,35 +116,22 @@ def decode_sequence(logits, alphabet='ACGT'):
 
 
 
-
-def flip_sequence(target, d_output, rate=0.1):
-    # target.shape (batch_size, target_seq_len)
-    flp_mask = tf.random.uniform(target.shape, 0.0, 1.0, dtype=tf.float32)
-    flp_mask = tf.cast(tf.less(flp_mask, rate), tf.int32)
-    flp_mask = tf.concat([tf.zeros((target.shape[0], 1), dtype=tf.int32), flp_mask[:,1:]],axis=1)  # do not flip SOS character
-    flp_val = tf.random.uniform(target.shape, tf.cast(0, tf.int32), d_output - 2, dtype=tf.int32)
-    flp_val *= flp_mask
-    target = (target + flp_val) % (d_output - 2)
-    return target
-
-
-
-
 class WarmupLRS(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, d_model, warmup_steps=4000, offset=0):
         super(WarmupLRS, self).__init__()
         self.d_model = tf.cast(d_model, tf.float32)
-        self.warmup_steps = warmup_steps
-        self.offset = offset
+        self.warmup_steps = tf.cast(warmup_steps, tf.float32)
+        self.offset = tf.cast(offset, tf.float32)
 
     def update_offset(self, update):
-        self.offset += update
+        self.offset += tf.cast(update, self.offset.dtype)
 
     def __call__(self, step):
         step = tf.maximum(tf.cast(0, step.dtype), step - tf.cast(self.offset, step.dtype))
-        arg1 = tf.math.rsqrt(step)
-        arg2 = step * (self.warmup_steps ** -1.5)
-        return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
+        arg1 = tf.math.rsqrt(tf.cast(step, tf.float32))
+        arg2 = tf.cast(step, tf.float32) * (self.warmup_steps ** -1.5)
+        lr = tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
+        return lr
 
 
 
