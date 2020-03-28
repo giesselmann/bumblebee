@@ -60,7 +60,7 @@ predict     Predict sequence from raw fast5
 
     def train(self, argv):
         parser = argparse.ArgumentParser(description="BumbleBee basecaller training")
-        parser.add_argument("records", help="Training records")
+        parser.add_argument("records", nargs='+', help="Training records")
         parser.add_argument("--config", default=None, help="Transformer config file")
         parser.add_argument("--prefix", default="", help="Checkpoint and event prefix")
         parser.add_argument("--input_length", type=int, default=1000, help="Input signal window")
@@ -71,10 +71,11 @@ predict     Predict sequence from raw fast5
         parser.add_argument("--batches_val", type=int, default=1000, help="Validation batches")
         parser.add_argument("--epochs", type=int, default=1, help="Training epochs")
         parser.add_argument("--gpus", nargs='+', type=int, default=[], help="GPUs to use")
+        parser.add_argument("--policy", default='float32', choices=['float32', 'float16', 'mixed_float16'], help='Training data type policy')
         args = parser.parse_args(argv)
 
         #tf.config.experimental_run_functions_eagerly(True)
-        policy = tf.keras.mixed_precision.experimental.Policy('mixed_float16')
+        policy = tf.keras.mixed_precision.experimental.Policy(args.policy)
         tf.keras.mixed_precision.experimental.set_policy(policy)
 
         # Constants
@@ -88,8 +89,10 @@ predict     Predict sequence from raw fast5
         target_min_len = args.target_min_length
 
         # tfRecord files
-        record_files = [os.path.join(dirpath, f) for dirpath, _, files
-                            in os.walk(args.records) for f in files if f.endswith('.tfrec')]
+        record_files = [os.path.join(dirpath, f)
+            for record in args.records
+                for dirpath, _, files in os.walk(record)
+                    for f in files if f.endswith('.tfrec')]
         random.shuffle(record_files)
         val_rate = args.batches_train // args.batches_val
         val_split = int(max(1, args.batches_val / args.batches_train * len(record_files)))
@@ -130,7 +133,7 @@ predict     Predict sequence from raw fast5
         ds_train = (ds_train
                     .filter(tf_filter)
                     .prefetch(args.minibatch_size * 64)
-                    .shuffle(args.minibatch_size * 128) # 2048
+                    .shuffle(args.minibatch_size * 1024) # 2048
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len,], [1,], [1,]), [target_max_len,]),
                         drop_remainder=True)
@@ -142,7 +145,7 @@ predict     Predict sequence from raw fast5
         ds_test = (ds_test
                     .filter(tf_filter)
                     .prefetch(args.minibatch_size * 32)
-                    .shuffle(args.minibatch_size * 128)
+                    .shuffle(args.minibatch_size * 256)
                     .padded_batch(args.minibatch_size,
                         padded_shapes=(([input_max_len, 1], [target_max_len,], [1,], [1,]), [target_max_len,]),
                         drop_remainder=True)

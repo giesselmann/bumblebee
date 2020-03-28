@@ -179,7 +179,7 @@ class SignalFeatureMorph(tf.keras.Model):
         inner_1c = self.conv_1c(input)
         inner_1d = self.conv_1d(input)
         inner = self.norm_layer_1(tf.concat([inner_1a, inner_1b, inner_1c, inner_1d],axis=-1))
-        inner = self.act_layer(inner)
+        #inner = self.act_layer(inner)
         inner = self.pool_1(inner) # (batch_size, sig_len // 2, cnn_features)
         # convolutional II
         inner = self.conv_2(inner) # (batch_size, sig_len, d_model)
@@ -188,7 +188,7 @@ class SignalFeatureMorph(tf.keras.Model):
         inner = self.conv_3(inner) # (batch_size, sig_len, d_model)
         inner = self.pool_3(inner)
         inner = self.norm_layer_2(inner)
-        #inner = self.act_layer(inner)
+        inner = self.act_layer(inner)
         return inner
 
 

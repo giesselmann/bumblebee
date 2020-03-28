@@ -78,8 +78,7 @@ class LayerNormalization(tf.keras.layers.Layer):
 
     def call(self, input, training=True, mask=None):
         mean = tf.reduce_mean(input, axis=-1, keepdims=True)
-        variance = tf.reduce_mean(
-            tf.square(input - mean), axis=-1, keepdims=True)
+        variance = tf.reduce_mean(tf.square(input - mean), axis=-1, keepdims=True)
         normalized_inputs = (input - mean) / tf.sqrt(variance + self.epsilon)
         output = tf.cast(self.gain, input.dtype) * normalized_inputs + tf.cast(self.bias, input.dtype)
         return output

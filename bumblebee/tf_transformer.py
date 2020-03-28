@@ -122,7 +122,7 @@ class point_wise_feed_forward_network(tf.keras.layers.Layer):
         self.ffs = [tf.keras.layers.Dense(self.dff,
                          kernel_initializer='glorot_uniform' if i < self.nff -1 else 'he_uniform',
                          activation=None) for i in range(self.nff)]
-        self.norm_layer = LayerNormalization(epsilon=1e-6)
+        #self.norm_layer = LayerNormalization(epsilon=1e-6)
         #self.act_layer = tf.keras.layers.Activation(tf.nn.elu)
         self.act_layer = tf.keras.layers.Lambda(gelu)
         self.final_layer = tf.keras.layers.Dense(self.d_model,
@@ -134,7 +134,7 @@ class point_wise_feed_forward_network(tf.keras.layers.Layer):
         inner = input
         for ff in self.ffs:
             inner = ff(inner)
-        inner = self.norm_layer(inner)
+        #inner = self.norm_layer(inner)
         inner = self.act_layer(inner)
         output = self.final_layer(inner)
         #inner = self.act_layer(inner)
@@ -176,7 +176,7 @@ class separable_conv_feed_forward_network(tf.keras.layers.Layer):
                         kernel_initializer='glorot_uniform' if i < self.nff -1 else 'he_uniform',
                         data_format='channels_last',
                         activation=None) for i in range(self.nff)]
-        self.norm_layer = LayerNormalization(epsilon=1e-6, dtype=self.dtype)
+        #self.norm_layer = LayerNormalization(epsilon=1e-6, dtype=self.dtype)
         #self.act_layer = tf.keras.layers.Activation(tf.nn.elu)
         self.act_layer = tf.keras.layers.Lambda(gelu)
         self.final_layer = tf.keras.layers.SeparableConv1D(self.d_model, self.d_filter,
@@ -190,7 +190,7 @@ class separable_conv_feed_forward_network(tf.keras.layers.Layer):
         inner = input # (batch_size, seq_len, d_model)
         for ff in self.ffs:
             inner = ff(inner)   # (batch_size, seq_len, dff)
-        inner = self.norm_layer(inner)
+        #inner = self.norm_layer(inner)
         inner = self.act_layer(inner)
         inner = self.final_layer(inner) # (batch_size, seq_len, d_model)
         #inner = self.act_layer(inner)
