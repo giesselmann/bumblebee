@@ -29,7 +29,7 @@ import timeit
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-from tf_cnn import InceptionFeedForwardNetwork
+from tf_cnn import inception_ffn
 from tf_cnn import SignalFeatureInception, SignalFeatureCNN, SignalFeatureMorph
 from tf_util import LayerNormalization, gelu, positional_encoding
 
@@ -100,15 +100,15 @@ def scaled_dot_product_attention(q, k, v, mask=None):
 
 
 
-class point_wise_feed_forward_network(tf.keras.layers.Layer):
+class point_wise_ffn(tf.keras.layers.Layer):
     def __init__(self, d_model, dff, nff=1, **kwargs):
-        super(point_wise_feed_forward_network, self).__init__(**kwargs)
+        super(point_wise_ffn, self).__init__(**kwargs)
         self.d_model = d_model
         self.dff = dff
         self.nff = nff
 
     def get_config(self):
-        config = super(point_wise_feed_forward_network, self).get_config()
+        config = super(point_wise_ffn, self).get_config()
         config['d_model'] = self.d_model
         config['dff'] = self.dff
         config['nff'] = self.nff
@@ -122,21 +122,21 @@ class point_wise_feed_forward_network(tf.keras.layers.Layer):
         assert len(input_shape) == 3
         self.ffs = [tf.keras.layers.Dense(self.dff,
                          kernel_initializer='glorot_uniform' if i < self.nff -1 else 'he_uniform',
-                         activation=None) for i in range(self.nff)]
+                         activation=gelu) for i in range(self.nff)]
         #self.norm_layer = LayerNormalization(epsilon=1e-6)
         #self.act_layer = tf.keras.layers.Activation(tf.nn.relu)
         self.act_layer = tf.keras.layers.Lambda(gelu)
         self.final_layer = tf.keras.layers.Dense(self.d_model,
                         kernel_initializer='glorot_uniform',
                         activation=None)
-        return super(point_wise_feed_forward_network, self).build(input_shape)
+        return super(point_wise_ffn, self).build(input_shape)
 
     def call(self, input, training=True, mask=None):
         inner = input
         for ff in self.ffs:
             inner = ff(inner)
         #inner = self.norm_layer(inner)
-        inner = self.act_layer(inner)
+        #inner = self.act_layer(inner)
         inner = self.final_layer(inner)
         #inner = self.act_layer(inner)
         return inner
@@ -144,10 +144,10 @@ class point_wise_feed_forward_network(tf.keras.layers.Layer):
 
 
 
-class separable_conv_feed_forward_network(tf.keras.layers.Layer):
+class separable_conv_ffn(tf.keras.layers.Layer):
     def __init__(self, d_model, dff, d_filter,
                  nff=1, pool_size=3, padding='same', **kwargs):
-        super(separable_conv_feed_forward_network, self).__init__(**kwargs)
+        super(separable_conv_ffn, self).__init__(**kwargs)
         self.d_model = d_model
         self.dff = dff
         self.d_filter = d_filter
@@ -156,7 +156,7 @@ class separable_conv_feed_forward_network(tf.keras.layers.Layer):
         self.padding = padding
 
     def get_config(self):
-        config = super(separable_conv_feed_forward_network, self).get_config()
+        config = super(separable_conv_ffn, self).get_config()
         config['d_model'] = self.d_model
         config['dff'] = self.dff
         config['d_filter'] = self.d_filter
@@ -176,25 +176,32 @@ class separable_conv_feed_forward_network(tf.keras.layers.Layer):
                         depth_multiplier=1,
                         kernel_initializer='glorot_uniform' if i < self.nff -1 else 'he_uniform',
                         data_format='channels_last',
-                        activation=None) for i in range(self.nff)]
+                        activation=gelu) for i in range(self.nff)]
+        self.pools = [tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
+                        strides=1,
+                        padding=self.padding) for i in range(self.nff)]
         #self.norm_layer = LayerNormalization(epsilon=1e-6, dtype=self.dtype)
-        #self.act_layer = tf.keras.layers.Activation(tf.nn.relu)
-        self.act_layer = tf.keras.layers.Lambda(gelu)
+        #self.act_layer = tf.keras.layers.Lambda(gelu)
         self.final_layer = tf.keras.layers.SeparableConv1D(self.d_model, self.d_filter,
                         padding=self.padding,
                         kernel_initializer='glorot_uniform',
                         data_format='channels_last',
                         activation=None)
-        return super(separable_conv_feed_forward_network, self).build(input_shape)
+        #self.pool_layer = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
+        #                strides=1,
+        #                padding=self.padding)
+        return super(separable_conv_ffn, self).build(input_shape)
 
     def call(self, input, training=True, mask=None):
         inner = input # (batch_size, seq_len, d_model)
-        for ff in self.ffs:
+        for ff, pool in zip(self.ffs, self.pools):
             inner = ff(inner)   # (batch_size, seq_len, dff)
+            inner = pool(inner)
         #inner = self.norm_layer(inner)
-        inner = self.act_layer(inner)
+        #inner = self.act_layer(inner)
         inner = self.final_layer(inner) # (batch_size, seq_len, d_model)
         #inner = self.act_layer(inner)
+        #inner = self.pool_layer(inner)
         return inner
 
 
@@ -213,7 +220,7 @@ def point_wise_act_network(dff, ponder_bias_init=1.0):
     layers += [
                 # (batch_size, seq_len, 1)
                 tf.keras.layers.Dense(1,
-                    kernel_initializer='he_uniform',
+                    kernel_initializer='glorot_uniform',
                     use_bias=True,
                     bias_initializer=tf.constant_initializer(ponder_bias_init),
                     activation=tf.nn.sigmoid),
@@ -401,13 +408,13 @@ class EncoderLayer(tf.keras.layers.Layer):
         assert len(input_shape) == 3
         self.mha = MultiHeadAttention(hparams=self.hparams)
         if self.dff_type == 'point_wise':
-            self.ffn = point_wise_feed_forward_network(self.d_model, self.dff, nff=self.nff)
+            self.ffn = point_wise_ffn(self.d_model, self.dff, nff=self.nff)
         elif self.dff_type == 'separable_convolution':
-            self.ffn = separable_conv_feed_forward_network(self.d_model, self.dff, self.dff_filter,
+            self.ffn = separable_conv_ffn(self.d_model, self.dff, self.dff_filter,
                                 pool_size=self.dff_pool_size,
                                 nff=self.nff)
         elif self.dff_type == 'inception':
-            self.ffn = InceptionFeedForwardNetwork(hparams=self.hparams)
+            self.ffn = inception_ffn(hparams=self.hparams)
         else:
             raise NotImplementedError()
         self.layernorm1 = LayerNormalization(epsilon=1e-6)
@@ -461,10 +468,10 @@ class DecoderLayer(tf.keras.layers.Layer):
         self.hparams['memory_comp_pad'] = 'same'
         self.mha2 = MultiHeadAttention(hparams=self.hparams)
         if self.dff_type == 'point_wise':
-            self.ffn = point_wise_feed_forward_network(self.d_model, self.dff,
+            self.ffn = point_wise_ffn(self.d_model, self.dff,
                         nff=self.nff)
         elif self.dff_type == 'separable_convolution':
-            self.ffn = separable_conv_feed_forward_network(self.d_model, self.dff,
+            self.ffn = separable_conv_ffn(self.d_model, self.dff,
                         self.dff_filter,
                         pool_size=self.dff_pool_size,
                         padding='causal',
@@ -636,6 +643,7 @@ class Encoder(tf.keras.layers.Layer):
 
     def call(self, x, training, mask):
         state = x
+        state *= tf.math.sqrt(tf.cast(self.d_model, state.dtype))
         # init ACT
         state_shape_static = state.get_shape() # (batch_size, sig_len, d_model)
         state_slice = slice(0, 2)

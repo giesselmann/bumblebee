@@ -75,8 +75,8 @@ predict     Predict sequence from raw fast5
         args = parser.parse_args(argv)
 
         #tf.config.experimental_run_functions_eagerly(True)
-        policy = tf.keras.mixed_precision.experimental.Policy(args.policy)
-        tf.keras.mixed_precision.experimental.set_policy(policy)
+        #policy = tf.keras.mixed_precision.experimental.Policy(args.policy)
+        #tf.keras.mixed_precision.experimental.set_policy(policy)
 
         # Constants
         alphabet = "ACGT"
@@ -114,7 +114,7 @@ predict     Predict sequence from raw fast5
                     'signal': tf.io.FixedLenFeature(shape=(), dtype=tf.string)})
             seq = tf.py_function(encode_sequence, [example['sequence'][0]], tf.int32)
             sig = tf.expand_dims(
-                        tf.cast(tf.io.parse_tensor(example['signal'][0], tf.float16), tf.float16),
+                        tf.cast(tf.io.parse_tensor(example['signal'][0], tf.float16), tf.float32),
                         axis=-1)
             seq_len = tf.cast(tf.expand_dims(tf.size(seq), axis=-1) - 1, tf.int32)
             sig_len = tf.cast(tf.expand_dims(tf.size(sig), axis=-1), tf.int32)
@@ -157,12 +157,12 @@ predict     Predict sequence from raw fast5
                 transformer_hparams = yaml.safe_load(fp)
         else:
             transformer_hparams = {'d_output' : d_output,
-                               'd_model' : 256,
-                               'cnn_features' : 128,
+                               'd_model' : 384,
+                               'cnn_features' : 384,
                                'cnn_kernel' : 32,
-                               'cnn_pool_size' : 32,
-                               'cnn_pool_stride' : 8,
-                               'dff' : 1024,
+                               'cnn_pool_size' : 12,
+                               'cnn_pool_stride' : 6,
+                               'dff' : 1536,
                                'nff' : 2,
                                'encoder_nff' : 2,   # overwrites nff
                                'decoder_nff' : 2,   # overwrites nff
@@ -170,7 +170,7 @@ predict     Predict sequence from raw fast5
                                'encoder_dff_type' : 'separable_convolution',
                                'decoder_dff_type' : 'point_wise',
                                #'dff_filter_width' 'dff_pool_size'
-                               'encoder_dff_filter_width' : 8,
+                               'encoder_dff_filter_width' : 16,
                                'encoder_dff_pool_size' : 8,
                                'num_heads' : 8,
                                #'mha_qk_equal' : True,
@@ -179,7 +179,7 @@ predict     Predict sequence from raw fast5
                                'encoder_time_scale' : 10000,
                                'decoder_time_scale' : 10000,
                                'random_shift' : False,
-                               'ponder_bias_init' : 0.0,
+                               'ponder_bias_init' : 0.1,
                                #'act_type' : 'separable_convolution',
                                'encoder_act_type' : 'point_wise',
                                'decoder_act_type' : 'point_wise',
@@ -235,7 +235,8 @@ predict     Predict sequence from raw fast5
             test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
             eos_accuracy = tf.keras.metrics.Mean(name='eos_accuracy')
 
-            transformer = Transformer(hparams=transformer_hparams, name='Transformer', dtype=policy)
+            transformer = Transformer(hparams=transformer_hparams, name='Transformer')
+            #transformer = Transformer(hparams=transformer_hparams, name='Transformer', dtype=policy)
 
             tf_checkpoint = tf.train.Checkpoint(optimizer=tf_optimizer, transformer=transformer)
             tf_ckpt_manager = tf.train.CheckpointManager(tf_checkpoint, os.path.join(checkpoint_dir, 'transformer'), max_to_keep=5)
@@ -325,6 +326,8 @@ predict     Predict sequence from raw fast5
                         train_accuracy.reset_states()
                         test_accuracy.reset_states()
                         eos_accuracy.reset_states()
+                del ds_train_dist_iter
+                del ds_test_dist_iter
                 print("Epoch {}: train loss: {}".format(epoch, train_loss))
 
     def weights(self, argv):
