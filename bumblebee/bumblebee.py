@@ -159,19 +159,19 @@ predict     Predict sequence from raw fast5
             transformer_hparams = {'d_output' : d_output,
                                'd_model' : 256,
                                'cnn_features' : 128,
-                               'cnn_kernel' : 24,
-                               'cnn_pool_size' : 16,
+                               'cnn_kernel' : 32,
+                               'cnn_pool_size' : 32,
                                'cnn_pool_stride' : 8,
                                'dff' : 1024,
-                               'nff' : 1,
+                               'nff' : 2,
                                'encoder_nff' : 2,   # overwrites nff
                                'decoder_nff' : 2,   # overwrites nff
                                #'dff_type' : 'point_wise' or 'separable_convolution' or 'inception'
                                'encoder_dff_type' : 'separable_convolution',
                                'decoder_dff_type' : 'point_wise',
                                #'dff_filter_width' 'dff_pool_size'
-                               'encoder_dff_filter_width' : 16,
-                               'encoder_dff_pool_size' : 4,
+                               'encoder_dff_filter_width' : 8,
+                               'encoder_dff_pool_size' : 8,
                                'num_heads' : 8,
                                #'mha_qk_equal' : True,
                                'encoder_max_iterations' : 8,   # 14
@@ -179,7 +179,7 @@ predict     Predict sequence from raw fast5
                                'encoder_time_scale' : 10000,
                                'decoder_time_scale' : 10000,
                                'random_shift' : False,
-                               'ponder_bias_init' : 1.0,
+                               'ponder_bias_init' : 0.0,
                                #'act_type' : 'separable_convolution',
                                'encoder_act_type' : 'point_wise',
                                'decoder_act_type' : 'point_wise',

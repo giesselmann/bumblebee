@@ -74,6 +74,96 @@ def antirectifier(x):
 
 
 
+class InceptionModule(tf.keras.layers.Layer):
+    def __init__(self, hparams={}, padding='same', dff=1024, **kwargs):
+        super(InceptionModule, self).__init__(**kwargs)
+        self.dff = dff
+        dff_fraction = dff // 32
+        self.filter_x1 = dff_fraction * 8
+        self.filter_x3_reduce = dff_fraction * 4
+        self.filter_x3 = dff_fraction * 8
+        self.filter_x5_reduce = dff_fraction * 4
+        self.filter_x5 = dff_fraction * 8
+        self.filter_pool = dff_fraction * 8
+        self.padding = padding
+        self.hparams = hparams.copy()
+
+    def get_config(self):
+        config = super(InceptionModule, self).get_config()
+        config['hparams'] = self.hparams
+        config['padding'] = self.padding
+        config['dff'] = self.dff
+        return config
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[:2] + [self.filter_x1 + self.filter_x3 + self.filter_x5 + self.filter_pool]
+
+    def build(self, input_shape):
+        kernel_init = tf.keras.initializers.glorot_uniform()
+        bias_init = tf.keras.initializers.Constant(value=0.2)
+        def SeparableConv1D(filter, d_filter):
+            return tf.keras.layers.SeparableConv1D(filter, d_filter, padding=self.padding,
+                                        data_format='channels_last', activation=tf.nn.relu,
+                                        kernel_initializer=kernel_init, bias_initializer=bias_init)
+        self.conv_x1 = SeparableConv1D(self.filter_x1, 1)
+        self.conv_x3_reduce = SeparableConv1D(self.filter_x3_reduce, 1)
+        self.conv_x3 = SeparableConv1D(self.filter_x3, 5)
+        self.conv_x5_reduce = SeparableConv1D(self.filter_x5_reduce, 1)
+        self.conv_x5 = SeparableConv1D(self.filter_x5, 7)
+        self.pool = tf.keras.layers.MaxPool1D(pool_size=3, strides=1, padding=self.padding)
+        self.pool_x1 = SeparableConv1D(self.filter_pool, 1)
+        return super(InceptionModule, self).build(input_shape)
+
+    def call(self, input, training=True, mask=None):
+        c1x = self.conv_x1(input)
+        c3x = self.conv_x3_reduce(input)
+        c3x = self.conv_x3(c3x)
+        c5x = self.conv_x5_reduce(input)
+        c5x = self.conv_x5(c5x)
+        pool = self.pool(input)
+        pool = self.pool_x1(pool)
+        new_state = tf.concat([c1x, c3x, c5x, pool], axis=-1)
+        return new_state
+
+
+
+
+class InceptionFeedForwardNetwork(tf.keras.layers.Layer):
+    def __init__(self, hparams={}, padding='same', **kwargs):
+        super(InceptionFeedForwardNetwork, self).__init__(**kwargs)
+        self.d_model = hparams.get('d_model') or 256
+        self.dff = hparams.get('dff') or 1024
+        self.nff = hparams.get('nff') or 1
+        self.padding = padding
+        self.hparams = hparams.copy()
+
+    def get_config(self):
+        config = super(InceptionFeedForwardNetwork, self).get_config()
+        config['hparams'] = self.hparams
+        config['padding'] = self.padding
+        return config
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+    def build(self, input_shape):
+        self.inception_modules = []
+        self.norm_layer = []
+        for _ in range(self.nff):
+            self.inception_modules.append(InceptionModule(hparams=self.hparams, padding=self.padding, dff=self.dff))
+            self.norm_layer.append(LayerNormalization(epsilon=1e-6, dtype=tf.float32))
+        self.dense = tf.keras.layers.Dense(self.d_model, activation=tf.nn.elu)
+        return super(InceptionFeedForwardNetwork, self).build(input_shape)
+
+    def call(self, state, training, mask=None):
+        for im, nrm in zip(self.inception_modules, self.norm_layer):
+            state = nrm(im(state))
+        state = self.dense(state)
+        return state
+
+
+
+
 class Morphological(tf.keras.layers.Layer):
     def __init__(self, hparams={}, mode='opening', d_filter=2, trainable=True, **kwargs):
         super(Morphological, self).__init__(**kwargs)
@@ -145,8 +235,8 @@ class SignalFeatureMorph(tf.keras.Model):
         self.conv_1b = feature_Conv1D(self.kernel_size // 3)
         self.conv_1c = feature_Conv1D(self.kernel_size // 2)
         self.conv_1d = feature_Conv1D(self.kernel_size)
-        self.norm_layer_1 = LayerNormalization(epsilon=1e-6)
-        self.conv_2 = tf.keras.layers.Conv1D(self.d_model, self.kernel_size,
+        #self.norm_layer_1 = LayerNormalization(epsilon=1e-6)
+        self.conv_2 = tf.keras.layers.SeparableConv1D(self.cnn_features, self.kernel_size,
             kernel_initializer='glorot_uniform',
             strides=1, padding='same',
             activation=None,
@@ -159,15 +249,14 @@ class SignalFeatureMorph(tf.keras.Model):
         # pool layer
         self.pool_1 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
             strides=2, padding='same', data_format='channels_last')
-        #self.pool_1b = tf.keras.layers.MaxPool1D(pool_size=8,
-        #    strides=self.cnn_features // self.d_model, padding='same', data_format='channels_first')
-        self.pool_2 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size // 2,
+        self.pool_2 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
             strides=self.pool_stride // 2, padding='same', data_format='channels_last')
-        self.pool_3 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size // 2,
-            strides=1, padding='same', data_format='channels_last')
-        self.norm_layer_2 = LayerNormalization(epsilon=1e-6)
+        #self.pool_3 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
+        #    strides=1, padding='same', data_format='channels_last')
+        #self.norm_layer_2 = LayerNormalization(epsilon=1e-6)
         #self.act_layer = tf.keras.layers.Activation(tf.nn.elu)
-        self.act_layer = tf.keras.layers.Lambda(gelu)
+        self.act_layer_1 = tf.keras.layers.Lambda(tf.nn.relu)
+        self.act_layer_2 = tf.keras.layers.Lambda(gelu)
 
     def call(self, input, training=False):
         #smooth_1 = smooth1d(input, d=5)
@@ -178,17 +267,18 @@ class SignalFeatureMorph(tf.keras.Model):
         inner_1b = self.conv_1b(input)
         inner_1c = self.conv_1c(input)
         inner_1d = self.conv_1d(input)
-        inner = self.norm_layer_1(tf.concat([inner_1a, inner_1b, inner_1c, inner_1d],axis=-1))
-        #inner = self.act_layer(inner)
+        #inner = self.norm_layer_1(tf.concat([inner_1a, inner_1b, inner_1c, inner_1d],axis=-1))
+        inner = tf.concat([inner_1a, inner_1b, inner_1c, inner_1d],axis=-1)
+        inner = self.act_layer_1(inner)
         inner = self.pool_1(inner) # (batch_size, sig_len // 2, cnn_features)
         # convolutional II
         inner = self.conv_2(inner) # (batch_size, sig_len, d_model)
         inner = self.pool_2(inner)
         # convolutional III
         inner = self.conv_3(inner) # (batch_size, sig_len, d_model)
-        inner = self.pool_3(inner)
-        inner = self.norm_layer_2(inner)
-        inner = self.act_layer(inner)
+        #inner = self.pool_3(inner)
+        #inner = self.norm_layer_2(inner)
+        inner = self.act_layer_2(inner)
         return inner
 
 
@@ -226,3 +316,28 @@ class SignalFeatureCNN(tf.keras.Model):
         inner = self.cnn2(inner) + inner
         output = self.pool(inner)
         return output
+
+
+
+
+class SignalFeatureInception(tf.keras.Model):
+    def __init__(self, hparams={}, **kwargs):
+        super(SignalFeatureInception, self).__init__(**kwargs)
+        self.d_model = hparams.get("d_model") or 128
+        self.cnn_features = hparams.get("cnn_features") or 64
+        self.pool_stride = hparams.get("cnn_pool_stride") or 1
+        self.pool_size = hparams.get("cnn_pool_size") or 3
+        self.inception_1 = InceptionModule(hparams=hparams, padding='same', dff=self.cnn_features)
+        self.inception_2 = InceptionModule(hparams=hparams, padding='same', dff=self.cnn_features)
+        self.pool = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
+                    strides=self.pool_stride,
+                    padding='same',
+                    data_format='channels_last')
+        self.dense = tf.keras.layers.Dense(self.d_model, activation=tf.nn.relu)
+
+    def call(self, input, training=True):
+        inner = self.inception_1(input)
+        inner = self.pool(inner)
+        inner = self.inception_2(inner)
+        inner = self.dense(inner)
+        return inner
