@@ -81,9 +81,8 @@ rule segmentation:
         bam = "alignments/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.bam",
         bai = "alignments/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.bam.bai"
     output:
-        tfrec = "events/{aligner, [^.\/]*}/{sequence_workflow}/batches/{tag, [^\/]*}/{runname, [^\/]*}/{batch}.{reference}.tfrec"
+        tfrec = "segments/{aligner, [^.\/]*}/{sequence_workflow}/batches/{tag, [^\/]*}/{runname, [^\/]*}/{batch}.{reference}.tfrec"
     params:
-        format = lambda wildcards, input : os.path.splitext(input.raw)[1],
         index = lambda wildcards : '--index ' + os.path.join(config['storage_data_raw'], wildcards.runname, 'reads.fofn')
     threads: 32
     resources:
@@ -98,9 +97,38 @@ rule segmentation:
         """
 
 
+
+
+rule events:
+    input:
+        raw = lambda wildcards : get_raw_batch(wildcards),
+        bam = "alignments/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.bam",
+        bai = "alignments/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.bam.bai",
+        reference = lambda wildcards: config['references'][wildcards.reference]['genome']
+    output:
+        tfrec = "events/{aligner, [^.\/]*}/{sequence_workflow, ((?!batches).)*}/batches/{tag, [^\/]*}/{runname, [^\/]*}/{batch}.{reference}.tfrec"
+    params:
+        index = lambda wildcards : '--index ' + os.path.join(config['storage_data_raw'], wildcards.runname, 'reads.fofn'),
+    threads: 1
+    resources:
+        mem_mb = 16000,
+        time_min = 240
+    shadow: 'minimal'
+    shell:
+        """
+        mkdir raw
+        {config[py_env]}/bin/python3 {config[storage_fast5Index]} extract {input.raw} raw/ {params.index} --output_format bulk
+        /project/minion/bin/samtools view -bF 2308 {input.bam} | bedtools bamtobed -i stdin | bedtools getfasta -fi {input.reference} -bed stdin -name -s | sed 's/(.)//' > reads.fasta
+        {config[py_env]}/bin/python3 {config[event_script]} {config[pore_model]} `ls raw/*.fast5` reads.fasta {output.tfrec}
+        """
+
+
+
+
 rule tag_run:
     input:
-        hdf5 = lambda wildcards : expand("events/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.tfrec",
+        hdf5 = lambda wildcards : expand("{mode}/{aligner}/{sequence_workflow}/batches/{tag}/{runname}/{batch}.{reference}.tfrec",
+                        mode = wildcards.mode,
                         aligner = wildcards.aligner,
                         sequence_workflow = wildcards.sequence_workflow,
                         tag = wildcards.tag,
@@ -114,14 +142,15 @@ rule tag_run:
                                 reference = wildcards.reference))[0],
                         reference = wildcards.reference)
     output:
-        tag = temp("events/{aligner, [^.\/]*}/{sequence_workflow}/batches/{tag, [^\/]*}/{runname, [^\/]*}.{reference}.events")
+        tag = temp("{mode, [^.\/]*}/{aligner, [^.\/]*}/{sequence_workflow, ((?!batches).)*}/batches/{tag, [^\/]*}/{runname, [^\/]*}.{reference}.events")
     shell:
         "touch {output.tag}"
 
 
 rule tag_tag:
     input:
-        tags = lambda wildcards : ["events/{aligner}/{sequence_workflow}/batches/{tag}/{runname}.{reference}.events".format(
+        tags = lambda wildcards : ["{mode}/{aligner}/{sequence_workflow}/batches/{tag}/{runname}.{reference}.events".format(
+                mode=wildcards.mode,
                 aligner=wildcards.aligner,
                 sequence_workflow=wildcards.sequence_workflow,
                 tag=tag,
@@ -129,4 +158,4 @@ rule tag_tag:
                 reference=wildcards.reference)
             for tag, runnames in config['tag_map'].items() for runname in runnames]
     output:
-        tag = touch("events/{aligner, [^.\/]*}/{sequence_workflow, ((?!batches).)*}/{tag, [^\/]*}.{reference, [^.]*}.events")
+        tag = touch("{mode, [^.\/]*}/{aligner, [^.\/]*}/{sequence_workflow, ((?!batches).)*}/{tag, [^\/]*}.{reference, [^.]*}.events")

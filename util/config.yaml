@@ -1,10 +1,49 @@
 # Raw sequencing data parent directory containing one folder per flow cell
 storage_data_raw : /project/miniondata/raw
-segmentation_script : /project/miniondev/src/bumblebee/util/segmentation.py
+segmentation_script : /project/miniondev/src/bumblebee/util/segment_raw.py
+event_script : /project/miniondev/src/bumblebee/util/segment_event.py
+storage_fast5Index : /project/miniondev/src/bumblebee/util/storage_fast5Index.py
 pore_model : /project/miniondev/src/bumblebee/util/r9_4_450bps.mpi.model
-py_env : /project/miniondev/virtual/tf_gpu
+py_env : /project/miniondev/virtual/tf_gpu2
+
+
+barcode_map:
+    NB01 : 'barcode01'
+    NB02 : 'barcode02'
+    NB03 : 'barcode03'
+    NB04 : 'barcode04'
+
 
 references:
     mm9:
         genome: /project/bioinf_meissner/references/mm9/mm9.fa
         chr_sizes: /project/bioinf_meissner/references/mm9/mm9.chrom.sizes
+    mm10:
+        genome: /project/bioinf_meissner/references/mm10/mm10.fa
+        chr_sizes: /project/bioinf_meissner/references/mm10/mm10.chrom.sizes
+    hg38:
+        genome: /project/bioinf_meissner/references/hg38/hg38.fa
+        chr_sizes: /project/bioinf_meissner/references/hg38/hg38.chrom.sizes
+
+
+tag_map:
+#    TKOlike:
+#        - 20190620_FAK57924_FLO-MIN106_SQK-LSK109_J1_TKOlike
+#    V65:
+#        #- 20170510_FAE31392_FLO-MIN106_SQK-LSK108_mouse_V65
+#        - 20170522_FAE31515_FLO-MIN106_SQK-LSK108_mouse_V65
+#        - 20170606_FAH05611_FLO-MIN107_SQK-LSK108_mouse_V65
+#        - 20170612_FAH06623_FLO-MIN107_SQK-LSK108_mouse_V65
+#        - 20170614_FAH06521_FLO-MIN107_SQK-LSK108_mouse_V65
+#        - 20170620_FAH10462_FLO-MIN107_SQK-LSK308_mouse_V65
+#        - 20170623_FAH10366_FLO-MIN107_SQK-LSK308_mouse_V65
+#        #- 20180125_FAH34426_FLO-MIN107_SQK-LSK108_mouse_V65_BsiWI
+#        #- 20180125_FAH35344_FLO-MIN107_SQK-LSK108_mouse_V65_AgeI
+    Hues8.fast.NB01:
+        - 20190813_FAK69157_FLO-MIN106_SQK-LSK109_Hues8_PKO_mC
+        - 20190814_FAK61301_FLO-MIN106_SQK-LSK109_Hues8_PKO_mC
+        - 20190814_FAK69012_FLO-MIN106_SQK-LSK109_Hues8_PKO_mC
+    Hues8.fast.NB04:
+        - 20190813_FAK69157_FLO-MIN106_SQK-LSK109_Hues8_PKO_mC
+        - 20190814_FAK61301_FLO-MIN106_SQK-LSK109_Hues8_PKO_mC
+        - 20190814_FAK69012_FLO-MIN106_SQK-LSK109_Hues8_PKO_mC
