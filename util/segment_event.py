@@ -25,7 +25,7 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-import os, sys
+import os, sys, timeit
 import argparse
 import re, string, random
 import h5py
@@ -49,7 +49,7 @@ class event_align():
                     max_end_gap=0.1,
                     window=3, n_hist_bins=128,
                     edge_threshold=.4,
-                    algn_alphabet=12, algn_alphabet_ext=3):
+                    algn_alphabet=8, algn_alphabet_ext=2):  # 12/3 > 8/2
         self.max_end_gap = max_end_gap
         self.n_hist_bins = n_hist_bins
         self.edge_threshold = edge_threshold
@@ -113,6 +113,15 @@ class event_align():
             x = x2
         return x2
 
+    def split(self, x, w=20, max_iterations=10):
+        str1 = np.array([1] + [0] * w)
+        for i in range(max_iterations):
+            x1 = np.logical_or(x, ndimage.binary_hit_or_miss(x, structure1=str1))
+            if np.sum(np.logical_xor(x1, x)) == 0:
+                return x1
+            x = x1
+        return x1
+
     def sig2char(self, x):
         ords = sorted([ord(x) for x in self.alphabet])
         quantiles = np.quantile(x, np.linspace(0,1,len(ords)))
@@ -167,56 +176,75 @@ class event_align():
             else:
                 yield read_ID, False, None, None
                 continue
-            with warnings.catch_warnings():
-                try:
-                    df = pd.DataFrame({'nrm_signal': self.hist_equal(self.min_max_norm(read_signal.astype(np.float32)))})
-                    morph_signal = self.morph(df.nrm_signal.values)
-                    edge_signal = ndimage.filters.convolve1d(morph_signal, self.edge_filter)
-                    rising_edges = edge_signal > self.edge_threshold
-                    falling_edges = edge_signal < -self.edge_threshold
-                    rising_event = self.skeletonize(rising_edges)
-                    falling_event = self.skeletonize(falling_edges)
-                    event = np.logical_or(rising_event, falling_event)
-                    if np.sum(event) == 0 or np.sum(event) > max_event_count:
-                        yield read_ID, False, None, None
-                        continue
-                    df['event_id'] = np.cumsum(event)
-                    df_event = df.reset_index().groupby(by=['event_id']).agg(
-                        event_median=('nrm_signal', 'median'),
-                        event_mean=('nrm_signal', 'mean'),
-                        event_first=('nrm_signal', 'first'),
-                        event_last=('nrm_signal', 'last'),
-                        event_len=('nrm_signal', 'count')
-                    )
-                    df_event['event_len'] = self.mad_norm(df_event['event_len'])
-                except RuntimeWarning:
+            try:
+                df = pd.DataFrame({'nrm_signal': self.hist_equal(self.min_max_norm(read_signal.astype(np.float32)))})
+                t0 = timeit.default_timer()
+                morph_signal = self.morph(df.nrm_signal.values)
+                edge_signal = ndimage.filters.convolve1d(morph_signal, self.edge_filter)
+                rising_edges = edge_signal > self.edge_threshold
+                falling_edges = edge_signal < -self.edge_threshold
+                rising_event = self.skeletonize(rising_edges)
+                falling_event = self.skeletonize(falling_edges)
+                event = np.logical_or(rising_event, falling_event)
+                raw_events = np.sum(event)
+                event = self.split(event)
+                final_events = np.sum(event)
+                t1 = timeit.default_timer()
+                if np.sum(event) == 0 or np.sum(event) > max_event_count:
+                    print("Failed event detection", file=sys.stderr)
+                    #f, ax = plt.subplots(2, sharex=True)
+                    #ax[0].plot(morph_signal, 'b')
+                    #ax[0].vlines(np.nonzero(event), ymin=-1, ymax=1)
+                    #ax[1].plot(edge_signal, 'b')
+                    #ax[1].set_title("Events: {}".format(np.sum(event)))
+                    #plt.show()
                     yield read_ID, False, None, None
                     continue
-            sim_signal = np.array([self.pore_model.loc[sequence[i:i+6]].level_mean
-                                        for i in range(len(sequence) - 5)])
-            sim_signal = self.hist_equal(self.min_max_norm(sim_signal))
-            sim_chars = self.sig2char(sim_signal)
-            sig_chars = self.sig2char(df_event.event_median.values)
-            algn = edlib.align(sim_chars, sig_chars,
-                    mode='HW',
-                    task='path',
-                    additionalEqualities=self.equalities)
-            ops = [(int(op[:-1]), op[-1]) for op in re.findall('(\d*\D)',algn['cigar'])]
-            begin, end = algn['locations'][0]
-            begin = begin or 0
-            end = end or len(sig_chars)
-            if (len(sig_chars) - (end - begin)) > (self.max_end_gap * len(sig_chars)):
-                status = False
-            else:
-                status = True
-            # len of alignment, step on matches/mismatches
-            sim_idx = np.cumsum(np.array([True if op in '=XI' else False for n_ops, op in ops for _ in range(n_ops)])) - 1
-            sim_msk = np.array([True if op in '=XD' else False for n_ops, op in ops for _ in range(n_ops)])
-            df_event['event_offset'] = np.ones(df_event.shape[0], dtype=np.int32) * -1
-            df_event.loc[begin:end, ('event_offset')] = sim_idx[sim_msk]
-            df_event = df_event[df_event.event_offset != -1]
-            sequence = sequence[df_event.event_offset.min():df_event.event_offset.max()+5]
-            yield read_ID, status, sequence, df_event
+                df['event_id'] = np.cumsum(event)
+                df_event = df.reset_index().groupby(by=['event_id']).agg(
+                    event_median=('nrm_signal', 'median'),
+                    event_mean=('nrm_signal', 'mean'),
+                    event_std=('nrm_signal', 'std'),
+                    #event_mad=('nrm_signal', 'mad'),
+                    event_first=('nrm_signal', 'first'),
+                    event_last=('nrm_signal', 'last'),
+                    event_len=('nrm_signal', 'count')
+                )
+                t2 = timeit.default_timer()
+                df_event['event_len'] = self.mad_norm(df_event['event_len'])
+                sim_signal = np.array([self.pore_model.loc[sequence[i:i+6]].level_mean
+                                            for i in range(len(sequence) - 5)])
+                sim_signal = self.hist_equal(self.min_max_norm(sim_signal))
+                sim_chars = self.sig2char(sim_signal)
+                sig_chars = self.sig2char(df_event.event_median.values)
+                algn = edlib.align(sim_chars, sig_chars,
+                        mode='HW',
+                        task='path',
+                        additionalEqualities=self.equalities)
+                ops = [(int(op[:-1]), op[-1]) for op in re.findall('(\d*\D)',algn['cigar'])]
+                begin, end = algn['locations'][0]
+                begin = begin or 0
+                end = end or len(sig_chars)
+                t3 = timeit.default_timer()
+                #print("Times: edges: {:3f}, events: {:3f}, alignment: {:3f}".format(t1-t0, t2-t1, t3-t2), file=sys.stderr)
+                #print("Raw: {}, Final: {} Seq: {}; Begin: {} - End: {} / {}".format(
+                #        raw_events, final_events, len(sim_chars), begin, end, len(sig_chars)), file=sys.stderr)
+                if (len(sig_chars) - (end - begin)) > (self.max_end_gap * len(sig_chars)):
+                    status = False
+                else:
+                    status = True
+                # len of alignment, step on matches/mismatches
+                sim_idx = np.cumsum(np.array([True if op in '=XI' else False for n_ops, op in ops for _ in range(n_ops)])) - 1
+                sim_msk = np.array([True if op in '=XD' else False for n_ops, op in ops for _ in range(n_ops)])
+                df_event['event_offset'] = np.ones(df_event.shape[0], dtype=np.int32) * -1
+                df_event.loc[begin:end, ('event_offset')] = sim_idx[sim_msk]
+                df_event = df_event[df_event.event_offset != -1]
+                sequence = sequence[df_event.event_offset.min():df_event.event_offset.max()+5]
+                yield read_ID, status, sequence, df_event
+            except Exception as e:
+                print(e, file=sys.stderr)
+                yield read_ID, False, None, None
+                continue
 
 
 
@@ -235,8 +263,12 @@ class tf_record_writer():
 
     def __serialize_example__(self, sequence, event_table):
         sequence_b = tf.train.BytesList(value=[sequence.encode("ASCII")])
+        int_features = {'event_len', 'event_offset'}
         feature = {col:tf.train.Feature(bytes_list=
                         tf.train.BytesList(value=[tf.io.serialize_tensor(event_table[col].values.astype(np.float16)).numpy()]))
+                        if col not in int_features else
+                   tf.train.Feature(bytes_list=
+                        tf.train.BytesList(value=[tf.io.serialize_tensor(event_table[col].values.astype(np.int32)).numpy()]))
                     for col in event_table.columns}
         feature['sequence'] = tf.train.Feature(bytes_list=sequence_b)
         example_proto = tf.train.Example(features=tf.train.Features(feature=feature))
@@ -256,9 +288,11 @@ if __name__ == '__main__':
     parser.add_argument("fasta", help="Reference sequences")
     parser.add_argument("tfrec", help="Output tensorflow records file")
     parser.add_argument('--min_sequence_length', type=int, default=100, help="Minimum sequence length")
-    parser.add_argument("--max_event_count", type=int, default=15000, help="Maximum signal length")
+    parser.add_argument("--max_event_count", type=int, default=40000, help="Maximum signal length")
     parser.add_argument("--max_end_gap", type=float, default=0.1, help="Maximum signal overlap after alignment in percent")
     args = parser.parse_args()
+    tf.config.threading.set_inter_op_parallelism_threads(1)
+    tf.config.threading.set_intra_op_parallelism_threads(1)
     with event_align(args.model, args.fast5, args.fasta, max_end_gap=args.max_end_gap) as eva,\
          tf_record_writer(args.tfrec) as writer:
         print("Start event alignment for {} reads".format(len(eva)))

@@ -331,11 +331,11 @@ class SignalFeatureInception(tf.keras.Model):
         self.inception_2 = inception_module(hparams=hparams, padding='same', dff=self.cnn_features)
         self.inception_3 = inception_module(hparams=hparams, padding='same', dff=self.cnn_features)
         self.pool_1 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
-                    strides=2,
+                    strides=1,
                     padding='same',
                     data_format='channels_last')
         self.pool_2 = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
-                    strides=self.pool_stride // 2,
+                    strides=1,
                     padding='same',
                     data_format='channels_last')
         self.dense = tf.keras.layers.Dense(self.d_model, activation=gelu)
@@ -347,4 +347,27 @@ class SignalFeatureInception(tf.keras.Model):
         inner = self.pool_2(inner)
         inner = self.inception_3(inner)
         inner = self.dense(inner)
+        return inner
+
+
+
+
+class EventFeatureCNN(tf.keras.Model):
+    def __init__(self, hparams={}, **kwargs):
+        super(EventFeatureCNN, self).__init__(**kwargs)
+        self.d_model = hparams.get("d_model") or 128
+        self.dense = tf.keras.layers.Dense(self.d_model,
+                         kernel_initializer='glorot_uniform',
+                         kernel_regularizer=tf.keras.regularizers.l2(0.0001),
+                         activation=tf.nn.relu)
+        #self.cnn = tf.keras.layers.Conv1D(self.d_model, 1,
+        #    kernel_initializer='glorot_uniform',
+        #    kernel_regularizer=tf.keras.regularizers.l2(0.001),
+        #    strides=1,
+        #    padding='same',
+        #    activation=gelu,
+        #    data_format='channels_last')
+
+    def call(self, input, training=True):
+        inner = self.dense(input)
         return inner

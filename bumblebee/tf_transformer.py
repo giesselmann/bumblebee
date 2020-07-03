@@ -31,6 +31,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tf_cnn import inception_ffn
 from tf_cnn import SignalFeatureInception, SignalFeatureCNN, SignalFeatureMorph
+from tf_cnn import EventFeatureCNN
 from tf_util import LayerNormalization, gelu, positional_encoding
 
 
@@ -121,20 +122,29 @@ class point_wise_ffn(tf.keras.layers.Layer):
     def build(self, input_shape):
         assert len(input_shape) == 3
         self.ffs = [tf.keras.layers.Dense(self.dff,
-                         kernel_initializer='glorot_uniform' if i < self.nff -1 else 'he_uniform',
-                         activation=gelu) for i in range(self.nff)]
+                         kernel_initializer='glorot_uniform' if i < self.nff -1 else 'glorot_uniform',
+                         kernel_regularizer=tf.keras.regularizers.l2(0.0001),
+                         activation=None)
+                    for i in range(self.nff)]
+        self.norms = [LayerNormalization(epsilon=1e-6)
+                    for i in range(self.nff)]
+        self.drops = [tf.keras.layers.Dropout(0.1)
+                    for i in range(self.nff)]
         #self.norm_layer = LayerNormalization(epsilon=1e-6)
         #self.act_layer = tf.keras.layers.Activation(tf.nn.relu)
-        self.act_layer = tf.keras.layers.Lambda(gelu)
+        #self.act_layer = tf.keras.layers.Lambda(gelu)
         self.final_layer = tf.keras.layers.Dense(self.d_model,
                         kernel_initializer='glorot_uniform',
-                        activation=None)
+                        kernel_regularizer=tf.keras.regularizers.l2(0.0001),
+                        activation=tf.nn.relu)
         return super(point_wise_ffn, self).build(input_shape)
 
     def call(self, input, training=True, mask=None):
         inner = input
-        for ff in self.ffs:
+        for ff, norm, drop in zip(self.ffs, self.norms, self.drops):
             inner = ff(inner)
+            inner = norm(inner)
+            inner = drop(inner, training=training)
         #inner = self.norm_layer(inner)
         #inner = self.act_layer(inner)
         inner = self.final_layer(inner)
@@ -174,19 +184,31 @@ class separable_conv_ffn(tf.keras.layers.Layer):
         self.ffs = [tf.keras.layers.SeparableConv1D(self.dff, self.d_filter,
                         padding=self.padding,
                         depth_multiplier=1,
-                        kernel_initializer='glorot_uniform' if i < self.nff -1 else 'he_uniform',
-                        data_format='channels_last',
-                        activation=gelu) for i in range(self.nff)]
-        self.pools = [tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
-                        strides=1,
-                        padding=self.padding) for i in range(self.nff)]
-        #self.norm_layer = LayerNormalization(epsilon=1e-6, dtype=self.dtype)
-        #self.act_layer = tf.keras.layers.Lambda(gelu)
-        self.final_layer = tf.keras.layers.SeparableConv1D(self.d_model, self.d_filter,
-                        padding=self.padding,
-                        kernel_initializer='glorot_uniform',
+                        kernel_initializer='glorot_uniform' if i < self.nff -1 else 'glorot_uniform',
+                        kernel_regularizer=tf.keras.regularizers.l2(0.0001),
                         data_format='channels_last',
                         activation=None)
+                    for i in range(self.nff)]
+        #self.pools = [tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
+        #                strides=1,
+        #                padding=self.padding)
+        #            for i in range(self.nff)]
+        self.norms = [LayerNormalization(epsilon=1e-6, dtype=self.dtype)
+                    for i in range(self.nff)]
+        self.drops = [tf.keras.layers.Dropout(0.1)
+                    for i in range(self.nff)]
+        #self.norm_layer = LayerNormalization(epsilon=1e-6, dtype=self.dtype)
+        #self.act_layer = tf.keras.layers.Lambda(gelu)
+        #self.final_layer = tf.keras.layers.SeparableConv1D(self.d_model, self.d_filter,
+        #                padding=self.padding,
+        #                kernel_initializer='glorot_uniform',
+        #                kernel_regularizer=tf.keras.regularizers.l2(0.0001),
+        #                data_format='channels_last',
+        #                activation=gelu)
+        self.final_layer = tf.keras.layers.Dense(self.d_model,
+                        kernel_initializer='glorot_uniform',
+                        kernel_regularizer=tf.keras.regularizers.l2(0.0001),
+                        activation=tf.nn.relu)
         #self.pool_layer = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
         #                strides=1,
         #                padding=self.padding)
@@ -194,14 +216,13 @@ class separable_conv_ffn(tf.keras.layers.Layer):
 
     def call(self, input, training=True, mask=None):
         inner = input # (batch_size, seq_len, d_model)
-        for ff, pool in zip(self.ffs, self.pools):
+        for ff, norm, drop in zip(self.ffs, self.norms, self.drops):
             inner = ff(inner)   # (batch_size, seq_len, dff)
-            inner = pool(inner)
+            inner = norm(inner)
+            inner = drop(inner, training=training)
         #inner = self.norm_layer(inner)
         #inner = self.act_layer(inner)
         inner = self.final_layer(inner) # (batch_size, seq_len, d_model)
-        #inner = self.act_layer(inner)
-        #inner = self.pool_layer(inner)
         return inner
 
 
@@ -213,7 +234,8 @@ def point_wise_act_network(dff, ponder_bias_init=1.0):
         layers += [
                     # (batch_size, seq_len, dff)
                     tf.keras.layers.Dense(dff,
-                        kernel_initializer='he_uniform',
+                        kernel_initializer='glorot_uniform',
+                        kernel_regularizer=tf.keras.regularizers.l2(0.0001),
                         activation=None),
                     LayerNormalization(epsilon=1e-6)
                     ]
@@ -221,6 +243,7 @@ def point_wise_act_network(dff, ponder_bias_init=1.0):
                 # (batch_size, seq_len, 1)
                 tf.keras.layers.Dense(1,
                     kernel_initializer='glorot_uniform',
+                    kernel_regularizer=tf.keras.regularizers.l2(0.0001),
                     use_bias=True,
                     bias_initializer=tf.constant_initializer(ponder_bias_init),
                     activation=tf.nn.sigmoid),
@@ -890,7 +913,8 @@ class TransformerLayer(tf.keras.layers.Layer):
         self.decoder = Decoder(hparams=self.hparams)
         self.d_output_t = tf.cast(self.d_output, tf.int32)
         self.final_layer = tf.keras.layers.Dense(self.d_output,
-                kernel_initializer='glorot_uniform', activation=None,
+                kernel_initializer='glorot_uniform',
+                activation=None,
                 name='Dense', dtype=tf.float32)
         return super(TransformerLayer, self).build(input_shape)
 
@@ -991,7 +1015,7 @@ class Transformer(tf.keras.Model):
     def __init__(self, hparams={}, **kwargs):
         super(Transformer, self).__init__(**kwargs)
         self.strides = hparams.get("cnn_pool_stride") or 1
-        self.signal_cnn = SignalFeatureInception(hparams)
+        self.signal_cnn = EventFeatureCNN(hparams)
         self.d_output = hparams.get('d_output') or 6
         self.transformer_layer = TransformerLayer(hparams)
 

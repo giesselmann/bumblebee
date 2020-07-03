@@ -1,12 +1,11 @@
 source /project/miniondev/virtual/tf_gpu2/bin/activate
 
-# generate tf records
-python3 /project/miniondev/src/bumblebee/bumblebee/tf_transformer_util.py /project/miniondev/src/bumblebee/util/r9_4_450bps.mpi.model events/minimap2/guppy/test.mm9.hdf5 events/minimap2/guppy/events.mm9 --batches_train 1600000 --batches_test 160000 --batch_size 64 --discard_quantile 0.4
-
 # prom
 cd /data/machine_learning
 source virtual/tf_gpu2/bin/activate
 cd projects/bumblebee
+
+
 
 
 export TF_ENABLE_AUTO_MIXED_PRECISION=1
