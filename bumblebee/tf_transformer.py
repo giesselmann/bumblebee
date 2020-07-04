@@ -37,7 +37,7 @@ from tf_util import LayerNormalization, gelu, positional_encoding
 
 
 
-kernel_initializer = 'glorot_uniform'
+kernel_initializer = 'he_uniform'
 
 
 
@@ -122,7 +122,7 @@ class point_wise_ffn(tf.keras.layers.Layer):
     def build(self, input_shape):
         assert len(input_shape) == 3
         self.ffs = [tf.keras.layers.Dense(self.dff,
-                         kernel_initializer='glorot_uniform' if i < self.nff -1 else 'glorot_uniform',
+                         kernel_initializer=kernel_initializer if i < self.nff -1 else 'glorot_uniform',
                          kernel_regularizer=tf.keras.regularizers.l2(0.0001),
                          activation=None)
                     for i in range(self.nff)]
@@ -132,21 +132,23 @@ class point_wise_ffn(tf.keras.layers.Layer):
                     for i in range(self.nff)]
         #self.norm_layer = LayerNormalization(epsilon=1e-6)
         #self.act_layer = tf.keras.layers.Activation(tf.nn.relu)
-        #self.act_layer = tf.keras.layers.Lambda(gelu)
+        self.act_layer = tf.keras.layers.Lambda(gelu)
         self.final_layer = tf.keras.layers.Dense(self.d_model,
-                        kernel_initializer='glorot_uniform',
+                        kernel_initializer=kernel_initializer,
                         kernel_regularizer=tf.keras.regularizers.l2(0.0001),
-                        activation=tf.nn.relu)
+                        activation=None)
         return super(point_wise_ffn, self).build(input_shape)
 
     def call(self, input, training=True, mask=None):
         inner = input
-        for ff, norm, drop in zip(self.ffs, self.norms, self.drops):
+        for i, (ff, norm, drop) in enumerate(zip(self.ffs, self.norms, self.drops)):
             inner = ff(inner)
             inner = norm(inner)
             inner = drop(inner, training=training)
+            if i == 0:
+                inner_0 = inner
         #inner = self.norm_layer(inner)
-        #inner = self.act_layer(inner)
+        inner = self.act_layer(inner + inner_0)
         inner = self.final_layer(inner)
         #inner = self.act_layer(inner)
         return inner
@@ -184,7 +186,7 @@ class separable_conv_ffn(tf.keras.layers.Layer):
         self.ffs = [tf.keras.layers.SeparableConv1D(self.dff, self.d_filter,
                         padding=self.padding,
                         depth_multiplier=1,
-                        kernel_initializer='glorot_uniform' if i < self.nff -1 else 'glorot_uniform',
+                        kernel_initializer=kernel_initializer if i < self.nff -1 else 'glorot_uniform',
                         kernel_regularizer=tf.keras.regularizers.l2(0.0001),
                         data_format='channels_last',
                         activation=None)
@@ -198,17 +200,17 @@ class separable_conv_ffn(tf.keras.layers.Layer):
         self.drops = [tf.keras.layers.Dropout(0.1)
                     for i in range(self.nff)]
         #self.norm_layer = LayerNormalization(epsilon=1e-6, dtype=self.dtype)
-        #self.act_layer = tf.keras.layers.Lambda(gelu)
+        self.act_layer = tf.keras.layers.Lambda(gelu)
         #self.final_layer = tf.keras.layers.SeparableConv1D(self.d_model, self.d_filter,
         #                padding=self.padding,
-        #                kernel_initializer='glorot_uniform',
+        #                kernel_initializer=kernel_initializer,
         #                kernel_regularizer=tf.keras.regularizers.l2(0.0001),
         #                data_format='channels_last',
         #                activation=gelu)
         self.final_layer = tf.keras.layers.Dense(self.d_model,
-                        kernel_initializer='glorot_uniform',
+                        kernel_initializer=kernel_initializer,
                         kernel_regularizer=tf.keras.regularizers.l2(0.0001),
-                        activation=tf.nn.relu)
+                        activation=None)
         #self.pool_layer = tf.keras.layers.MaxPool1D(pool_size=self.pool_size,
         #                strides=1,
         #                padding=self.padding)
@@ -216,12 +218,14 @@ class separable_conv_ffn(tf.keras.layers.Layer):
 
     def call(self, input, training=True, mask=None):
         inner = input # (batch_size, seq_len, d_model)
-        for ff, norm, drop in zip(self.ffs, self.norms, self.drops):
+        for i, (ff, norm, drop) in enumerate(zip(self.ffs, self.norms, self.drops)):
             inner = ff(inner)   # (batch_size, seq_len, dff)
             inner = norm(inner)
             inner = drop(inner, training=training)
+            if i == 0:
+                inner_0 = inner
         #inner = self.norm_layer(inner)
-        #inner = self.act_layer(inner)
+        inner = self.act_layer(inner + inner_0)
         inner = self.final_layer(inner) # (batch_size, seq_len, d_model)
         return inner
 
@@ -234,7 +238,7 @@ def point_wise_act_network(dff, ponder_bias_init=1.0):
         layers += [
                     # (batch_size, seq_len, dff)
                     tf.keras.layers.Dense(dff,
-                        kernel_initializer='glorot_uniform',
+                        kernel_initializer=kernel_initializer,
                         kernel_regularizer=tf.keras.regularizers.l2(0.0001),
                         activation=None),
                     LayerNormalization(epsilon=1e-6)
@@ -331,8 +335,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
                                 #activation=tf.nn.leaky_relu,
                                 data_format='channels_last')
         self.dense = tf.keras.layers.Dense(self.d_model,
-                                kernel_initializer='glorot_uniform',
-                                activation=None)
+                        kernel_initializer=kernel_init,
+                        activation=None)
         return super(MultiHeadAttention, self).build(input_shape)
 
     def split_heads(self, x, seq_len):
@@ -913,7 +917,7 @@ class TransformerLayer(tf.keras.layers.Layer):
         self.decoder = Decoder(hparams=self.hparams)
         self.d_output_t = tf.cast(self.d_output, tf.int32)
         self.final_layer = tf.keras.layers.Dense(self.d_output,
-                kernel_initializer='glorot_uniform',
+                kernel_initializer=kernel_initializer,
                 activation=None,
                 name='Dense', dtype=tf.float32)
         return super(TransformerLayer, self).build(input_shape)

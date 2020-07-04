@@ -119,12 +119,12 @@ predict     Predict sequence from raw fast5
         else:
             transformer_hparams = {
                 'd_output' : d_output,
-                'd_model' : 256,
+                'd_model' : 384,
                 'cnn_features' : 256,
                 'cnn_kernel' : 16,
                 'cnn_pool_size' : 6,
                 'cnn_pool_stride' : 1,
-                'dff' : 1024,
+                'dff' : 1536,
                 'nff' : 2,
                 'encoder_nff' : 3,   # overwrites nff
                 'decoder_nff' : 3,   # overwrites nff
@@ -132,7 +132,7 @@ predict     Predict sequence from raw fast5
                 'encoder_dff_type' : 'separable_convolution',
                 'decoder_dff_type' : 'point_wise',
                 #'dff_filter_width' 'dff_pool_size'
-                'encoder_dff_filter_width' : 8,
+                'encoder_dff_filter_width' : 16,
                 'num_heads' : 8,
                 #'mha_qk_equal' : True,
                 'encoder_max_iterations' : 8,   # 14
