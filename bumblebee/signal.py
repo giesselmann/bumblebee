@@ -141,7 +141,7 @@ class Read():
     def events(self):
         return self.__event_compression__(self.edges())
 
-    def event_alignment(self, ref_span, pore_model, alphabet_size=16):
+    def event_alignment(self, ref_span, pore_model, alphabet_size=12):
         df_events = self.events()
         read_seq = ref_span.seq if not ref_span.is_reverse else reverse_complement(ref_span.seq)
         read_seq = re.sub('N', lambda x: random.choice('ACGT'), read_seq)

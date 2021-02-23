@@ -35,14 +35,14 @@ ReferenceSpan = namedtuple('ReferenceSpan', ['qname', 'rname', 'pos', 'seq', 'is
 
 
 # decode cigar into list of edits
-def decodeCigar(cigar):
+def decode_cigar(cigar):
     ops = [(int(op[:-1]), op[-1]) for op in re.findall('(\d*\D)',cigar)]
     return ops
 
 # bool mask of cigar operations
 def cigar_ops_mask(cigar, include='M=X', exclude='DN'):
     flatten = lambda l: [item for sublist in l for item in sublist]
-    dec_cigar = decodeCigar(cigar)
+    dec_cigar = decode_cigar(cigar)
     return np.array(flatten([[True]*l if op in include
                                             else [False]*l if op in exclude
                                             else [] for l, op in dec_cigar]))
@@ -60,7 +60,7 @@ def decode_md(seq, cigar, md):
 
 
 def reverse_complement(seq):
-    complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 'N' : 'N'}
+    complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 'N': 'N'}
     return "".join(complement.get(base, base) for base in reversed(seq))
 
 
@@ -80,13 +80,13 @@ class AlignmentIndex():
                 for mapping in (b for b in bam if not (b.is_unmapped or b.is_secondary or b.is_supplementary)):
                     # get seq for secondary mappings
                     if mapping.is_secondary or mapping.is_supplementary:
-                        # TODO implement ref lookup
+                        # TODO implement ref lookup from fasta
                         seq = ''
                     else:
                         seq = mapping.seq
                     try:
                         ref_span = decode_md(seq, mapping.cigarstring, mapping.tags['MD'][1])
                     except KeyError:
-                        # TODO implement ref lookup
+                        # TODO implement ref lookup from fasta
                         raise
                     yield ReferenceSpan(qname=mapping.query_name, rname=bam.get_reference_name(mapping.refID), pos=mapping.pos, seq=ref_span, is_reverse=mapping.is_reverse)

@@ -30,7 +30,7 @@ import tqdm
 import itertools
 import numpy as np
 import pandas as pd
-from matplotlib import pyplot as plt
+from collections import deque
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from bumblebee.fast5 import Fast5Index
@@ -48,33 +48,42 @@ def main(args):
     else:
         # init random uniform model
         kmer = [''.join(c) for c in itertools.product('ACGT', repeat=6)]
-        pm = pd.DataFrame({'kmer':kmer, 'level_mean':np.random.uniform(-0.5, 0.5, 4096)}).set_index('kmer')
+        pm = pd.DataFrame({'kmer':kmer, 'level_mean':np.random.uniform(-0.1, 0.1, 4096)}).set_index('kmer')
     # create bam and fast5 iterator
     f5_idx = Fast5Index(args.fast5)
     algn_idx = AlignmentIndex(args.bam)
     # init normalizer
     norm = ReadNormalizer()
-    # sample some ref spans
-    ref_spans = [span for span in tqdm.tqdm(algn_idx.records(), desc='Loading alignments') if len(span.seq) > args.min_seq_length and len(span.seq) < args.max_seq_length]
-    random.seed(42)
-    ref_spans = random.sample(ref_spans, min(args.random_sample, len(ref_spans)))
-    print(len(ref_spans))
-    reads = [Read(f5_idx[ref_span.qname], norm) for ref_span in ref_spans]
     # keep inital model
     pm_origin = pm.copy()
-    alphabet_sizes = np.repeat([8, 10, 12, 14, 16], args.max_iterations // 5)
-    # iterate until convergence or max_iterations
-    def derive_model(draft_model, ref_spans, reads, alphabet_size=16):
-        dists, events = zip(*[read.event_alignment(ref_span, draft_model, alphabet_size) for ref_span, read in tqdm.tqdm(zip(ref_spans, reads), desc='Aligning')])
-        df_events = pd.concat(events)
+    def derive_model(draft_model, ref_span, read, alphabet_size=16):
+        dist, df_events = read.event_alignment(ref_span, draft_model, alphabet_size)
         df_model = df_events.groupby('kmer').agg(level_mean=('event_median', 'mean'))
-        return np.mean(dists), df_model
-    for i, alphabet_size in enumerate(alphabet_sizes):
-        algn_dist, pm_derived = derive_model(pm, ref_spans, reads, alphabet_size=alphabet_size)
-        model_dist = np.mean(np.absolute(pm.loc[pm_derived.index, 'level_mean'] - pm_derived.level_mean))
-        pm.loc[pm_derived.index, 'level_mean'] =  pm_derived.level_mean.values
-        print("Step {}: Alignment: {:.4f} Model: {:.4}".format(i, algn_dist, model_dist))
-        if model_dist < args.eps:
+        return dist, df_model
+    lr = args.lr
+    dist_buffer = deque()
+    diff_buffer = deque()
+    for i in range(args.epochs):
+        with tqdm.tqdm(desc='Epoch {}'.format(i), postfix='') as pbar:
+            for ref_span in algn_idx.records():
+                if len(ref_span.seq) > args.max_seq_length:
+                    pbar.update(1)
+                    continue
+                read = Read(f5_idx[ref_span.qname], norm)
+                algn_dist, pm_derived = derive_model(pm, ref_span, read)
+                pm_diff = np.mean(np.abs(pm.loc[pm_derived.index, 'level_mean'] - pm_derived.level_mean.values))
+                pm.loc[pm_derived.index, 'level_mean'] =  (pm_derived.level_mean.values * lr) + (pm.loc[pm_derived.index, 'level_mean'] * (1-lr))
+                lr *= args.decay
+                dist_buffer.append(algn_dist)
+                diff_buffer.append(pm_diff)
+                if len(dist_buffer) > 200:
+                    dist_buffer.popleft()
+                    diff_buffer.popleft()
+                pbar.update(1)
+                pbar.set_postfix_str("Dist: {:.4f} Diff: {:.4f}".format(np.mean(dist_buffer), np.mean(diff_buffer)))
+                if np.mean(diff_buffer) < args.eps:
+                    break
+        if np.mean(diff_buffer) < args.eps:
             break
     #pm_origin['derived'] = pm.loc[pm_origin.index.values].level_mean.values
     pm.to_csv(args.output_model, sep='\t')
@@ -91,9 +100,9 @@ def argparser():
     parser.add_argument("fast5", type=str)
     parser.add_argument("bam", type=str)
     parser.add_argument("--draft_model", type=str)
-    parser.add_argument("--random_sample", default=200, type=int)
+    parser.add_argument("--epochs", default=1, type=int)
+    parser.add_argument("--lr", default=0.1, type=float)
+    parser.add_argument("--decay", default=0.999, type=float)
     parser.add_argument("--eps", default=0.001, type=float)
-    parser.add_argument("--max_iterations", default=20, type=int)
-    parser.add_argument("--min_seq_length", default=1000, type=int)
-    parser.add_argument("--max_seq_length", default=5000, type=int)
+    parser.add_argument("--max_seq_length", default=2000, type=int)
     return parser
