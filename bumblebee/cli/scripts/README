@@ -1,0 +1,495 @@
+# activate virtual environment
+source /project/minion/virtual/scholar/bin/activate
+PATH=${PATH}:/project/bioinf_meissner/bin
+source ~/virtual/scholar/bin/activate
+repo="/project/miniondev/src/scholar"
+repo="/mnt/d/git/scholar"
+
+# install nltk english
+python3
+```
+import nltk
+nltk.download('words', download_dir='/project/minion/virtual/scholar/nltk_data')
+nltk.download('stopwords', download_dir='/project/minion/virtual/scholar/nltk_data')
+```
+
+# filter s2 dataset
+cat data/manifest.txt | grep 's2-corpus' | xargs -n 1 -P 16 bash ${repo}/scripts/filter.sh ${repo}/scripts
+
+# generate TF training database from titles and abstracts
+mkdir -p tfrecords
+cat data/manifest.txt | grep 's2-corpus' | sed 's/.gz//' | xargs -n 1 -P 16 bash ${repo}/scripts/tf_abstracts.sh ${repo}/scripts
+
+# generate vocabulary
+python3 ${repo}/scholar/scholar.py vocabulary ./tfrecords/ tf_vocabulary
+# 3 519 035 it [09:59, 5873.42it/s]
+
+# tokenizer_en = tfds.features.text.SubwordTextEncoder.load_from_file('tf_vocabulary')
+
+
+
+
+# extract journals
+python3
+```
+import glob, gzip, json
+import itertools
+from tqdm import tqdm
+
+data_files = glob.glob('data_filtered/s2-corpus-*.gz')
+data_files += ['data/bioRxiv.gz']
+
+keys = ['journalName', 'year']
+def parse_line(line):
+    fields = json.loads(line)
+    return tuple([fields[key] for key in keys])
+
+data_jnl = [parse_line(line) for file in tqdm(data_files, desc="parsing batches") for line in gzip.open(file, 'r').read().decode('utf-8').split('\n') if line != '']
+data_jnl.sort()
+data_jnl_year = [(key) + (len(list(values)),) for key, values in itertools.groupby(data_jnl)]
+with open('journals.tsv', 'w') as fp:
+    print('\n'.join(['\t'.join([str(s) for s in record]) for record in data_jnl_year]), file=fp)
+
+```
+
+
+
+
+# plot journal stats
+R
+```
+require(plyr)
+require(ggplot2)
+require(stringr)
+
+data <- read.table('journals.tsv', col.names=c('journal', 'year', 'paper'), sep='\t', quote='', comment.char='')
+data_filtered <- subset(data, paper > 1)
+
+paper_per_year <- ddply(data_filtered, ~year, summarize, n=sum(paper))
+paper_per_year_bioRxiv <- ddply(subset(data_filtered, journal=='bioRxiv'), ~year, summarize, n=sum(paper))
+jnl_per_year <- ddply(data_filtered, ~year, summarize, n=length(journal))
+
+jnls_2019 <- subset(data_filtered, year==2019)
+jnls_top10 <- jnls_2019[order(jnls_2019$paper, decreasing=T),][1:10,]
+jnls_2019$group <- ifelse(startsWith(as.character(jnls_2019$journal), 'Nature'), 'Nature',
+                          ifelse(str_detect(as.character(jnls_2019$journal), '(Conference|Symposium|Workshop)'), 'Conference',
+                            ifelse(jnls_2019$journal == 'ArXiv', 'ArXiv',
+                              ifelse(jnls_2019$journal == 'bioRxiv', 'bioRxiv', 'other'))))
+jnls_2019$group <- factor(as.character(jnls_2019$group), levels=c('Conference', 'ArXiv', 'bioRxiv', 'Nature', 'other'))
+jnls_2019_summary <- ddply(jnls_2019, ~group, summarize, n=sum(paper))
+
+pdf('plots/stats.pdf')
+ggplot(paper_per_year, aes(x=year, y=n)) + geom_bar(stat='identity') + theme_classic()
+#ggplot(jnl_per_year, aes(x=year, y=n)) + geom_bar(stat='identity') + theme_classic()
+pie(jnls_2019_summary$n, labels = jnls_2019_summary$group, col=rainbow(length(jnls_2019_summary$group)), clockwise=T, main="Journals 2019")
+ggplot(paper_per_year_bioRxiv, aes(x=year, y=n)) + geom_bar(stat='identity') + theme_classic()
+dev.off()
+```
+
+
+
+
+# bioRxiv
+python3
+```
+import glob, gzip, json, re
+import itertools
+import numpy as np
+import seaborn as sns
+import pandas as pd
+import umap
+import wordcloud
+import hdbscan
+import umap.plot
+import matplotlib.pyplot as plt
+import matplotlib.colors
+from tqdm import tqdm
+from collections import Counter, defaultdict
+from datasketch import MinHash
+from wordcloud import WordCloud
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA, TruncatedSVD
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN, OPTICS, cluster_optics_dbscan
+from nltk.tokenize import RegexpTokenizer
+from nltk.corpus import stopwords
+from nltk.stem.snowball import SnowballStemmer
+from nltk.stem.porter import PorterStemmer
+
+
+data_file = 'data/bioRxiv.gz'
+keys = ['id', 'year', 'title', 'paperAbstract']
+def parse_line(line):
+    fields = json.loads(line)
+    return tuple([fields[key] for key in keys])
+
+data = [parse_line(line) for line in gzip.open(data_file, 'r').read().decode('utf-8').split('\n') if line != '']
+data.sort(key = lambda x : x[0])
+
+def reduce(key, values):
+    return sorted(list(values), key = lambda x : int(re.search(r'v([0-9]+)$', x[0]).group(1)) if re.search('v([0-9]+)$', x[0]) else x[0])[-1]
+
+data_unique = [reduce(key, values) for key, values in itertools.groupby(data, key = lambda x : re.sub('v[0-9]+$', '', x[0]))]
+vocabulary = Counter([word for paper in tqdm(data_unique, desc="get vocabulary") for word in set(re.split('\W+', ' '.join(paper[2:]).lower()))])
+sub_vocabulary = [word for word in vocabulary.most_common() if word[1] > 20 and word[1] < (len(data_unique) * 0.33)]
+sub_vocabulary.sort(key=lambda x : x[1])
+
+with open('cluster/bioRxiv.words.tsv', 'w') as fp:
+    print('\n'.join(['\t'.join([str(s) for s in t]) for t in sub_vocabulary]), file=fp)
+
+sub_words = set(w[0] for w in sub_vocabulary)
+
+#data_subset = [record for record in data_unique if 'nanopore' in record[1] or 'nanopore' in record[2]]
+data_subset = data_unique
+legend_years = np.array([int(x[1]) for x in data_subset])
+
+
+
+
+# MinHash
+# permutations = 256
+# minhash = []
+# for record in tqdm(data_subset, desc='hash articles'):
+#     tokens = re.sub(r'[^\w\s]','',' '.join(record[2:])).lower().split()
+#     m = MinHash(num_perm=permutations)
+#     _ = [m.update(t.encode('utf-8')) for t in tokens if t in sub_words]
+#     minhash.append(m)
+#
+# minhash_values = np.array([list(m.digest()) + [year,] for m, year in zip(minhash, legend_years)])
+#
+# pca = PCA(n_components=50)
+# minhash_pca = np.ascontiguousarray(pca.fit_transform(minhash_values))
+
+
+
+
+# Tokenize
+np.random.seed(42)
+#stemmer = SnowballStemmer('english')
+stemmer = PorterStemmer()
+tokenizer = RegexpTokenizer(r'[a-zA-Z\']+')
+
+def tokenize(text):
+    return [stemmer.stem(word) for word in tokenizer.tokenize(text.lower()) if word in sub_words]
+
+def tokenize2(text):
+    return [stemmer.stem(word) for word in tokenizer.tokenize(text.lower())]
+
+en_stop = stopwords.words('english')
+punc = ['.', ',', '"', "'", '?', '!', ':', ';', '(', ')', '[', ']', '{', '}',"%"]
+en_stop_token = set([tokenize2(word)[0] for word in en_stop])
+en_stop_token = en_stop_token.union(punc)
+
+vectorizer = TfidfVectorizer(stop_words = en_stop_token, tokenizer = tokenize2, min_df=10, max_df=0.5, max_features = 10000)
+vectorizer_values = vectorizer.fit_transform([' '.join(record[2:]) for record in data_subset])
+
+svd = TruncatedSVD(n_components=150, random_state=42)
+vectorizer_pca = np.ascontiguousarray(svd.fit_transform(vectorizer_values))
+print("Explained variance: ", svd.explained_variance_ratio_.sum())
+
+np.savetxt('cluster/bioRxiv.pca.tsv', vectorizer_pca, fmt='%.6f', delimiter='\t')
+vectorizer_pca = np.loadtxt('cluster/bioRxiv.pca.tsv', delimiter='\t', dtype=np.float32)
+
+
+embedding_data = vectorizer_pca
+mapper = umap.UMAP(n_neighbors=64, min_dist=0.0, metric='euclidean', random_state=42, verbose=True).fit(embedding_data)
+
+legend_nanopore = np.array([1 if 'nanopore' in ' '.join(record[2:]) else 0 for record in data_subset])
+legend_sequencing = np.array([2 if 'sequencing' in ' '.join(record[2:]) else 0 for record in data_subset])
+legend = legend_nanopore + legend_sequencing
+
+color_key = {'other' : 'darkgrey', 'nanopore' : 'darkgrey', 'sequencing' : 'darkgrey', 'nanopore sequencing' : 'darkgrey'}
+label_map = {0 : 'other', 1 : 'nanopore', 2 : 'sequencing', 3 : 'nanopore sequencing'}
+labels = np.array([label_map[l] for l in legend])
+
+plt.figure(figsize=(10,10))
+umap.plot.points(mapper, labels=np.array([label_map[l] for l in legend]), color_key=color_key, background='black')
+plt.savefig('plots/bioRxiv.umap.pdf', dpi=900)
+plt.close()
+
+color_key = {'other' : 'darkgrey', 'nanopore' : 'red', 'sequencing' : 'blue', 'nanopore sequencing' : 'magenta'}
+
+plt.figure(figsize=(10,10))
+umap.plot.points(mapper, labels=np.array([label_map[l] for l in legend]), color_key=color_key, background='black')
+plt.savefig('plots/bioRxiv_sequencing.umap.pdf', dpi=900)
+plt.close()
+
+
+
+
+# Cluster
+# KMeans
+clust = KMeans(init='random', n_clusters=42, n_init=10, precompute_distances=True, n_jobs=10)
+X = StandardScaler().fit_transform(embedding_data)
+clust.fit(embedding_data)
+cluster = clust.labels_
+labels = clust.labels_
+
+np.savetxt('cluster/bioRxiv.labels_k42.tsv', cluster, fmt='%i', delimiter='\t')
+
+umap.plot.points(mapper, labels=labels, theme='fire', background='black', show_legend=False)
+plt.show()
+
+
+plt.figure(figsize=(10,10))
+umap.plot.points(mapper, labels=labels, theme='fire', background='black', show_legend=False)
+plt.savefig('plots/bioRxiv.umap_cluster.pdf', dpi=900)
+plt.close()
+plt.show()
+
+
+
+
+# Nanopore sequencing cluster
+msk_nanopore = np.array([True if re.search('^(?=.*nanopore)(?=.*sequencing).*$', ' '.join(record[2:]).lower()) else False for record in data_subset])
+clust_nanopore, clust_nanopore_counts = np.unique(labels[msk_nanopore], return_counts=True)
+# filter for clusters with at least 5 papers
+clust_nanopore, clust_nanopore_counts = zip(*[(v1, v2) for v1, v2 in zip(clust_nanopore, clust_nanopore_counts) if v2 > 5])
+clust_nanopore_dict = dict(zip(clust_nanopore, clust_nanopore_counts))
+
+clust_nanopore_label = np.array([str(clust_nanopore_dict[cluster]) if cluster in clust_nanopore_dict else '<5' for cluster in labels])
+clust_nanopore_label = np.array([clust_nanopore_dict[cluster] if cluster in clust_nanopore_dict else 0 for cluster in labels])
+cmap = matplotlib.colors.Colormap('Blues', len(np.unique(clust_nanopore_label)))
+
+plt.figure(figsize=(10,10))
+umap.plot.points(mapper, labels=clust_nanopore_label, color_key_cmap='plasma', background='black', show_legend=True)
+plt.savefig('plots/bioRxiv.umap_cluster_nanopore.pdf', dpi=900)
+plt.show()
+
+
+
+
+# Nanopore cluster wordclouds
+x, y = np.ogrid[:300, :300]
+mask = (x - 150) ** 2 + (y - 150) ** 2 > 130 ** 2
+mask = 255 * mask.astype(int)
+for cluster_id, n_paper in clust_nanopore_dict.items():
+    text = '\n'.join([' '.join(record[2:]) for c, record in zip(cluster, data_subset) if c == cluster_id])
+    wc = WordCloud(background_color="black", repeat=False, mask=mask, width=800, height=800, scale=20.0)
+    wc.generate(text)
+    plt.figure(figsize=(10,10))
+    plt.axis("off")
+    plt.imshow(wc, interpolation="bilinear")
+    plt.savefig('plots/bioRxiv.wordmap_{}_{}.pdf'.format(n_paper, cluster_id), dpi=900)
+    plt.close()
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+# extract vocabulary
+python3
+```
+import glob, gzip, re
+import nltk
+import matplotlib.pyplot as plt
+
+from tqdm import tqdm
+from collections import Counter
+from sklearn.feature_extraction import text
+
+#nltk.download('words', download_dir='/project/minion/virtual/scholar/nltk_data')
+english_vocab = set(w.lower() for w in nltk.corpus.words.words())
+punc = ['.', ',', '"', "'", '?', '!', ':', ';', '(', ')', '[', ']', '{', '}',"%"]
+stop_words = text.ENGLISH_STOP_WORDS.union(punc)
+
+data_files = glob.glob('abstract/s2-corpus-*.gz')
+data_full = [json.loads(line) for file in data_files for line in gzip.open(file, 'r').read().decode('utf-8').split('\n') if line != '']
+
+data_eng = [line for line in data_full if len(english_vocab.intersection(set([t for t in line['paperAbstract'].lower().split() if t.isalpha()]))) > 0.05 * len(line['paperAbstract'])]
+data_text = [record['title'] + ' ' + record['paperAbstract'] for record in data_eng]
+
+vocabulary = Counter([word for paper in tqdm(data_text) for word in re.split('\W+', paper.lower()) if word not in stop_words])
+
+with open('vocabulary.tsv', 'w') as fp:
+    print('\n'.join(['\t'.join(t) for t in vocabulary.most_common()]), file=fp)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+# check our papers
+```
+zcat meta/*.gz | grep 'repeat' | grep 'methylation state'
+0b7474d544b917b1aac9f327ec81708444989346        2005    The EMBO journal        The profile of repeat-associated histone lysine methylation states in the mouse epigenome.
+8904923e99e5cc2654bf49f3daed53906d95c45d        2007    Molecular cell  Structural basis for lower lysine methylation state-specific readout by MBT repeats of L3MBTL1 and an engineered PHD finger.
+1fcff5413b0895fac549b43f6df180abd157e10f        2019    Nature Biotechnology    Analysis of short tandem repeat expansions and their methylation state with nanopore sequencing
+f04426401d452dcdf25a5309212b1dace8ab154b        2011    Molecular biology and evolution Reconstructing the ancestral germ line methylation state of young repeats.
+```
+
+```
+zcat meta/*.gz | grep 'Nanopype'
+81049aac9c0b5503e3fd36087012feab7e81b9d8        2019    Bioinformatics  Nanopype: a modular and scalable nanopore data processing pipeline
+5ee7b3dc3031fa6b8759fe7940361656096fd1de        2019    Bioinformatics  Nanopype: a modular and scalable nanopore data processing pipeline
+```
+
+
+
+# characterize dataset
+# use t-SNE on word embeddings
+python
+```
+import glob
+import gzip
+import nltk
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from sklearn.feature_extraction import text
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.cluster import KMeans
+from sklearn.manifold import TSNE
+from nltk.tokenize import RegexpTokenizer
+from nltk.stem.snowball import SnowballStemmer
+
+import seaborn as sns
+sns.set(rc={'figure.figsize':(11.7,8.27)})
+palette = sns.color_palette("bright", 2)
+
+#nltk.download('words', download_dir='/project/minion/virtual/scholar/nltk_data')
+english_vocab = set(w.lower() for w in nltk.corpus.words.words())
+punc = ['.', ',', '"', "'", '?', '!', ':', ';', '(', ')', '[', ']', '{', '}',"%"]
+stop_words = text.ENGLISH_STOP_WORDS.union(punc)
+
+data_files = glob.glob('meta/s2-corpus-*.gz')
+data_meta = [tuple(line.split('\t')) for file in data_files for line in gzip.open(file, 'r').read().decode('utf-8').split('\n')]
+
+data_headlines_all = [x[3] for x in data_meta if len(x) == 4]
+data_headlines_eng = [l for l in data_headlines_all if len(english_vocab.intersection(set([t for t in l.lower().split() if t.isalpha()]))) > 0.05 * len(l)]
+data_headlines = data_headlines_eng
+
+print('All headlines : {}, english: {}'.format(len(data_headlines_all), len(data_headlines_eng)))
+
+stemmer = SnowballStemmer('english')
+tokenizer = RegexpTokenizer(r'[a-zA-Z\']+')
+def tokenize(text):
+    return [stemmer.stem(word) for word in tokenizer.tokenize(text.lower())]
+
+vectorizer = TfidfVectorizer(stop_words = stop_words, tokenizer = tokenize, max_features = 16000)
+X = vectorizer.fit_transform(data_headlines)
+words = vectorizer.get_feature_names()
+print(words[250:300])
+
+tsne = TSNE()
+X_embedded = tsne.fit_transform(X)
+y = ['sequence' if 'sequenc' in w else 'other' for w in data_headlines]
+sns.scatterplot(X_embedded[:,0], X_embedded[:,1], hue=y, legend='full', palette=palette)
+plt.show()
+```
+
+
+
+
+# characterize dataset
+# use t-SNE on word embeddings
+python
+```
+import glob, gzip, json, re
+import nltk
+from tqdm import tqdm
+
+from sklearn.feature_extraction import text
+from sklearn.feature_extraction.text import TfidfVectorizer
+from nltk.tokenize import RegexpTokenizer
+from nltk.stem.snowball import SnowballStemmer
+
+from datasketch import MinHash, MinHashLSHForest
+
+
+# load abstract and titles
+data_files = glob.glob('abstract/s2-corpus-*.gz')
+data_full = [json.loads(line) for file in data_files for line in gzip.open(file, 'r').read().decode('utf-8').split('\n') if line != '']
+
+#nltk.download('words', download_dir='/project/minion/virtual/scholar/nltk_data')
+english_vocab = set(w.lower() for w in nltk.corpus.words.words())
+punc = ['.', ',', '"', "'", '?', '!', ':', ';', '(', ')', '[', ']', '{', '}',"%"]
+stop_words = text.ENGLISH_STOP_WORDS.union(punc)
+
+data_eng = [line for line in data_full if len(english_vocab.intersection(set([t for t in line['paperAbstract'].lower().split() if t.isalpha()]))) > 0.05 * len(line['paperAbstract'])]
+data_text = [record['title'] + ' ' + record['paperAbstract'] for record in data_eng]
+
+print('All datasets : {}, english: {}'.format(len(data_full), len(data_eng)))
+
+data_text_nano = [record for record in data_text if 'nanopore sequencing' in record]
+
+# Build LSH Forrest
+permutations = 128
+minhash = []
+for record in data_text_nano:
+    tokens = re.sub(r'[^\w\s]','',record).lower().split()
+    m = MinHash(num_perm=permutations)
+    _ = [m.update(t.encode('utf-8')) for t in tokens]
+    minhash.append(m)
+
+forest = MinHashLSHForest(num_perm=permutations)
+for i,m in enumerate(minhash):
+    forest.add(i,m)
+
+forest.index()
+
+
+# Querry LSH Forrest
+tokens = re.sub(r'[^\w\s]','', 'Repeat expansion and methylation state anaysis using nanopore sequencing').lower().split()
+m = MinHash(num_perm=permutations)
+_ = [m.update(t.encode('utf-8')) for t in tokens]
+idx_array = np.array(forest.query(m, 5))
+
+_ = [print(data_text_nano[i]) for i in idx_array]
+
+
+
+
+
+
+
+
+stemmer = SnowballStemmer('english')
+tokenizer = RegexpTokenizer(r'[a-zA-Z\']+')
+def tokenize(text):
+    return [stemmer.stem(word) for word in tokenizer.tokenize(text.lower())]
+
+vectorizer = TfidfVectorizer(stop_words = stop_words, tokenizer = tokenize, max_features = 16000)
+X = vectorizer.fit_transform(data_text)
+words = vectorizer.get_feature_names()
+print(words[250:300])
+
+
+```
+
+
+
+R
+```
+require(plyr)
+require(ggplot2)
+
+data = data.frame()
+for (f in list.files(path='meta', pattern='*.gz')){
+    data <- rbind(data, read.table(gzfile(paste('meta', f, sep='/')), sep='\t', fill=T, header=F, col.names=c('ID', 'year', 'journal', 'title')))
+}
+
+data_year <- ddply(data, ~year, summarize, n=length(ID))
+data_jnl <- ddply(data, ~journal, summarize, n=length(ID))
+data_jnl_year <- ddply(data, ~journal+year, summarize, n=length(ID))
+
+ggplot(data_year, aes(x=year, y=n)) + geom_bar(stat='identity')
+```
