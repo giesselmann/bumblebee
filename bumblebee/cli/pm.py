@@ -64,12 +64,16 @@ def main(args):
     step = 0
     dist_buffer = deque()
     diff_buffer = deque()
+    ref_span_cache = []
     for i in range(args.epochs):
         with tqdm.tqdm(desc='Epoch {}'.format(i), postfix='') as pbar:
-            for ref_span in algn_idx.records():
+            ref_span_iter = algn_idx.records() if i == 0 else (r for r in ref_span_cache)
+            for ref_span in ref_span_iter:
                 if len(ref_span.seq) > args.max_seq_length:
                     pbar.update(1)
                     continue
+                if i == 0:
+                    ref_span_cache.append(ref_span)
                 read = Read(f5_idx[ref_span.qname], norm)
                 algn_dist, pm_derived = derive_model(pm, ref_span, read)
                 pm_diff = np.mean(np.abs(pm.loc[pm_derived.index, 'level_mean'] - pm_derived.level_mean.values))
@@ -87,6 +91,7 @@ def main(args):
                     break
         if np.mean(diff_buffer) < args.eps:
             break
+        random.shuffle(ref_span_cache)
     #pm_origin['derived'] = pm.loc[pm_origin.index.values].level_mean.values
     pm.to_csv(args.output_model, sep='\t')
 
