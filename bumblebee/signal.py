@@ -26,6 +26,7 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, re, string
+import random
 import edlib
 import numpy as np
 import pandas as pd
@@ -67,11 +68,6 @@ class Read():
         self.norm_signal = normalizer.norm(fast5Record.raw)
         self.eq_signal = normalizer.equalize(self.norm_signal)
         self.morph_signal = self.__morph__(self.eq_signal)
-        self.equalities = []
-        alphabet = string.ascii_uppercase[:16]
-        for expansion in range(1, 3):
-            self.equalities += [(alphabet[i], alphabet[i+expansion]) for i in range(len(alphabet) - expansion)]
-        self.alphabet = alphabet
 
     def __morph__(self, x, w=4):
         flt = rectangle(1, w)
@@ -111,19 +107,23 @@ class Read():
         )
         return df_event
 
-    def __sig2char__(self, x):
-        ords = sorted([ord(x) for x in self.alphabet])
+    def __sig2char__(self, x, alphabet):
+        ords = sorted([ord(x) for x in alphabet])
         quantiles = np.quantile(x, np.linspace(0,1,len(ords)))
         inds = np.digitize(x, quantiles).astype(np.int32) - 1
         return ''.join([chr(ords[x]) for x in inds])
 
-    def __event_align__(self, ref_signal, read_signal):
-        ref_chars = self.__sig2char__(ref_signal)
-        read_chars = self.__sig2char__(read_signal)
+    def __event_align__(self, ref_signal, read_signal, alphabet_size=16):
+        equalities = []
+        alphabet = string.ascii_uppercase[:alphabet_size]
+        for expansion in range(1, 4):
+            equalities += [(alphabet[i], alphabet[i+expansion]) for i in range(len(alphabet) - expansion)]
+        ref_chars = self.__sig2char__(ref_signal, alphabet)
+        read_chars = self.__sig2char__(read_signal, alphabet)
         algn = edlib.align(ref_chars, read_chars,
             mode='HW',
             task='path',
-            additionalEqualities=self.equalities)
+            additionalEqualities=equalities)
         ops = [(int(op[:-1]), op[-1]) for op in re.findall('(\d*\D)',algn['cigar'])]
         begin, end = algn['locations'][0]
         begin = begin or 0
@@ -141,11 +141,12 @@ class Read():
     def events(self):
         return self.__event_compression__(self.edges())
 
-    def event_alignment(self, ref_span, pore_model):
+    def event_alignment(self, ref_span, pore_model, alphabet_size=16):
         df_events = self.events()
         read_seq = ref_span.seq if not ref_span.is_reverse else reverse_complement(ref_span.seq)
+        read_seq = re.sub('N', lambda x: random.choice('ACGT'), read_seq)
         ref_signal = np.array([pore_model.loc[read_seq[i:i+6]].level_mean for i in range(len(read_seq) - 5)])
-        dist, ref_pos = self.__event_align__(ref_signal, df_events.event_median)
+        dist, ref_pos = self.__event_align__(ref_signal, df_events.event_median, alphabet_size)
         df_events['sequence_offset'] = ref_pos
         df_events = df_events[df_events.sequence_offset != -1]
         df_events['kmer'] = np.array([read_seq[i:i+6] for i in df_events.sequence_offset.astype(np.int32)])

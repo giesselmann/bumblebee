@@ -47,8 +47,8 @@ def main(args):
         pm.level_mean = (pm.level_mean - pm.level_mean.min()) / (pm.level_mean.max() - pm.level_mean.min()) * 2 - 1
     else:
         # init random uniform model
-        kmer = [''.join(c) for c in itertools.product('ACTG', repeat=6)]
-        pm = pd.DataFrame({'kmer':kmer, 'level_mean':np.random.uniform(-1, 1, 4096)}).set_index('kmer')
+        kmer = [''.join(c) for c in itertools.product('ACGT', repeat=6)]
+        pm = pd.DataFrame({'kmer':kmer, 'level_mean':np.random.uniform(-0.5, 0.5, 4096)}).set_index('kmer')
     # create bam and fast5 iterator
     f5_idx = Fast5Index(args.fast5)
     algn_idx = AlignmentIndex(args.bam)
@@ -59,20 +59,21 @@ def main(args):
     random.seed(42)
     ref_spans = random.sample(ref_spans, min(args.random_sample, len(ref_spans)))
     print(len(ref_spans))
-    # iterate until convergence or max_iterations
     reads = [Read(f5_idx[ref_span.qname], norm) for ref_span in ref_spans]
     # keep inital model
     pm_origin = pm.copy()
-    def derive_model(draft_model, ref_spans, reads):
-        dists, events = zip(*[read.event_alignment(ref_span, draft_model) for ref_span, read in tqdm.tqdm(zip(ref_spans, reads), desc='Aligning')])
+    alphabet_sizes = np.repeat([8, 10, 12, 14, 16], args.max_iterations // 5)
+    # iterate until convergence or max_iterations
+    def derive_model(draft_model, ref_spans, reads, alphabet_size=16):
+        dists, events = zip(*[read.event_alignment(ref_span, draft_model, alphabet_size) for ref_span, read in tqdm.tqdm(zip(ref_spans, reads), desc='Aligning')])
         df_events = pd.concat(events)
         df_model = df_events.groupby('kmer').agg(level_mean=('event_median', 'mean'))
         return np.mean(dists), df_model
-    for i in range(args.max_iterations):
-        algn_dist, pm_derived = derive_model(pm, ref_spans, reads)
+    for i, alphabet_size in enumerate(alphabet_sizes):
+        algn_dist, pm_derived = derive_model(pm, ref_spans, reads, alphabet_size=alphabet_size)
         model_dist = np.mean(np.absolute(pm.loc[pm_derived.index, 'level_mean'] - pm_derived.level_mean))
-        pm.loc[pm_derived.index, 'level_mean'] = pm_derived.level_mean.values
-        print("Alignment: {:.4f} Model: {:.4}".format(algn_dist, model_dist))
+        pm.loc[pm_derived.index, 'level_mean'] =  pm_derived.level_mean.values
+        print("Step {}: Alignment: {:.4f} Model: {:.4}".format(i, algn_dist, model_dist))
         if model_dist < args.eps:
             break
     #pm_origin['derived'] = pm.loc[pm_origin.index.values].level_mean.values
