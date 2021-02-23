@@ -113,10 +113,10 @@ class Read():
         inds = np.digitize(x, quantiles).astype(np.int32) - 1
         return ''.join([chr(ords[x]) for x in inds])
 
-    def __event_align__(self, ref_signal, read_signal, alphabet_size=16):
+    def __event_align__(self, ref_signal, read_signal, alphabet_size=12):
         equalities = []
         alphabet = string.ascii_uppercase[:alphabet_size]
-        for expansion in range(1, 4):
+        for expansion in range(1, 3):
             equalities += [(alphabet[i], alphabet[i+expansion]) for i in range(len(alphabet) - expansion)]
         ref_chars = self.__sig2char__(ref_signal, alphabet)
         read_chars = self.__sig2char__(read_signal, alphabet)

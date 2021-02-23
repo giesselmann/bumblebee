@@ -35,7 +35,6 @@ def main(args):
 def argparser():
     parser = ArgumentParser(
         formatter_class=ArgumentDefaultsHelpFormatter,
-        add_help=False
-    )
-
+        add_help=False)
+    
     return parser

@@ -56,11 +56,12 @@ def main(args):
     norm = ReadNormalizer()
     # keep inital model
     pm_origin = pm.copy()
-    def derive_model(draft_model, ref_span, read, alphabet_size=16):
+    def derive_model(draft_model, ref_span, read, alphabet_size=12):
         dist, df_events = read.event_alignment(ref_span, draft_model, alphabet_size)
         df_model = df_events.groupby('kmer').agg(level_mean=('event_median', 'mean'))
         return dist, df_model
     lr = args.lr
+    step = 0
     dist_buffer = deque()
     diff_buffer = deque()
     for i in range(args.epochs):
@@ -73,7 +74,8 @@ def main(args):
                 algn_dist, pm_derived = derive_model(pm, ref_span, read)
                 pm_diff = np.mean(np.abs(pm.loc[pm_derived.index, 'level_mean'] - pm_derived.level_mean.values))
                 pm.loc[pm_derived.index, 'level_mean'] =  (pm_derived.level_mean.values * lr) + (pm.loc[pm_derived.index, 'level_mean'] * (1-lr))
-                lr *= args.decay
+                step += 1
+                lr *= (1. / (1. + args.decay * step / 10))
                 dist_buffer.append(algn_dist)
                 diff_buffer.append(pm_diff)
                 if len(dist_buffer) > 200:
@@ -94,15 +96,14 @@ def main(args):
 def argparser():
     parser = ArgumentParser(
         formatter_class=ArgumentDefaultsHelpFormatter,
-        add_help=False
-    )
+        add_help=False)
     parser.add_argument("output_model", type=str)
     parser.add_argument("fast5", type=str)
     parser.add_argument("bam", type=str)
     parser.add_argument("--draft_model", type=str)
     parser.add_argument("--epochs", default=1, type=int)
     parser.add_argument("--lr", default=0.1, type=float)
-    parser.add_argument("--decay", default=0.999, type=float)
+    parser.add_argument("--decay", default=0.001, type=float)
     parser.add_argument("--eps", default=0.001, type=float)
     parser.add_argument("--max_seq_length", default=2000, type=int)
     return parser
