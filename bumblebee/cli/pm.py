@@ -108,7 +108,7 @@ def main(args):
                 else:
                     eps_break_count = 0
                 pm_origin_diff = pm_origin_diff_
-        if abs(pm_origin_diff - pm_origin_diff_) < args.eps:
+        if eps_break_count > 100:
             break
         random.shuffle(ref_span_cache)
         # save checkpoint model
