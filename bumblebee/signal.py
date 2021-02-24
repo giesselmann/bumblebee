@@ -27,6 +27,7 @@
 # ---------------------------------------------------------------------------------
 import os, re, string
 import random
+import itertools
 #import edlib
 import parasail
 import numpy as np
@@ -38,11 +39,41 @@ from bumblebee.alignment import reverse_complement
 
 
 
+
+class PoreModel():
+    def __init__(self, file=None, rnd=None, norm=False, k=6):
+        if file and os.path.isfile(file):
+            value_iter = (line.split('\t', 3)[:2] for line in open(file, 'r').read().split('\n') if line)
+            self.pm = {kmer:float(value) for kmer, value in value_iter}
+        elif rnd:
+            kmer = [''.join(c) for c in itertools.product('ACGT', repeat=k)]
+            value = np.random.uniform(-rnd, rnd, len(kmer))
+            self.pm = {k:v for k, v in zip(kmer, value)}
+        else:
+            self.pm = dict()
+        if norm:
+            values = list(self.pm.values())
+            v_min = min(values)
+            v_max = max(values)
+            self.pm = {key:(value - v_min)/(v_max - v_min) * 2.2 - 1.1 for key, value in self.pm.items()}
+
+    def __getattr__(self, name):
+        return getattr(self.pm, name)
+
+    def __getitem__(self, key):
+        return self.pm.get(key) or 0.0
+
+    def to_tsv(self, name, sep='\t'):
+        with open(name, 'w') as fp:
+            print('\n'.join(['\t'.join((key, str(value))) for key, value in self.pm.items()]), file=fp)
+
+
+
+
 class ReadNormalizer():
-    def __init__(self, bins=50, clip=1.5):
-        self.norm_q = 2.5e-2
-        self.norm_clip_estimate = 5e-2
-        self.norm_clip_multiplier = 10
+    def __init__(self, norm_q=2.5e-2, bins=100, clip=1.2):
+        assert clip >= 1.0
+        self.norm_q = norm_q
         self.bins = bins
         self.clip = clip
         pm_hist, _ = np.histogram(np.random.normal(0, clip/3, 1000), bins, range=(-clip, clip), density=True)
@@ -50,9 +81,11 @@ class ReadNormalizer():
         self.cdf = cdf / cdf[-1] * 2 - 1
 
     def norm(self, x):
-        q0, q1, q2, q3 = np.quantile(x, [self.norm_q, 1-self.norm_q, self.norm_clip_estimate, 1-self.norm_clip_estimate])
-        x_clip = np.clip(x, q0 - self.norm_clip_multiplier*(q2-q0), q1 + self.norm_clip_multiplier*(q1-q3))
-        x_norm = (x_clip - q0) / (q1 - q0) * 2
+        q0, q1 = np.quantile(x, [self.norm_q, 1-self.norm_q])
+        iqr = q1 - q0
+        x_clip = np.clip(x, q0 - (self.clip-1)/2* iqr, q1 + (self.clip-1)/2* iqr)
+        x_norm = (x_clip - q0) / iqr * 2
+        # center to zero, quantile in range [-1, 1]
         return x_norm - 1
 
     def equalize(self, x):
@@ -74,10 +107,10 @@ class Read():
 
     def __morph__(self, x, w=3):
         flt = rectangle(1, w)
-        morph_signal = np.clip(x * 127 + 127, 0, 255).astype(np.uint8).reshape((1, len(x)))
+        morph_signal = np.clip(x * 100 + 127, 0, 255).astype(np.uint8).reshape((1, len(x)))
         morph_signal = opening(morph_signal, flt)
         morph_signal = closing(morph_signal, flt)[0].astype(np.float32)
-        return (morph_signal - 127) / 127
+        return (morph_signal - 127) / 100
 
     def __edges__(self, x, threshold=0.3):
         # f = np.array([-3, -1, 1, 3])
@@ -124,19 +157,19 @@ class Read():
         matrix = parasail.matrix_create(alphabet, 0, 0)
         # match score on main diagonal
         scale = (np.eye(n, k=0, dtype=int) * 5 +
-                  np.eye(n, k=1, dtype=int) * 4 +
+                  np.eye(n, k=1, dtype=int) * 3 +
                   np.eye(n, k=2, dtype=int) * 2 +
                   np.eye(n, k=3, dtype=int) * 1+
-                  np.eye(n, k=-1, dtype=int) * 4 +
+                  np.eye(n, k=-1, dtype=int) * 3 +
                   np.eye(n, k=-2, dtype=int) * 2 +
                   np.eye(n, k=-3, dtype=int) * 1)
         # write to score matrix
         for i, row in enumerate(scale):
             for j, cell in enumerate(row):
-                matrix[i,j] = matrix.matrix[i,j] + (cell or -5)
+                matrix[i,j] = matrix.matrix[i,j] + (cell or -4)
         return matrix
 
-    def __event_align__(self, ref_signal, read_signal, alphabet_size=24):
+    def __event_align__(self, ref_signal, read_signal, alphabet_size=10):
         alphabet = string.ascii_uppercase[:alphabet_size]
         ref_chars = self.__sig2char__(ref_signal, alphabet)
         read_chars = self.__sig2char__(read_signal, alphabet)
@@ -170,11 +203,11 @@ class Read():
     def events(self):
         return self.__event_compression__(self.edges())
 
-    def event_alignment(self, ref_span, pore_model, alphabet_size=24):
+    def event_alignment(self, ref_span, pore_model, alphabet_size=10):
         df_events = self.events()
         read_seq = ref_span.seq if not ref_span.is_reverse else reverse_complement(ref_span.seq)
-        read_seq = re.sub('N', lambda x: random.choice('ACGT'), read_seq)
-        ref_signal = np.array([pore_model.loc[read_seq[i:i+6]].level_mean for i in range(len(read_seq) - 5)])
+        read_seq_acgt = re.sub('N', lambda x: random.choice('ACGT'), read_seq)
+        ref_signal = np.array([pore_model[read_seq_acgt[i:i+6]] for i in range(len(read_seq) - 5)])
         dist, ref_pos = self.__event_align__(ref_signal, df_events.event_median, alphabet_size)
         df_events['sequence_offset'] = ref_pos
         df_events = df_events[(df_events.sequence_offset != -1) & (df_events.sequence_offset != df_events.sequence_offset.max())]

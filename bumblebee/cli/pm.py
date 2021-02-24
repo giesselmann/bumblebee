@@ -37,7 +37,7 @@ import matplotlib.pyplot as plt
 
 from bumblebee.fast5 import Fast5Index
 from bumblebee.alignment import AlignmentIndex
-from bumblebee.signal import Read, ReadNormalizer
+from bumblebee.signal import PoreModel, Read, ReadNormalizer
 
 
 
@@ -45,12 +45,10 @@ from bumblebee.signal import Read, ReadNormalizer
 def main(args):
     # load draft pore model or generate random distributed
     if args.draft_model:
-        pm = pd.read_csv(args.draft_model, sep='\t', header=None, names=['kmer', 'level_mean'], usecols=[0,1]).set_index('kmer')
-        pm.level_mean = (pm.level_mean - pm.level_mean.min()) / (pm.level_mean.max() - pm.level_mean.min()) * 2 - 1
+        pm = PoreModel(args.draft_model, norm=True)
     else:
         # init random uniform model
-        kmer = [''.join(c) for c in itertools.product('ACGT', repeat=6)]
-        pm = pd.DataFrame({'kmer':kmer, 'level_mean':np.random.uniform(-0.1, 0.1, 4096)}).set_index('kmer')
+        pm = PoreModel(rnd=True)
     # create bam and fast5 iterator
     f5_idx = Fast5Index(args.fast5)
     algn_idx = AlignmentIndex(args.bam)
@@ -58,18 +56,27 @@ def main(args):
     norm = ReadNormalizer()
     # keep inital model
     pm_origin = pm.copy()
-    def derive_model(draft_model, ref_span, read, alphabet_size=14):
+    # compare sum of absolute model differences
+    def model_diff(a, b, func=np.mean):
+        intersect_keys = set(a.keys()).intersection(b.keys())
+        return func(np.abs([a[k] - b[k] for k in intersect_keys]))
+    # new model from event table
+    def derive_model(draft_model, ref_span, read, alphabet_size=12):
         dist, df_events = read.event_alignment(ref_span, draft_model, alphabet_size)
         match_ratio = np.sum(np.diff(df_events.sequence_offset) == 1) / df_events.shape[0]
         df_model = df_events.groupby('kmer').agg(level_mean=('event_median', 'mean'))
+        # drop 'Ns'
+        df_model = df_model[df_model.index.isin(pm_origin.keys())]
+        derived_model = PoreModel()
+        derived_model.update(df_model.itertuples())
         ## debug plot
         #f, ax = plt.subplots(1, figsize=(20,5))
         #ax.step(df_events.event_id, df_events.event_median, 'r-', alpha=0.8)
-        #event_model_mean = df_model.loc[df_events.kmer, 'level_mean']
+        #event_model_mean = np.array([draft_model[k] for k in df_events.kmer])
         #ax.step(df_events.event_id, event_model_mean, 'b-', alpha=0.8)
         #ax.set_title("Score: {:.4f}".format(dist))
         #plt.show()
-        return dist, match_ratio, df_model
+        return dist, match_ratio, derived_model
     lr = args.lr
     step = 0
     dist_buffer = deque()
@@ -87,13 +94,16 @@ def main(args):
                     continue
                 if i == 0:
                     ref_span_cache.append(ref_span)
+                # event alignment
                 read = Read(f5_idx[ref_span.qname], norm, morph_events=True)
                 algn_dist, match_ratio, pm_derived = derive_model(pm, ref_span, read)
-                pm_diff = np.mean(np.abs(pm.loc[pm_derived.index, 'level_mean'] - pm_derived.level_mean.values))
-                pm.loc[pm_derived.index, 'level_mean'] = (pm_derived.level_mean.values * lr) + (pm.loc[pm_derived.index, 'level_mean'] * (1-lr))
-                pm_origin_diff_ = np.sum(np.abs(pm.level_mean - pm_origin.level_mean))
+                # update and compare
+                pm_diff = model_diff(pm_derived, pm, func=np.mean)
+                pm.update({key:(value * lr + pm[key] * (1-lr)) for key, value in pm_derived.items()})
+                pm_origin_diff_ = model_diff(pm, pm_origin, func=np.sum)
                 step += 1
                 lr *= (1. / (1. + args.decay * step / 10))
+                # running buffer of differences
                 dist_buffer.append(algn_dist)
                 diff_buffer.append(pm_diff)
                 ratio_buffer.append(match_ratio)
@@ -115,9 +125,9 @@ def main(args):
             break
         random.shuffle(ref_span_cache)
         # save checkpoint model
-        pm.to_csv(args.output_model + '.e{}'.format(i), sep='\t', header=None)
+        pm.to_tsv(args.output_model + '.e{}'.format(i))
     #pm_origin['derived'] = pm.loc[pm_origin.index.values].level_mean.values
-    pm.to_csv(args.output_model, sep='\t', header=None)
+    pm.to_tsv(args.output_model)
 
 
 
