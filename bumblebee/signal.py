@@ -70,7 +70,7 @@ class Read():
         self.morph_signal = self.__morph__(self.eq_signal)
         self.morph_events = morph_events
 
-    def __morph__(self, x, w=4):
+    def __morph__(self, x, w=3):
         flt = rectangle(1, w)
         morph_signal = np.clip(x * 127 + 127, 0, 255).astype(np.uint8).reshape((1, len(x)))
         morph_signal = opening(morph_signal, flt)
