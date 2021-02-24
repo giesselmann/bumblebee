@@ -30,8 +30,11 @@ import tqdm
 import itertools
 import numpy as np
 import pandas as pd
+import multiprocessing as mp
+import matplotlib.pyplot as plt
 from collections import deque
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+import matplotlib.pyplot as plt
 
 from bumblebee.fast5 import Fast5Index
 from bumblebee.alignment import AlignmentIndex
@@ -56,14 +59,23 @@ def main(args):
     norm = ReadNormalizer()
     # keep inital model
     pm_origin = pm.copy()
-    def derive_model(draft_model, ref_span, read, alphabet_size=12):
+    def derive_model(draft_model, ref_span, read, alphabet_size=16):
         dist, df_events = read.event_alignment(ref_span, draft_model, alphabet_size)
         df_model = df_events.groupby('kmer').agg(level_mean=('event_median', 'mean'))
+        ## debug plot
+        #f, ax = plt.subplots(1, figsize=(10,5))
+        #ax.step(df_events.event_id, df_events.event_median, 'r-', alpha=0.8)
+        #event_model_mean = df_model.loc[df_events.kmer, 'level_mean']
+        #ax.step(df_events.event_id, event_model_mean, 'b-', alpha=0.8)
+        #ax.set_title("Dist: {:.4f}".format(dist))
+        #plt.show()
         return dist, df_model
     lr = args.lr
     step = 0
     dist_buffer = deque()
     diff_buffer = deque()
+    pm_origin_diff = 0
+    eps_break_count = 0
     ref_span_cache = []
     for i in range(args.epochs):
         with tqdm.tqdm(desc='Epoch {}'.format(i), postfix='') as pbar:
@@ -77,7 +89,8 @@ def main(args):
                 read = Read(f5_idx[ref_span.qname], norm, morph_events=True)
                 algn_dist, pm_derived = derive_model(pm, ref_span, read)
                 pm_diff = np.mean(np.abs(pm.loc[pm_derived.index, 'level_mean'] - pm_derived.level_mean.values))
-                pm.loc[pm_derived.index, 'level_mean'] =  (pm_derived.level_mean.values * lr) + (pm.loc[pm_derived.index, 'level_mean'] * (1-lr))
+                pm.loc[pm_derived.index, 'level_mean'] = (pm_derived.level_mean.values * lr) + (pm.loc[pm_derived.index, 'level_mean'] * (1-lr))
+                pm_origin_diff_ = np.sum(np.abs(pm.level_mean - pm_origin.level_mean))
                 step += 1
                 lr *= (1. / (1. + args.decay * step / 10))
                 dist_buffer.append(algn_dist)
@@ -86,12 +99,20 @@ def main(args):
                     dist_buffer.popleft()
                     diff_buffer.popleft()
                 pbar.update(1)
-                pbar.set_postfix_str("Dist: {:.4f} Diff: {:.4f}".format(np.mean(dist_buffer), np.mean(diff_buffer)))
-                if np.mean(diff_buffer) < args.eps:
-                    break
-        if np.mean(diff_buffer) < args.eps:
+                pbar.set_postfix_str("Dist: {:.4f} Diff: {:.4f} Origin: {:.4f}".format(np.mean(dist_buffer), np.mean(diff_buffer), pm_origin_diff_))
+                # stop iteration after no changes for 100 reads
+                if abs(pm_origin_diff - pm_origin_diff_) < args.eps:
+                    eps_break_count += 1
+                    if eps_break_count > 100:
+                        break
+                else:
+                    eps_break_count = 0
+                pm_origin_diff = pm_origin_diff_
+        if abs(pm_origin_diff - pm_origin_diff_) < args.eps:
             break
         random.shuffle(ref_span_cache)
+        # save checkpoint model
+        pm.to_csv(args.output_model + '.e{}'.format(i), sep='\t')
     #pm_origin['derived'] = pm.loc[pm_origin.index.values].level_mean.values
     pm.to_csv(args.output_model, sep='\t')
 
@@ -109,6 +130,6 @@ def argparser():
     parser.add_argument("--epochs", default=1, type=int)
     parser.add_argument("--lr", default=0.1, type=float)
     parser.add_argument("--decay", default=0.001, type=float)
-    parser.add_argument("--eps", default=0.001, type=float)
+    parser.add_argument("--eps", default=0.0001, type=float)
     parser.add_argument("--max_seq_length", default=2000, type=int)
     return parser

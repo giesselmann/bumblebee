@@ -65,6 +65,7 @@ class ReadNormalizer():
 class Read():
     def __init__(self, fast5Record, normalizer, morph_events=False):
         self.fast5Record = fast5Record
+        self.normalizer = normalizer
         self.norm_signal = normalizer.norm(fast5Record.raw)
         self.eq_signal = normalizer.equalize(self.norm_signal)
         self.morph_signal = self.__morph__(self.eq_signal)
@@ -110,14 +111,16 @@ class Read():
 
     def __sig2char__(self, x, alphabet):
         ords = sorted([ord(x) for x in alphabet])
-        quantiles = np.quantile(x, np.linspace(0,1,len(ords)))
+        #quantiles = np.quantile(x, np.linspace(0,1,len(ords)))
+        quantiles = np.linspace(-self.normalizer.clip, self.normalizer.clip, len(alphabet))
         inds = np.digitize(x, quantiles).astype(np.int32) - 1
-        return ''.join([chr(ords[x]) for x in inds])
+        #return ''.join([chr(ords[x]) for x in inds])
+        return ''.join([alphabet[x] for x in inds])
 
-    def __event_align__(self, ref_signal, read_signal, alphabet_size=12):
+    def __event_align__(self, ref_signal, read_signal, alphabet_size=16):
         equalities = []
         alphabet = string.ascii_uppercase[:alphabet_size]
-        for expansion in range(1, 2):
+        for expansion in range(1, 3):
             equalities += [(alphabet[i], alphabet[i+expansion]) for i in range(len(alphabet) - expansion)]
         ref_chars = self.__sig2char__(ref_signal, alphabet)
         read_chars = self.__sig2char__(read_signal, alphabet)
@@ -142,7 +145,7 @@ class Read():
     def events(self):
         return self.__event_compression__(self.edges())
 
-    def event_alignment(self, ref_span, pore_model, alphabet_size=12):
+    def event_alignment(self, ref_span, pore_model, alphabet_size=16):
         df_events = self.events()
         read_seq = ref_span.seq if not ref_span.is_reverse else reverse_complement(ref_span.seq)
         read_seq = re.sub('N', lambda x: random.choice('ACGT'), read_seq)
