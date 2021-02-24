@@ -69,7 +69,7 @@ def main(args):
         with tqdm.tqdm(desc='Epoch {}'.format(i), postfix='') as pbar:
             ref_span_iter = algn_idx.records() if i == 0 else (r for r in ref_span_cache)
             for ref_span in ref_span_iter:
-                if len(ref_span.seq) > args.max_seq_length:
+                if len(ref_span.seq) < 500 or len(ref_span.seq) > args.max_seq_length:
                     pbar.update(1)
                     continue
                 if i == 0:
