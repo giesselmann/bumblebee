@@ -74,7 +74,7 @@ def main(args):
                     continue
                 if i == 0:
                     ref_span_cache.append(ref_span)
-                read = Read(f5_idx[ref_span.qname], norm)
+                read = Read(f5_idx[ref_span.qname], norm, morph_events=True)
                 algn_dist, pm_derived = derive_model(pm, ref_span, read)
                 pm_diff = np.mean(np.abs(pm.loc[pm_derived.index, 'level_mean'] - pm_derived.level_mean.values))
                 pm.loc[pm_derived.index, 'level_mean'] =  (pm_derived.level_mean.values * lr) + (pm.loc[pm_derived.index, 'level_mean'] * (1-lr))

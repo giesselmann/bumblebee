@@ -63,11 +63,12 @@ class ReadNormalizer():
 
 
 class Read():
-    def __init__(self, fast5Record, normalizer):
+    def __init__(self, fast5Record, normalizer, morph_events=False):
         self.fast5Record = fast5Record
         self.norm_signal = normalizer.norm(fast5Record.raw)
         self.eq_signal = normalizer.equalize(self.norm_signal)
         self.morph_signal = self.__morph__(self.eq_signal)
+        self.morph_events = morph_events
 
     def __morph__(self, x, w=4):
         flt = rectangle(1, w)
@@ -116,7 +117,7 @@ class Read():
     def __event_align__(self, ref_signal, read_signal, alphabet_size=12):
         equalities = []
         alphabet = string.ascii_uppercase[:alphabet_size]
-        for expansion in range(1, 3):
+        for expansion in range(1, 2):
             equalities += [(alphabet[i], alphabet[i+expansion]) for i in range(len(alphabet) - expansion)]
         ref_chars = self.__sig2char__(ref_signal, alphabet)
         read_chars = self.__sig2char__(read_signal, alphabet)
@@ -136,7 +137,7 @@ class Read():
         return algn['editDistance'] / len(ref_chars), ref_pos
 
     def edges(self):
-        return self.__edges__(self.norm_signal)
+        return self.__edges__(self.morph_signal if self.morph_events else self.norm_signal)
 
     def events(self):
         return self.__event_compression__(self.edges())
