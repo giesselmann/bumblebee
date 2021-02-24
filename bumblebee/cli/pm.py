@@ -30,7 +30,6 @@ import tqdm
 import itertools
 import numpy as np
 import pandas as pd
-import multiprocessing as mp
 import matplotlib.pyplot as plt
 from collections import deque
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
@@ -59,7 +58,7 @@ def main(args):
     norm = ReadNormalizer()
     # keep inital model
     pm_origin = pm.copy()
-    def derive_model(draft_model, ref_span, read, alphabet_size=16):
+    def derive_model(draft_model, ref_span, read, alphabet_size=64):
         dist, df_events = read.event_alignment(ref_span, draft_model, alphabet_size)
         df_model = df_events.groupby('kmer').agg(level_mean=('event_median', 'mean'))
         ## debug plot
@@ -99,7 +98,7 @@ def main(args):
                     dist_buffer.popleft()
                     diff_buffer.popleft()
                 pbar.update(1)
-                pbar.set_postfix_str("Dist: {:.4f} Diff: {:.4f} Origin: {:.4f}".format(np.mean(dist_buffer), np.mean(diff_buffer), pm_origin_diff_))
+                pbar.set_postfix_str("Ed.dist: {:.4f} Kmer.diff: {:.4f} Pm.diff: {:.4f}".format(np.mean(dist_buffer), np.mean(diff_buffer), pm_origin_diff_))
                 # stop iteration after no changes for 100 reads
                 if abs(pm_origin_diff - pm_origin_diff_) < args.eps:
                     eps_break_count += 1
@@ -112,9 +111,9 @@ def main(args):
             break
         random.shuffle(ref_span_cache)
         # save checkpoint model
-        pm.to_csv(args.output_model + '.e{}'.format(i), sep='\t')
+        pm.to_csv(args.output_model + '.e{}'.format(i), sep='\t', header=None)
     #pm_origin['derived'] = pm.loc[pm_origin.index.values].level_mean.values
-    pm.to_csv(args.output_model, sep='\t')
+    pm.to_csv(args.output_model, sep='\t', header=None)
 
 
 
