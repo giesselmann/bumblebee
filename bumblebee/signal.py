@@ -27,7 +27,8 @@
 # ---------------------------------------------------------------------------------
 import os, re, string
 import random
-import edlib
+#import edlib
+import parasail
 import numpy as np
 import pandas as pd
 from scipy import ndimage
@@ -110,34 +111,58 @@ class Read():
         return df_event
 
     def __sig2char__(self, x, alphabet):
-        ords = sorted([ord(x) for x in alphabet])
+        #ords = sorted([ord(x) for x in alphabet])
         #quantiles = np.quantile(x, np.linspace(0,1,len(ords)))
         quantiles = np.linspace(-self.normalizer.clip, self.normalizer.clip, len(alphabet))
         inds = np.digitize(x, quantiles).astype(np.int32) - 1
         #return ''.join([chr(ords[x]) for x in inds])
         return ''.join([alphabet[x] for x in inds])
 
-    def __event_align__(self, ref_signal, read_signal, alphabet_size=16):
-        equalities = []
+    def __matrix__(self, alphabet):
+        n = len(alphabet) + 1
+        # init empty matrix
+        matrix = parasail.matrix_create(alphabet, 0, 0)
+        # match score on main diagonal
+        scale = (np.eye(n, k=0, dtype=int) * 5 +
+                  np.eye(n, k=1, dtype=int) * 4 +
+                  np.eye(n, k=2, dtype=int) * 2 +
+                  np.eye(n, k=3, dtype=int) * 1+
+                  np.eye(n, k=-1, dtype=int) * 4 +
+                  np.eye(n, k=-2, dtype=int) * 2 +
+                  np.eye(n, k=-3, dtype=int) * 1)
+        # write to score matrix
+        for i, row in enumerate(scale):
+            for j, cell in enumerate(row):
+                matrix[i,j] = matrix.matrix[i,j] + (cell or -5)
+        return matrix
+
+    def __event_align__(self, ref_signal, read_signal, alphabet_size=24):
         alphabet = string.ascii_uppercase[:alphabet_size]
-        for expansion in range(1, 4):
-            equalities += [(alphabet[i], alphabet[i+expansion]) for i in range(len(alphabet) - expansion)]
         ref_chars = self.__sig2char__(ref_signal, alphabet)
         read_chars = self.__sig2char__(read_signal, alphabet)
-        algn = edlib.align(ref_chars, read_chars,
-            mode='HW',
-            task='path',
-            additionalEqualities=equalities)
-        ops = [(int(op[:-1]), op[-1]) for op in re.findall('(\d*\D)',algn['cigar'])]
-        begin, end = algn['locations'][0]
-        begin = begin or 0
-        end = end or len(read_chars)
-        # len of alignment, step on matches/mismatches
-        ref_idx = np.cumsum(np.array([True if op in '=XI' else False for n_ops, op in ops for _ in range(n_ops)])) - 1
-        sim_msk = np.array([True if op in '=XD' else False for n_ops, op in ops for _ in range(n_ops)])
-        ref_pos = np.ones(read_signal.shape, dtype=np.int32) * -1
-        ref_pos[begin:end+1] = ref_idx[sim_msk]
-        return algn['editDistance'] / len(ref_chars), ref_pos
+        result = parasail.sg_dx_trace_striped_32(ref_chars, read_chars, 2, 1, self.__matrix__(alphabet))
+        ref_idx = np.cumsum([c != '-' for c in result.traceback.query])
+        ref_msk = np.array([c != '-' for c in result.traceback.ref])
+        #sim_pos = np.ones(event_medians.shape, dtype=np.int32) * -1
+        sim_pos = ref_idx[ref_msk] - 1
+        return result.score / result.len_ref, sim_pos
+        # equalities = []
+        # for expansion in range(1, 4):
+        #     equalities += [(alphabet[i], alphabet[i+expansion]) for i in range(len(alphabet) - expansion)]
+        # algn = edlib.align(ref_chars, read_chars,
+        #     mode='HW',
+        #     task='path',
+        #     additionalEqualities=equalities)
+        # ops = [(int(op[:-1]), op[-1]) for op in re.findall('(\d*\D)',algn['cigar'])]
+        # begin, end = algn['locations'][0]
+        # begin = begin or 0
+        # end = end or len(read_chars)
+        # # len of alignment, step on matches/mismatches
+        # ref_idx = np.cumsum(np.array([True if op in '=XI' else False for n_ops, op in ops for _ in range(n_ops)])) - 1
+        # sim_msk = np.array([True if op in '=XD' else False for n_ops, op in ops for _ in range(n_ops)])
+        # ref_pos = np.ones(read_signal.shape, dtype=np.int32) * -1
+        # ref_pos[begin:end+1] = ref_idx[sim_msk]
+        # return algn['editDistance'] / len(ref_chars), ref_pos
 
     def edges(self):
         return self.__edges__(self.morph_signal if self.morph_events else self.norm_signal)
@@ -145,13 +170,13 @@ class Read():
     def events(self):
         return self.__event_compression__(self.edges())
 
-    def event_alignment(self, ref_span, pore_model, alphabet_size=16):
+    def event_alignment(self, ref_span, pore_model, alphabet_size=24):
         df_events = self.events()
         read_seq = ref_span.seq if not ref_span.is_reverse else reverse_complement(ref_span.seq)
         read_seq = re.sub('N', lambda x: random.choice('ACGT'), read_seq)
         ref_signal = np.array([pore_model.loc[read_seq[i:i+6]].level_mean for i in range(len(read_seq) - 5)])
         dist, ref_pos = self.__event_align__(ref_signal, df_events.event_median, alphabet_size)
         df_events['sequence_offset'] = ref_pos
-        df_events = df_events[df_events.sequence_offset != -1]
+        df_events = df_events[(df_events.sequence_offset != -1) & (df_events.sequence_offset != df_events.sequence_offset.max())]
         df_events['kmer'] = np.array([read_seq[i:i+6] for i in df_events.sequence_offset.astype(np.int32)])
         return dist, df_events

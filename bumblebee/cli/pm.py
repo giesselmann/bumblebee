@@ -58,21 +58,23 @@ def main(args):
     norm = ReadNormalizer()
     # keep inital model
     pm_origin = pm.copy()
-    def derive_model(draft_model, ref_span, read, alphabet_size=64):
+    def derive_model(draft_model, ref_span, read, alphabet_size=14):
         dist, df_events = read.event_alignment(ref_span, draft_model, alphabet_size)
+        match_ratio = np.sum(np.diff(df_events.sequence_offset) == 1) / df_events.shape[0]
         df_model = df_events.groupby('kmer').agg(level_mean=('event_median', 'mean'))
         ## debug plot
-        #f, ax = plt.subplots(1, figsize=(10,5))
+        #f, ax = plt.subplots(1, figsize=(20,5))
         #ax.step(df_events.event_id, df_events.event_median, 'r-', alpha=0.8)
         #event_model_mean = df_model.loc[df_events.kmer, 'level_mean']
         #ax.step(df_events.event_id, event_model_mean, 'b-', alpha=0.8)
-        #ax.set_title("Dist: {:.4f}".format(dist))
+        #ax.set_title("Score: {:.4f}".format(dist))
         #plt.show()
-        return dist, df_model
+        return dist, match_ratio, df_model
     lr = args.lr
     step = 0
     dist_buffer = deque()
     diff_buffer = deque()
+    ratio_buffer = deque()
     pm_origin_diff = 0
     eps_break_count = 0
     ref_span_cache = []
@@ -86,7 +88,7 @@ def main(args):
                 if i == 0:
                     ref_span_cache.append(ref_span)
                 read = Read(f5_idx[ref_span.qname], norm, morph_events=True)
-                algn_dist, pm_derived = derive_model(pm, ref_span, read)
+                algn_dist, match_ratio, pm_derived = derive_model(pm, ref_span, read)
                 pm_diff = np.mean(np.abs(pm.loc[pm_derived.index, 'level_mean'] - pm_derived.level_mean.values))
                 pm.loc[pm_derived.index, 'level_mean'] = (pm_derived.level_mean.values * lr) + (pm.loc[pm_derived.index, 'level_mean'] * (1-lr))
                 pm_origin_diff_ = np.sum(np.abs(pm.level_mean - pm_origin.level_mean))
@@ -94,11 +96,13 @@ def main(args):
                 lr *= (1. / (1. + args.decay * step / 10))
                 dist_buffer.append(algn_dist)
                 diff_buffer.append(pm_diff)
+                ratio_buffer.append(match_ratio)
                 if len(dist_buffer) > 200:
                     dist_buffer.popleft()
                     diff_buffer.popleft()
+                    ratio_buffer.popleft()
                 pbar.update(1)
-                pbar.set_postfix_str("Ed.dist: {:.4f} Kmer.diff: {:.4f} Pm.diff: {:.4f}".format(np.mean(dist_buffer), np.mean(diff_buffer), pm_origin_diff_))
+                pbar.set_postfix_str("Score: {:.4f} Kmer.diff: {:.4f} Matches: {:.4f} Pm.diff: {:.4f}".format(np.mean(dist_buffer), np.mean(diff_buffer), np.mean(ratio_buffer), pm_origin_diff_))
                 # stop iteration after no changes for 100 reads
                 if abs(pm_origin_diff - pm_origin_diff_) < args.eps:
                     eps_break_count += 1
