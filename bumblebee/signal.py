@@ -177,7 +177,7 @@ class Read():
         gap_open = 2
         gap_extension = 6
         # query is genomic sequence span, reference is all read events
-        result = parasail.sg_dx_trace_striped_64(ref_chars, read_chars, gap_open, gap_extension, self.__matrix__(alphabet))
+        result = parasail.sg_dx_trace_striped_32(ref_chars, read_chars, gap_open, gap_extension, self.__matrix__(alphabet))
         ref_idx = np.cumsum([c != '-' for c in result.traceback.query])
         ref_msk = np.array([c != '-' for c in result.traceback.ref])
         sim_pos = ref_idx[ref_msk] - 1
