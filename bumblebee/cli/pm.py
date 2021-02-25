@@ -61,8 +61,8 @@ def main(args):
         intersect_keys = set(a.keys()).intersection(b.keys())
         return func(np.abs([a[k] - b[k] for k in intersect_keys]))
     # new model from event table
-    def derive_model(draft_model, ref_span, read, alphabet_size=12):
-        dist, df_events = read.event_alignment(ref_span, draft_model, alphabet_size)
+    def derive_model(draft_model, ref_span, read, alphabet_size=32):
+        score, df_events = read.event_alignment(ref_span, draft_model, alphabet_size)
         match_ratio = np.sum(np.diff(df_events.sequence_offset) == 1) / df_events.shape[0]
         df_model = df_events.groupby('kmer').agg(level_mean=('event_median', 'mean'))
         # drop 'Ns'
@@ -71,12 +71,13 @@ def main(args):
         derived_model.update(df_model.itertuples())
         ## debug plot
         #f, ax = plt.subplots(1, figsize=(20,5))
-        #ax.step(df_events.event_id, df_events.event_median, 'r-', alpha=0.8)
         #event_model_mean = np.array([draft_model[k] for k in df_events.kmer])
-        #ax.step(df_events.event_id, event_model_mean, 'b-', alpha=0.8)
-        #ax.set_title("Score: {:.4f}".format(dist))
+        #ax.step(df_events.event_id, event_model_mean, 'b-', alpha=0.8, label='reference')
+        #ax.step(df_events.event_id, df_events.event_median, 'r-', alpha=0.8, label='read')
+        #ax.legend()
+        #ax.set_title("Score: {:.4f}".format(score))
         #plt.show()
-        return dist, match_ratio, derived_model
+        return score, match_ratio, derived_model
     lr = args.lr
     step = 0
     dist_buffer = deque()
@@ -96,15 +97,16 @@ def main(args):
                     ref_span_cache.append(ref_span)
                 # event alignment
                 read = Read(f5_idx[ref_span.qname], norm, morph_events=True)
-                algn_dist, match_ratio, pm_derived = derive_model(pm, ref_span, read)
+                algn_score, match_ratio, pm_derived = derive_model(pm, ref_span, read)
                 # update and compare
                 pm_diff = model_diff(pm_derived, pm, func=np.mean)
-                pm.update({key:(value * lr + pm[key] * (1-lr)) for key, value in pm_derived.items()})
+                if algn_score > args.threshold:
+                    pm.update({key:(value * lr + pm[key] * (1-lr)) for key, value in pm_derived.items()})
                 pm_origin_diff_ = model_diff(pm, pm_origin, func=np.sum)
                 step += 1
-                lr *= (1. / (1. + args.decay * step / 10))
+                lr = args.lr * (1. / (1. + args.decay * step / 10))
                 # running buffer of differences
-                dist_buffer.append(algn_dist)
+                dist_buffer.append(algn_score)
                 diff_buffer.append(pm_diff)
                 ratio_buffer.append(match_ratio)
                 if len(dist_buffer) > 200:
@@ -144,5 +146,6 @@ def argparser():
     parser.add_argument("--lr", default=0.1, type=float)
     parser.add_argument("--decay", default=0.001, type=float)
     parser.add_argument("--eps", default=0.0001, type=float)
+    parser.add_argument("--threshold", default=1.6, type=float)
     parser.add_argument("--max_seq_length", default=2000, type=int)
     return parser

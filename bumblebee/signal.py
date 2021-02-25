@@ -28,7 +28,7 @@
 import os, re, string
 import random
 import itertools
-#import edlib
+import edlib
 import parasail
 import numpy as np
 import pandas as pd
@@ -101,7 +101,8 @@ class Read():
         self.fast5Record = fast5Record
         self.normalizer = normalizer
         self.norm_signal = normalizer.norm(fast5Record.raw)
-        self.eq_signal = normalizer.equalize(self.norm_signal)
+        #self.eq_signal = normalizer.equalize(self.norm_signal)
+        self.eq_signal = self.norm_signal
         self.morph_signal = self.__morph__(self.eq_signal)
         self.morph_events = morph_events
 
@@ -152,33 +153,35 @@ class Read():
         return ''.join([alphabet[x] for x in inds])
 
     def __matrix__(self, alphabet):
+        # parasail add * character to alphabet
         n = len(alphabet) + 1
-        # init empty matrix
-        matrix = parasail.matrix_create(alphabet, 0, 0)
-        # match score on main diagonal
-        scale = (np.eye(n, k=0, dtype=int) * 5 +
-                  np.eye(n, k=1, dtype=int) * 3 +
-                  np.eye(n, k=2, dtype=int) * 2 +
-                  np.eye(n, k=3, dtype=int) * 1+
-                  np.eye(n, k=-1, dtype=int) * 3 +
-                  np.eye(n, k=-2, dtype=int) * 2 +
-                  np.eye(n, k=-3, dtype=int) * 1)
+        # init score matrix
+        match_score = len(alphabet) // 8
+        min_score = -match_score * 2
+        scale = np.eye(n, k=0, dtype=int) * match_score
+        for k in np.arange(1, len(alphabet)):
+            scale += np.eye(n, k=k, dtype=int) * max((match_score - k), min_score)
+            scale += np.eye(n, k=-k, dtype=int) * max((match_score - k), min_score)
         # write to score matrix
+        matrix = parasail.matrix_create(alphabet, 0, 0)
         for i, row in enumerate(scale):
             for j, cell in enumerate(row):
-                matrix[i,j] = matrix.matrix[i,j] + (cell or -4)
+                matrix[i,j] = cell
         return matrix
 
-    def __event_align__(self, ref_signal, read_signal, alphabet_size=10):
-        alphabet = string.ascii_uppercase[:alphabet_size]
+    def __event_align__(self, ref_signal, read_signal, alphabet_size=32):
+        assert alphabet_size <= len(string.ascii_letters)
+        alphabet = string.ascii_letters[:alphabet_size]
         ref_chars = self.__sig2char__(ref_signal, alphabet)
         read_chars = self.__sig2char__(read_signal, alphabet)
-        result = parasail.sg_dx_trace_striped_32(ref_chars, read_chars, 2, 1, self.__matrix__(alphabet))
+        gap_open = 2
+        gap_extension = 6
+        # query is genomic sequence span, reference is all read events
+        result = parasail.sg_dx_trace_striped_64(ref_chars, read_chars, gap_open, gap_extension, self.__matrix__(alphabet))
         ref_idx = np.cumsum([c != '-' for c in result.traceback.query])
         ref_msk = np.array([c != '-' for c in result.traceback.ref])
-        #sim_pos = np.ones(event_medians.shape, dtype=np.int32) * -1
         sim_pos = ref_idx[ref_msk] - 1
-        return result.score / result.len_ref, sim_pos
+        return result.score / result.len_query, sim_pos
         # equalities = []
         # for expansion in range(1, 4):
         #     equalities += [(alphabet[i], alphabet[i+expansion]) for i in range(len(alphabet) - expansion)]
@@ -203,7 +206,7 @@ class Read():
     def events(self):
         return self.__event_compression__(self.edges())
 
-    def event_alignment(self, ref_span, pore_model, alphabet_size=10):
+    def event_alignment(self, ref_span, pore_model, alphabet_size=32):
         df_events = self.events()
         read_seq = ref_span.seq if not ref_span.is_reverse else reverse_complement(ref_span.seq)
         read_seq_acgt = re.sub('N', lambda x: random.choice('ACGT'), read_seq)
