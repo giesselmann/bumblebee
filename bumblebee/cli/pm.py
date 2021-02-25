@@ -102,9 +102,9 @@ def main(args):
                 pm_diff = model_diff(pm_derived, pm, func=np.mean)
                 if algn_score > args.threshold:
                     pm.update({key:(value * lr + pm[key] * (1-lr)) for key, value in pm_derived.items()})
+                    step += 1
                 pm_origin_diff_ = model_diff(pm, pm_origin, func=np.sum)
-                step += 1
-                lr = args.lr * (1. / (1. + args.decay * step / 10))
+                lr = args.lr * (1. / (1. + args.decay * step))
                 # running buffer of differences
                 dist_buffer.append(algn_score)
                 diff_buffer.append(pm_diff)
@@ -114,7 +114,7 @@ def main(args):
                     diff_buffer.popleft()
                     ratio_buffer.popleft()
                 pbar.update(1)
-                pbar.set_postfix_str("Score: {:.4f} Kmer.diff: {:.4f} Matches: {:.4f} Pm.diff: {:.4f}".format(np.mean(dist_buffer), np.mean(diff_buffer), np.mean(ratio_buffer), pm_origin_diff_))
+                pbar.set_postfix_str("Step {}: Score: {:.4f} Kmer.diff: {:.4f} Matches: {:.4f} Pm.diff: {:.4f}".format(step, np.mean(dist_buffer), np.mean(diff_buffer), np.mean(ratio_buffer), pm_origin_diff_))
                 # stop iteration after no changes for 100 reads
                 if abs(pm_origin_diff - pm_origin_diff_) < args.eps:
                     eps_break_count += 1
