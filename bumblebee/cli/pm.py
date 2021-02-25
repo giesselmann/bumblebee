@@ -100,9 +100,11 @@ def main(args):
                 algn_score, match_ratio, pm_derived = derive_model(pm, ref_span, read)
                 # update and compare
                 pm_diff = model_diff(pm_derived, pm, func=np.mean)
-                if algn_score > args.threshold:
-                    pm.update({key:(value * lr + pm[key] * (1-lr)) for key, value in pm_derived.items()})
-                    step += 1
+                if algn_score < args.threshold:
+                    pbar.update(1)
+                    continue
+                pm.update({key:(value * lr + pm[key] * (1-lr)) for key, value in pm_derived.items()})
+                step += 1
                 pm_origin_diff_ = model_diff(pm, pm_origin, func=np.sum)
                 lr = args.lr * (1. / (1. + args.decay * step))
                 # running buffer of differences
