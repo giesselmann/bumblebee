@@ -40,36 +40,6 @@ from bumblebee.alignment import reverse_complement
 
 
 
-class PoreModel():
-    def __init__(self, file=None, rnd=None, norm=False, k=6):
-        if file and os.path.isfile(file):
-            value_iter = (line.split('\t', 3)[:2] for line in open(file, 'r').read().split('\n') if line)
-            self.pm = {kmer:float(value) for kmer, value in value_iter}
-        elif rnd:
-            kmer = [''.join(c) for c in itertools.product('ACGT', repeat=k)]
-            value = np.random.uniform(-rnd, rnd, len(kmer))
-            self.pm = {k:v for k, v in zip(kmer, value)}
-        else:
-            self.pm = dict()
-        if norm:
-            values = list(self.pm.values())
-            v_min = min(values)
-            v_max = max(values)
-            self.pm = {key:(value - v_min)/(v_max - v_min) * 2.2 - 1.1 for key, value in self.pm.items()}
-
-    def __getattr__(self, name):
-        return getattr(self.pm, name)
-
-    def __getitem__(self, key):
-        return self.pm.get(key) or 0.0
-
-    def to_tsv(self, name, sep='\t'):
-        with open(name, 'w') as fp:
-            print('\n'.join(['\t'.join((key, str(value))) for key, value in self.pm.items()]), file=fp)
-
-
-
-
 class ReadNormalizer():
     def __init__(self, norm_q=2.5e-2, bins=100, clip=1.2):
         assert clip >= 1.0
@@ -83,10 +53,12 @@ class ReadNormalizer():
     def norm(self, x):
         q0, q1 = np.quantile(x, [self.norm_q, 1-self.norm_q])
         iqr = q1 - q0
-        x_clip = np.clip(x, q0 - (self.clip-1)/2* iqr, q1 + (self.clip-1)/2* iqr)
-        x_norm = (x_clip - q0) / iqr * 2
-        # center to zero, quantile in range [-1, 1]
-        return x_norm - 1
+        x_clip = np.clip(x, q0 - (self.clip-1) * iqr/2, q1 + (self.clip-1) * iqr/2)
+        # project to [0, 1] range
+        x_norm = (x_clip - q0) / iqr
+        # center to [-1, 1] range
+        x_norm = x_norm * 2 - 1
+        return x_norm
 
     def equalize(self, x):
         hist, bins = np.histogram(x, self.bins, range=(-self.clip, self.clip), density=True)
@@ -128,6 +100,7 @@ class Read():
         v0 = (df_edge.falling_edges.shift() != df_edge.falling_edges).cumsum()
         v1 = df_edge.groupby(v0, sort=False).edge_filter.transform('min')
         df_edge['falling_event'] = np.logical_and(df_edge['edge_filter'] == v1, df_edge.falling_edges)
+        # combine and enumerate events
         df_edge['events'] = np.logical_or(df_edge['rising_event'], df_edge['falling_event'])
         df_edge['event_id'] = df_edge.events.cumsum()
         df = pd.DataFrame({'event_id':df_edge.event_id, 'signal':x})
@@ -145,11 +118,8 @@ class Read():
         return df_event
 
     def __sig2char__(self, x, alphabet):
-        #ords = sorted([ord(x) for x in alphabet])
-        #quantiles = np.quantile(x, np.linspace(0,1,len(ords)))
         quantiles = np.linspace(-self.normalizer.clip, self.normalizer.clip, len(alphabet))
         inds = np.digitize(x, quantiles).astype(np.int32) - 1
-        #return ''.join([chr(ords[x]) for x in inds])
         return ''.join([alphabet[x] for x in inds])
 
     def __matrix__(self, alphabet):
@@ -210,9 +180,9 @@ class Read():
         df_events = self.events()
         read_seq = ref_span.seq if not ref_span.is_reverse else reverse_complement(ref_span.seq)
         read_seq_acgt = re.sub('N', lambda x: random.choice('ACGT'), read_seq)
-        ref_signal = np.array([pore_model[read_seq_acgt[i:i+6]] for i in range(len(read_seq) - 5)])
+        ref_signal = np.array([pore_model[read_seq_acgt[i:i+pore_model.k]] for i in range(len(read_seq) - pore_model.k + 1)])
         dist, ref_pos = self.__event_align__(ref_signal, df_events.event_median, alphabet_size)
         df_events['sequence_offset'] = ref_pos
         df_events = df_events[(df_events.sequence_offset != -1) & (df_events.sequence_offset != df_events.sequence_offset.max())]
-        df_events['kmer'] = np.array([read_seq[i:i+6] for i in df_events.sequence_offset.astype(np.int32)])
+        df_events['kmer'] = np.array([read_seq[i:i+pore_model.k] for i in df_events.sequence_offset.astype(np.int32)])
         return dist, df_events
