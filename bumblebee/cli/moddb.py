@@ -77,14 +77,15 @@ def main(args):
             for match in re.finditer(pattern, valid_sequence):
                 match_begin = match.start()
                 match_end = match.end()
-                df_feature = df_events.loc[match_begin - args.pattern_extension + valid_offset : match_end + valid_offset + args.pattern_extension - pore_model.k]
+                feature_begin = match_begin - args.pattern_extension + valid_offset
+                df_feature = df_events.loc[feature_begin : match_end + valid_offset + args.pattern_extension - pore_model.k]
                 # reference position on template strand
                 if not ref_span.is_reverse:
                     feature_template_pos = ref_span.pos + match_begin + valid_offset
                 else:
                     feature_template_pos = ref_span.pos + ref_span_len - match_end - valid_offset
                 db_site_id = db.insert_site(db_read_id, args.mod_id, feature_template_pos)
-                db.insert_features(db_site_id, df_feature)
+                db.insert_features(db_site_id, df_feature, feature_begin)
             pbar.update(1)
             db.commit()
     pbar.close()

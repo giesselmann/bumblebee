@@ -65,6 +65,7 @@ def __init_features_table__(cursor):
     CREATE TABLE features (
         rowid INTEGER PRIMARY KEY,
         siteid INTEGER NOT NULL,
+        enum INT1,
         offset INT1,
         min FLOAT,
         mean FLOAT,
@@ -148,18 +149,19 @@ class ModDatabase():
         self.next_site_rowid += 1
         return self.next_site_rowid - 1
 
-    def insert_features(self, site_id, df):
+    def insert_features(self, site_id, df, feature_begin):
         sql_cmd = """
             INSERT INTO features
-            (siteid, offset, min, mean, median, std, max, length, kmer)
+            (siteid, enum, offset, min, mean, median, std, max, length, kmer)
             VALUES
-            ({siteid}, {offset}, {min}, {mean}, {median}, {std}, {max}, {length}, {kmer});
+            ({siteid}, {enum}, {offset}, {min}, {mean}, {median}, {std}, {max}, {length}, {kmer});
         """
         for i, row in enumerate(df.itertuples()):
             try:
                 self.cursor.execute(sql_cmd.format(
                     siteid=site_id,
-                    offset=i,
+                    enum=i,
+                    offset=row.Index - feature_begin,
                     min=row.event_min,
                     mean=row.event_mean,
                     median=row.event_median,
