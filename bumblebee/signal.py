@@ -33,7 +33,6 @@ import parasail
 import numpy as np
 import pandas as pd
 from scipy import ndimage
-from skimage.morphology import opening, closing, rectangle
 
 from bumblebee.alignment import reverse_complement
 
@@ -84,11 +83,9 @@ class Read():
         self.morph_events = morph_events
 
     def __morph__(self, x, w=3):
-        flt = rectangle(1, w)
-        morph_signal = np.clip(x * 100 + 127, 0, 255).astype(np.uint8).reshape((1, len(x)))
-        morph_signal = opening(morph_signal, flt)
-        morph_signal = closing(morph_signal, flt)[0].astype(np.float32)
-        return (morph_signal - 127) / 100
+        x = ndimage.grey_opening(x, size=w)
+        x = ndimage.grey_closing(x, size=w)
+        return x
 
     def __edges__(self, x, threshold=0.3):
         f = np.array([0, 3, -3])
