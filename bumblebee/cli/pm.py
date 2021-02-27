@@ -29,6 +29,7 @@ import random
 import tqdm
 import numpy as np
 import pandas as pd
+from scipy import stats
 from collections import defaultdict
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 import matplotlib.pyplot as plt
@@ -57,7 +58,7 @@ def main(args):
     def derive_model(draft_model, ref_span, read, alphabet_size=32):
         score, df_events = read.event_alignment(ref_span, draft_model, alphabet_size)
         match_ratio = np.sum(np.diff(df_events.sequence_offset) == 1) / df_events.shape[0]
-        df_model = df_events.groupby('kmer').agg(level_mean=('event_median', 'mean'))
+        df_model = df_events.groupby('kmer').agg(level_mean=('event_median', 'median'))
         # drop 'Ns'
         df_model = df_model[df_model.index.isin(draft_model.keys())]
         derived_model = PoreModel()
@@ -95,7 +96,7 @@ def main(args):
             pbar.update(coverage_sum_ - coverage_sum)
             coverage_sum = coverage_sum_
     pm_derived = PoreModel()
-    pm_derived.update({kmer:np.median(values) for kmer, values in kmer_collector.items()})
+    pm_derived.update({kmer:stats.mode(values)[0][0] for kmer, values in kmer_collector.items()})
     pm_derived.to_tsv(args.output_model)
 
 

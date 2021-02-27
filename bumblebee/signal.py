@@ -65,6 +65,11 @@ class ReadNormalizer():
         x_norm = np.interp(x, bins[:-1], self.cdf)
         return x_norm
 
+    def sig2char(self, x, alphabet):
+        quantiles = np.linspace(-self.clip, self.clip, len(alphabet))
+        inds = np.digitize(x, quantiles).astype(np.int32) - 1
+        return ''.join([alphabet[x] for x in inds])
+
 
 
 
@@ -86,7 +91,6 @@ class Read():
         return (morph_signal - 127) / 100
 
     def __edges__(self, x, threshold=0.3):
-        # f = np.array([-3, -1, 1, 3])
         f = np.array([0, 3, -3])
         x_f = ndimage.filters.convolve1d(self.morph_signal, f)
         x_f_rising = x_f > threshold
@@ -117,13 +121,8 @@ class Read():
         )
         return df_event
 
-    def __sig2char__(self, x, alphabet):
-        quantiles = np.linspace(-self.normalizer.clip, self.normalizer.clip, len(alphabet))
-        inds = np.digitize(x, quantiles).astype(np.int32) - 1
-        return ''.join([alphabet[x] for x in inds])
-
     def __matrix__(self, alphabet):
-        # parasail add * character to alphabet
+        # parasail adds * character to alphabet
         n = len(alphabet) + 1
         # init score matrix
         match_score = len(alphabet) // 8
@@ -142,8 +141,8 @@ class Read():
     def __event_align__(self, ref_signal, read_signal, alphabet_size=32):
         assert alphabet_size <= len(string.ascii_letters)
         alphabet = string.ascii_letters[:alphabet_size]
-        ref_chars = self.__sig2char__(ref_signal, alphabet)
-        read_chars = self.__sig2char__(read_signal, alphabet)
+        ref_chars = self.normalizer.sig2char(ref_signal, alphabet)
+        read_chars = self.normalizer.sig2char(read_signal, alphabet)
         gap_open = 2
         gap_extension = 6
         # query is genomic sequence span, reference is all read events
