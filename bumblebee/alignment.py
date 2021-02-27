@@ -89,4 +89,6 @@ class AlignmentIndex():
                     except KeyError:
                         # TODO implement ref lookup from fasta
                         raise
+                    if mapping.is_reverse:
+                        ref_span = reverse_complement(ref_span)
                     yield ReferenceSpan(qname=mapping.query_name, rname=bam.get_reference_name(mapping.refID), pos=mapping.pos, seq=ref_span, is_reverse=mapping.is_reverse)

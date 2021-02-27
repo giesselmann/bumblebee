@@ -34,8 +34,6 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage
 
-from bumblebee.alignment import reverse_complement
-
 
 
 
@@ -59,6 +57,11 @@ class ReadNormalizer():
         x_norm = x_norm * 2 - 1
         return x_norm
 
+    def morph(self, x, w=3):
+        x = ndimage.grey_opening(x, size=w)
+        x = ndimage.grey_closing(x, size=w)
+        return x
+
     def equalize(self, x):
         hist, bins = np.histogram(x, self.bins, range=(-self.clip, self.clip), density=True)
         x_norm = np.interp(x, bins[:-1], self.cdf)
@@ -79,13 +82,8 @@ class Read():
         self.norm_signal = normalizer.norm(fast5Record.raw)
         #self.eq_signal = normalizer.equalize(self.norm_signal)
         self.eq_signal = self.norm_signal
-        self.morph_signal = self.__morph__(self.eq_signal)
+        self.morph_signal = normalizer.morph(self.eq_signal)
         self.morph_events = morph_events
-
-    def __morph__(self, x, w=3):
-        x = ndimage.grey_opening(x, size=w)
-        x = ndimage.grey_closing(x, size=w)
-        return x
 
     def __edges__(self, x, threshold=0.3):
         f = np.array([0, 3, -3])
@@ -148,23 +146,6 @@ class Read():
         ref_msk = np.array([c != '-' for c in result.traceback.ref])
         sim_pos = ref_idx[ref_msk] - 1
         return result.score / result.len_query, sim_pos
-        # equalities = []
-        # for expansion in range(1, 4):
-        #     equalities += [(alphabet[i], alphabet[i+expansion]) for i in range(len(alphabet) - expansion)]
-        # algn = edlib.align(ref_chars, read_chars,
-        #     mode='HW',
-        #     task='path',
-        #     additionalEqualities=equalities)
-        # ops = [(int(op[:-1]), op[-1]) for op in re.findall('(\d*\D)',algn['cigar'])]
-        # begin, end = algn['locations'][0]
-        # begin = begin or 0
-        # end = end or len(read_chars)
-        # # len of alignment, step on matches/mismatches
-        # ref_idx = np.cumsum(np.array([True if op in '=XI' else False for n_ops, op in ops for _ in range(n_ops)])) - 1
-        # sim_msk = np.array([True if op in '=XD' else False for n_ops, op in ops for _ in range(n_ops)])
-        # ref_pos = np.ones(read_signal.shape, dtype=np.int32) * -1
-        # ref_pos[begin:end+1] = ref_idx[sim_msk]
-        # return algn['editDistance'] / len(ref_chars), ref_pos
 
     def edges(self):
         return self.__edges__(self.morph_signal if self.morph_events else self.norm_signal)
@@ -174,7 +155,7 @@ class Read():
 
     def event_alignment(self, ref_span, pore_model, alphabet_size=32):
         df_events = self.events()
-        read_seq = ref_span.seq if not ref_span.is_reverse else reverse_complement(ref_span.seq)
+        read_seq = ref_span.seq
         read_seq_acgt = re.sub('N', lambda x: random.choice('ACGT'), read_seq)
         ref_signal = np.array([pore_model[read_seq_acgt[i:i+pore_model.k]] for i in range(len(read_seq) - pore_model.k + 1)])
         dist, ref_pos = self.__event_align__(ref_signal, df_events.event_median, alphabet_size)

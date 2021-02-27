@@ -35,7 +35,9 @@ import numpy as np
 
 class PoreModel():
     def __init__(self, file=None, rnd=None, norm=False, k=6):
-        if file and os.path.isfile(file):
+        if file:
+            if not os.path.isfile(file):
+                raise FileNotFoundError('Pore model {} not found.'.format(file))
             value_iter = (line.split('\t', 3)[:2] for line in open(file, 'r').read().split('\n') if line)
             self.pm = {kmer:float(value) for kmer, value in value_iter}
             self.k = len(next(iter(self.pm)))

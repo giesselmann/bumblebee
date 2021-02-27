@@ -78,7 +78,7 @@ def main(args):
     coverage_sum = 0
     with tqdm.tqdm(desc='Event alignment', total=num_kmers*args.min_kmer_coverage, dynamic_ncols=True) as pbar:
         for ref_span in algn_idx.records():
-            if len(ref_span.seq) < 500 or len(ref_span.seq) > args.max_seq_length:
+            if len(ref_span.seq) < args.min_seq_length or len(ref_span.seq) > args.max_seq_length:
                 continue
             # event alignment
             read = Read(f5_idx[ref_span.qname], norm, morph_events=True)
@@ -112,5 +112,6 @@ def argparser():
     parser.add_argument("--draft_model", type=str)
     parser.add_argument("--min_score", default=1.6, type=float)
     parser.add_argument("--min_kmer_coverage", default=1000, type=int)
+    parser.add_argument("--min_seq_length", default=500, type=int)
     parser.add_argument("--max_seq_length", default=5000, type=int)
     return parser
