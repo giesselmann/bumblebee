@@ -72,6 +72,8 @@ class AlignmentIndex():
             self.batch_files = [input]
         elif os.path.isdir(input):
             self.batch_files = [os.path.join(dirpath, f) for dirpath, _, files in os.walk(input) for f in files if f.endswith('.bam')]
+        else:
+            raise FileNotFoundError("Alignment input {} is not a file or directory.".format(input))
 
     # generator interface for fast access
     def records(self):

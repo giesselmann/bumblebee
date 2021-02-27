@@ -41,7 +41,7 @@ class Fast5Index():
         elif os.path.isdir(input):
             self.batch_files = [os.path.join(dirpath, f) for dirpath, _, files in os.walk(input) for f in files if f.endswith('.fast5')]
         else:
-            raise ValueError("Input {} is not an existing file or directory".format(input))
+            raise FileNotFoundError("Input {} is not an existing file or directory".format(input))
         self.index = None
 
     def grp2id(grp):
@@ -49,6 +49,11 @@ class Fast5Index():
 
     def id2grp(id):
         return 'read_' + id
+
+    def __len__(self):
+        if self.index is None:
+            self.__index__()
+        return len(self.index)
 
     def __index__(self):
         self.index = {}

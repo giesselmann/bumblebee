@@ -122,6 +122,10 @@ class ModDatabase():
         self.cursor.execute("SELECT MAX(rowid) FROM sites;")
         self.next_site_rowid = (next(self.cursor)[0] or 0) + 1
 
+    def __del__(self):
+        self.connection.commit()
+        self.connection.close()
+
     def insert_read(self, ref_span, score=0.0):
         self.cursor.execute("INSERT INTO reads (rowid, readid, chr, pos, strand, score) VALUES ({rowid}, {readid}, {chr}, {pos}, {strand}, {score});".format(
             rowid=self.next_read_rowid,

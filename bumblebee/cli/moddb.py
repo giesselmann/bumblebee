@@ -54,9 +54,8 @@ def main(args):
     # read signal normalization
     norm = ReadNormalizer()
     pattern = r'(?<=[ACGT]{{{ext}}}){pattern}(?=[ACGT]{{{ext}}})'.format(ext=args.pattern_extension, pattern=args.pattern)
-    with tqdm.tqdm(desc='Event align', dynamic_ncols=True) as pbar:
+    with tqdm.tqdm(desc='Event align', dynamic_ncols=True, total=len(f5_idx)) as pbar:
         for i, ref_span in enumerate(algn_idx.records()):
-            pbar.set_postfix_str('Reads processed: {}'.format(i))
             if len(ref_span.seq) < args.min_seq_length or len(ref_span.seq) > args.max_seq_length:
                 continue
             read = Read(f5_idx[ref_span.qname], norm)
@@ -86,8 +85,9 @@ def main(args):
                     feature_template_pos = ref_span.pos + ref_span_len - match_end - valid_offset
                 db_site_id = db.insert_site(db_read_id, args.mod_id, feature_template_pos)
                 db.insert_features(db_site_id, df_feature)
-                pbar.update(1)
+            pbar.update(1)
             db.commit()
+    pbar.close()
 
 
 
