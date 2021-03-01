@@ -26,8 +26,8 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os
-import asyncio
 import sqlite3
+import itertools
 import numpy as np
 
 
@@ -47,6 +47,11 @@ def __init_reads_table__(cursor):
     cursor.execute(sql_cmd)
 
 
+def __index_reads_table__(cursor):
+    cursor.execute("CREATE INDEX IF NOT EXISTS reads_chr_idx ON reads(chr, strand)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS reads_score_idx ON reads(score)")
+
+
 def __init_sites_table__(cursor):
     sql_cmd = """
     CREATE TABLE sites (
@@ -58,6 +63,13 @@ def __init_sites_table__(cursor):
         FOREIGN KEY (readid) REFERENCES reads (rowid) ON DELETE CASCADE ON UPDATE NO ACTION
     );"""
     cursor.execute(sql_cmd)
+
+
+def __index_sites_table__(cursor):
+    cursor.execute("CREATE INDEX IF NOT EXISTS sites_readid_idx ON sites(readid)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS sites_class_idx ON sites(class)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS sites_batch_idx ON sites(batch)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS sites_pos_idx ON sites(pos)")
 
 
 def __init_features_table__(cursor):
@@ -79,6 +91,8 @@ def __init_features_table__(cursor):
     cursor.execute(sql_cmd)
 
 
+def __index_features_table__(cursor):
+    cursor.execute("CREATE INDEX IF NOT EXISTS features_siteid_idx ON features(siteid)")
 
 
 # init database
@@ -110,7 +124,7 @@ class BaseDatabase():
 
 # Feature database for modification caller training
 class ModDatabase():
-    def __init__(self, db_file):
+    def __init__(self, db_file, require_index=False):
         if not os.path.isfile(db_file):
             init_db(db_file, type='mod')
         self.connection = sqlite3.connect(db_file)
@@ -122,6 +136,10 @@ class ModDatabase():
         self.next_read_rowid = (next(self.cursor)[0] or 0) + 1
         self.cursor.execute("SELECT MAX(rowid) FROM sites;")
         self.next_site_rowid = (next(self.cursor)[0] or 0) + 1
+        if require_index:
+            __index_reads_table__(self.cursor)
+            __index_sites_table__(self.cursor)
+            __index_features_table__(self.cursor)
 
     def __del__(self):
         self.connection.commit()
@@ -175,3 +193,22 @@ class ModDatabase():
 
     def commit(self):
         self.connection.commit()
+
+    def get_feature_ids(self, mod_id, max_features=32, filter_table=None):
+        self.cursor.execute("SELECT sites.rowid, COUNT(sites.rowid) FROM reads JOIN sites on reads.rowid = sites.readid JOIN features ON sites.rowid = features.siteid WHERE class = {} GROUP BY sites.rowid ORDER BY sites.rowid;".format(mod_id))
+        return [x[0] for x in self.cursor if x[1] <= max_features]
+
+    # assign each site to batch id, set remaining to -1
+    def set_feature_batch(self, feature_batches):
+        self.cursor.execute("UPDATE sites SET batch = -1;")
+        for siteid, batch in feature_batches:
+            self.cursor.execute("UPDATE sites SET batch = {} WHERE rowid = {};".format(batch, siteid))
+
+    # return labels, lengths, kmers, features
+    def get_batch(self, batch_id):
+        self.cursor.execute("SELECT siteid, class, kmer, min, mean, median, std, max, length FROM sites JOIN features ON sites.rowid = features.siteid WHERE batch = {} ORDER BY siteid, enum;".format(batch_id))
+        def pack_feature(iterable):
+            for siteid, grp in itertools.groupby(iterable, key=lambda x : x[0]):
+                mod_ids, kmers, features = zip(*[(x[1], x[2], x[3:]) for x in grp])
+                yield mod_ids[0], len(kmers), kmers, features
+        return zip(*[feature for feature in pack_feature(self.cursor)])

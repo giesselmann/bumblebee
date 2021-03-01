@@ -107,3 +107,35 @@ def argparser():
     parser.add_argument("--max_seq_length", default=10000, type=int)
     parser.add_argument("--min_score", default=0.0, type=float)
     return parser
+
+
+"""
+import sqlite3
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+con = sqlite3.connect('5mC.db')
+cursor = con.cursor()
+
+cursor.execute("SELECT class, offset, mean FROM sites JOIN features ON sites.rowid = features.siteid;")
+
+df = pd.DataFrame(cursor, columns=['class', 'offset', 'mean'])
+df_agg = df.groupby(['offset']).agg(median=('mean', 'median')).reset_index()
+df_agg_m = df.groupby(['offset', 'class']).agg(median=('mean', 'median')).reset_index()
+df_agg_m = df_agg_m.pivot(index='offset', columns='class').reset_index()
+df_agg_m['diff'] = df_agg_m.loc[:, ('median', 0)] - df_agg_m.loc[:, ('median', 1)]
+
+f = plt.figure(figsize=(10,5))
+gs = f.add_gridspec(3,1,height_ratios=[4,1,1])
+ax1 = f.add_subplot(gs[0])
+ax2 = f.add_subplot(gs[1])
+ax3 = f.add_subplot(gs[2])
+sns.boxplot(x='offset', y='mean', hue='class', data=df, fliersize=0, ax=ax1)
+sns.barplot(x='offset', y='median', data=df_agg, ax=ax2)
+ax2.set_ylim(-0.4, 0.4)
+sns.barplot(x='offset', y='diff', data=df_agg_m, ax=ax3)
+ax3.set_ylim(-0.2, 0.2)
+f.savefig('plots/kmer_level.pdf')
+plt.show()
+"""
