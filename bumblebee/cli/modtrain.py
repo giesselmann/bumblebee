@@ -54,7 +54,7 @@ def main(args):
     db = ModDatabase(args.db, require_index=True, require_split=True)
     db.reset_batches()
     # summary writer
-    summary_dir = os.path.join(args.prefix, datetime.now().strftime("%Y%m%d"), args.model)
+    summary_dir = os.path.join(args.prefix, args.model, datetime.now().strftime("%Y%m%d_%H%M%S"))
     os.makedirs(summary_dir, exist_ok=True)
     writer = SummaryWriter(summary_dir)
     # init dataset and dataloader
