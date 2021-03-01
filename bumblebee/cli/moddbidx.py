@@ -59,7 +59,6 @@ def main(args):
             if is_palindrome:
                 context_dict[reverse_complement(context)].append((name, 1, match_begin))
                 reverse_count += 1
-        break
         if is_palindrome:
             continue
         # matches on reverse strand
