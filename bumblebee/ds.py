@@ -43,6 +43,8 @@ class ModDataset(torch.utils.data.Dataset):
         self.batch_size = batch_size
         self.max_features = max_features
         # init batch ids
+        print("Preparing {} dataset:".format('training' if train else 'evaluation'))
+        print("\tRead feature ids...")
         self.feature_ids = {mod_id:db.get_feature_ids(mod_id, max_features=max_features, train=train, min_score=min_score) for mod_id in mod_ids}
         # balance dataset
         if balance:
@@ -50,6 +52,7 @@ class ModDataset(torch.utils.data.Dataset):
             self.feature_ids = {mod_id:feature_ids[:min_feature_count] for mod_id, feature_ids in self.feature_ids.items()}
         self.feature_ids = [x for feature_ids in self.feature_ids.values() for x in feature_ids]
         random.shuffle(self.feature_ids)
+        print("\tWrite batch ids...")
         self.feature_ids = self.feature_ids[:len(self.feature_ids)-len(self.feature_ids)%batch_size]
         self.db.set_feature_batch(self.__feature_batch_iter__(), train=train)
 
@@ -71,3 +74,7 @@ class ModDataset(torch.utils.data.Dataset):
         return (np.array(labels), {'lengths': np.array(lengths),
                                     'kmers': kmers_padd,
                                     'features': features_padd})
+
+    def shuffle(self):
+        random.shuffle(self.feature_ids)
+        self.db.set_feature_batch(self.__feature_batch_iter__(), train=self.train)

@@ -25,19 +25,22 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
+import os
 import random
 import tqdm
 import torch
 import itertools
 import collections
 import numpy as np
+from datetime import datetime
 from torchinfo import summary
+from torch.utils.tensorboard import SummaryWriter
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from bumblebee.db import ModDatabase
 from bumblebee.ds import ModDataset
 from bumblebee.util import running_average
-from bumblebee.modnn import BaseModLSTM_v1
+import bumblebee.modnn
 
 
 
@@ -50,6 +53,10 @@ def main(args):
     # open db and index if necessary, datasets could use multiprocessing
     db = ModDatabase(args.db, require_index=True, require_split=True)
     db.reset_batches()
+    # summary writer
+    summary_dir = os.path.join(args.prefix, datetime.now().strftime("%Y%m%d"), args.model)
+    os.makedirs(summary_dir, exist_ok=True)
+    writer = SummaryWriter(summary_dir)
     # init dataset and dataloader
     ds_train = ModDataset(db, args.mod_ids,
                 batch_size=args.batch_size,
@@ -65,7 +72,7 @@ def main(args):
     print("Loaded {} train and {} evaluation batches.".format(len(dl_train), len(dl_eval)))
     eval_rate = np.ceil(len(dl_train) / len(dl_eval)).astype(int)
     # init model
-    model = BaseModLSTM_v1()
+    model = getattr(bumblebee.modnn, args.model)()
     _, _batch = next(iter(dl_eval))
     summary(model, input_data=[_batch['lengths'], _batch['kmers'], _batch['features']], device="cpu")
     model.to(device)
@@ -103,7 +110,9 @@ def main(args):
             kmers = batch['kmers'].to(device)
             features = batch['features'].to(device)
             # forward pass
+            model.eval()
             logits = model(lengths, kmers, features)
+            model.train()
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
@@ -114,22 +123,31 @@ def main(args):
         dl_eval_iter = iter(dl_eval)
         with tqdm.tqdm(desc='Epoch {}'.format(epoch), total=len(dl_train)) as pbar:
             for step, (labels, batch) in enumerate(dl_train):
+                step_total = epoch * len(dl_train) + step
                 # copy data to device
                 _train_loss, _train_acc = train_step(labels, batch)
                 train_loss.append(_train_loss)
                 train_acc.append(_train_acc)
+
+                writer.add_scalar('training loss', _train_loss, step_total)
+                writer.add_scalar('training accuracy', _train_acc, step_total)
                 # evaluate
                 if step % eval_rate == 0:
                     labels, batch = next(dl_eval_iter)
                     _eval_loss, _eval_acc = eval_step(labels, batch)
                     eval_loss.append(_eval_loss)
                     eval_acc.append(_eval_acc)
+                    writer.add_scalar('validation loss', _eval_loss, step_total)
+                    writer.add_scalar('validation accuracy', _eval_acc, step_total)
                 pbar.update(1)
                 pbar.set_postfix_str("Train: {:.3f} / {:.3f} Eval: {:.3f} / {:.3f}".format(
                     train_loss.mean(),
                     train_acc.mean(),
                     eval_loss.mean(),
                     eval_acc.mean()))
+            ds_train.shuffle()
+    # close & cleanup
+    writer.close()
 
 
 
@@ -141,6 +159,8 @@ def argparser():
         add_help=False
     )
     parser.add_argument("db", type=str)
+    parser.add_argument("model", type=str)
+    parser.add_argument("--prefix", default='.', type=str)
     parser.add_argument("--mod_ids", nargs='+', required=True, type=int)
     parser.add_argument("--epochs", default=1, type=int)
     parser.add_argument("--batch_size", default=32, type=int)
