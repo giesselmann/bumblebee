@@ -231,20 +231,27 @@ class ModDatabase():
     def insert_filter(self, chr, strand, pos, table='train'):
         self.cursor.execute("INSERT INTO {table} (chr, strand, pos) VALUES ('{chr}', {strand}, {pos});".format(table=table, chr=chr, strand=strand, pos=pos))
 
-    def get_feature_ids(self, mod_id, max_features=32, filter_table=None):
-        # TODO: add score and filter intersect
-        self.cursor.execute("SELECT rowid FROM sites WHERE class = {} AND count <= {} ORDER BY rowid;".format(mod_id, max_features))
+    def get_feature_ids(self, mod_id, max_features=32, train=True, min_score=1.0):
+        self.cursor.execute("SELECT sites.rowid FROM reads JOIN sites ON reads.rowid = sites.readid JOIN {table} ON reads.chr = {table}.chr AND reads.strand = {table}.strand AND sites.pos = {table}.pos WHERE sites.class = {mod_id} AND reads.score >= {min_score} AND sites.count <= {max_features};".format(
+            table='train' if train else 'eval',
+            mod_id=mod_id,
+            min_score=min_score,
+            max_features=max_features
+        ))
         return [x[0] for x in self.cursor]
 
-    # assign each site to batch id, set remaining to -1
-    def set_feature_batch(self, feature_batches):
-        self.cursor.execute("UPDATE sites SET batch = -1;")
+    # unused rows are set to zero
+    def reset_batches(self):
+        self.cursor.execute("UPDATE sites SET batch = 0;")
+
+    # assign each site to batch id
+    def set_feature_batch(self, feature_batches, train=True):
         for siteid, batch in feature_batches:
-            self.cursor.execute("UPDATE sites SET batch = {} WHERE rowid = {};".format(batch, siteid))
+            self.cursor.execute("UPDATE sites SET batch = {} WHERE rowid = {};".format(batch+1 if train else -batch-1, siteid))
 
     # return labels, lengths, kmers, features
-    def get_batch(self, batch_id):
-        self.cursor.execute("SELECT siteid, class, kmer, min, mean, median, std, max, length FROM sites JOIN features ON sites.rowid = features.siteid WHERE batch = {} ORDER BY siteid, enum;".format(batch_id))
+    def get_feature_batch(self, batch_id, train=True):
+        self.cursor.execute("SELECT siteid, class, kmer, min, mean, median, std, max, length FROM sites JOIN features ON sites.rowid = features.siteid WHERE batch = {} ORDER BY siteid, enum;".format(batch_id+1 if train else -batch_id-1))
         def pack_feature(iterable):
             for siteid, grp in itertools.groupby(iterable, key=lambda x : x[0]):
                 mod_ids, kmers, features = zip(*[(x[1], x[2], x[3:]) for x in grp])

@@ -33,13 +33,17 @@ import numpy as np
 
 # dataset yielding batches of (class, lengths, kmers, features)
 class ModDataset(torch.utils.data.Dataset):
-    def __init__(self, db, mod_ids, balance=True, batch_size=32, max_features=32):
+    def __init__(self, db, mod_ids,
+                train=True, balance=True,
+                batch_size=32, max_features=32,
+                min_score=1.0):
         self.db = db
         self.mod_ids = mod_ids
+        self.train = train
         self.batch_size = batch_size
         self.max_features = max_features
         # init batch ids
-        self.feature_ids = {mod_id:db.get_feature_ids(mod_id, max_features) for mod_id in mod_ids}
+        self.feature_ids = {mod_id:db.get_feature_ids(mod_id, max_features=max_features, train=train, min_score=min_score) for mod_id in mod_ids}
         # balance dataset
         if balance:
             min_feature_count = min([len(feature_ids) for feature_ids in self.feature_ids.values()])
@@ -47,7 +51,7 @@ class ModDataset(torch.utils.data.Dataset):
         self.feature_ids = [x for feature_ids in self.feature_ids.values() for x in feature_ids]
         random.shuffle(self.feature_ids)
         self.feature_ids = self.feature_ids[:len(self.feature_ids)-len(self.feature_ids)%batch_size]
-        self.db.set_feature_batch(self.__feature_batch_iter__())
+        self.db.set_feature_batch(self.__feature_batch_iter__(), train=train)
 
     def __feature_batch_iter__(self):
         for i, feature_id in enumerate(self.feature_ids):
@@ -57,7 +61,7 @@ class ModDataset(torch.utils.data.Dataset):
         return len(self.feature_ids) // self.batch_size
 
     def __getitem__(self, index):
-        labels, lengths, kmers, features = self.db.get_batch(index)
+        labels, lengths, kmers, features = self.db.get_feature_batch(index, train=self.train)
         # zero padd kmers and features
         kmers_padd = np.zeros((self.batch_size, self.max_features), dtype=np.int64)
         features_padd = np.zeros((self.batch_size, self.max_features, 6), dtype=np.float32)

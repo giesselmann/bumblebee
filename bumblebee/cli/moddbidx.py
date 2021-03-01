@@ -69,7 +69,7 @@ def main(args):
             context = contig[match_begin - args.pattern_extension : match_end + args.pattern_extension]
             context_dict[context].append((name, 1, len(contig) - match_end))
             reverse_count += 1
-    print("Found {} template and {} reverse strand matches.".format(template_count, reverse_count))
+    print("Found {} forward and {} reverse strand matches.".format(template_count, reverse_count))
     print("A total of {} contexts are split into train and eval section.".format(len(context_dict)))
     # free some memory
     del ref
@@ -100,3 +100,11 @@ def argparser():
     parser.add_argument("--pattern", default='CG', type=str)
     parser.add_argument("--pattern_extension", default=6, type=int)
     return parser
+
+
+
+"""
+hg38:
+Found 29401616 forward and 29401616 reverse strand matches.
+A total of 10.956.806 contexts are split into train and eval section.
+"""

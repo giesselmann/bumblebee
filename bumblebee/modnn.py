@@ -37,7 +37,7 @@ class BaseModLSTM_v1(torch.nn.Module):
             k=6, embedding_dim=32, padding_idx=0,
             lstm_dim=64, lstm_layer=1,
             num_classes=2):
-        super(ModCall_v1, self).__init__()
+        super(BaseModLSTM_v1, self).__init__()
         self.lstm_dim = lstm_dim
         self.lstm_layer = lstm_layer
         self.kmer_embedding = torch.nn.Embedding(
