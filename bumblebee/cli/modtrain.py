@@ -48,10 +48,7 @@ def main(args):
     device = torch.device("cuda:0" if use_cuda else "cpu")
     torch.backends.cudnn.benchmark = True
     # open db and index if necessary, datasets could use multiprocessing
-    print("Start indexing:")
     db = ModDatabase(args.db, require_index=True)
-    print("Completed indexing.")
-    exit(0)
     # init dataset and dataloader
     ds = ModDataset(db, args.mod_ids, batch_size=args.batch_size, max_features=args.max_features)
     dl = torch.utils.data.DataLoader(ds, batch_size=None, shuffle=False)
