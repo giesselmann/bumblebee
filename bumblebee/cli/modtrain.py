@@ -50,13 +50,16 @@ def main(args):
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:0" if use_cuda else "cpu")
     torch.backends.cudnn.benchmark = True
+
     # open db and index if necessary, datasets could use multiprocessing
     db = ModDatabase(args.db, require_index=True, require_split=True)
     db.reset_batches()
+
     # summary writer
     summary_dir = os.path.join(args.prefix, args.model, datetime.now().strftime("%Y%m%d_%H%M%S"))
     os.makedirs(summary_dir, exist_ok=True)
     writer = SummaryWriter(summary_dir)
+
     # init dataset and dataloader
     ds_train = ModDataset(db, args.mod_ids,
                 batch_size=args.batch_size,
@@ -69,13 +72,15 @@ def main(args):
                 min_score=args.min_score)
     dl_train = torch.utils.data.DataLoader(ds_train, batch_size=None, shuffle=False)
     dl_eval = torch.utils.data.DataLoader(ds_eval, batch_size=None, shuffle=False)
-    print("Loaded {} train and {} evaluation batches.".format(len(dl_train), len(dl_eval)))
     eval_rate = np.ceil(len(dl_train) / len(dl_eval)).astype(int)
+    print("Loaded {} train and {} evaluation batches.".format(len(dl_train), len(dl_eval)))
+
     # init model
     model = getattr(bumblebee.modnn, args.model)()
     _, _batch = next(iter(dl_eval))
     summary(model, input_data=[_batch['lengths'], _batch['kmers'], _batch['features']], device="cpu")
     model.to(device)
+
     # loss and optimizer
     criterion = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
@@ -146,9 +151,9 @@ def main(args):
                     eval_loss.mean(),
                     eval_acc.mean()))
             ds_train.shuffle()
+
     # close & cleanup
     writer.close()
-
 
 
 

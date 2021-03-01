@@ -26,7 +26,6 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import torch
-from torch.autograd import Variable
 
 
 
@@ -59,7 +58,7 @@ class BaseModLSTM_v1(torch.nn.Module):
         # (batch_size, seq_len, embedding_dim)
         inner = self.kmer_embedding(kmers)
         # (batch_size, seq_len, embedding_dim+k)
-        inner = torch.cat([inner, features * 0], dim=-1)
+        inner = torch.cat([inner, features], dim=-1)
         # pack inputs
         inner = torch.nn.utils.rnn.pack_padded_sequence(inner, lengths, batch_first=True, enforce_sorted=False)
         # run LSTM

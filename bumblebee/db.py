@@ -165,6 +165,8 @@ class ModDatabase():
         # require filter tables for train/val split
         if require_split:
             __init_filter_tables__(self.cursor)
+        # in case new indices where created
+        self.connection.commit()
 
     def __del__(self):
         self.connection.commit()
@@ -227,6 +229,7 @@ class ModDatabase():
         # delete existing rows
         self.cursor.execute("DELETE FROM train;")
         self.cursor.execute("DELETE FROM eval;")
+        self.connection.commit()
 
     def insert_filter(self, chr, strand, pos, table='train'):
         self.cursor.execute("INSERT INTO {table} (chr, strand, pos) VALUES ('{chr}', {strand}, {pos});".format(table=table, chr=chr, strand=strand, pos=pos))
@@ -243,11 +246,13 @@ class ModDatabase():
     # unused rows are set to zero
     def reset_batches(self):
         self.cursor.execute("UPDATE sites SET batch = 0;")
+        self.connection.commit()
 
     # assign each site to batch id
     def set_feature_batch(self, feature_batches, train=True):
         for siteid, batch in feature_batches:
             self.cursor.execute("UPDATE sites SET batch = {} WHERE rowid = {};".format(batch+1 if train else -batch-1, siteid))
+        self.connection.commit()
 
     # return labels, lengths, kmers, features
     def get_feature_batch(self, batch_id, train=True):
