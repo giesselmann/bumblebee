@@ -31,7 +31,7 @@ from torch.autograd import Variable
 
 
 
-class ModCall_v1(torch.nn.Module):
+class BaseModLSTM_v1(torch.nn.Module):
     def __init__(self,
             feature_dim=6,
             k=6, embedding_dim=32, padding_idx=0,
@@ -75,3 +75,13 @@ class ModCall_v1(torch.nn.Module):
         inner = self.dense(inner_reduced)
         out = torch.nn.functional.softmax(inner, dim=1)
         return out
+
+
+
+
+class SelfAttentionEncoder(torch.nn.Module):
+    def __init__(self):
+        pass
+
+    def forward(self, input):
+        pass

@@ -30,7 +30,10 @@ import sqlite3
 import itertools
 import numpy as np
 
+from bumblebee.ref import reference
 
+
+pattern_template = r'(?<=[ACGT]{{{ext}}}){pattern}(?=[ACGT]{{{ext}}})'
 
 
 # init tables
@@ -96,6 +99,23 @@ def __index_features_table__(cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS features_siteid_idx ON features(siteid)")
 
 
+def __init_filter_tables__(cursor):
+    sql_cmd = """
+        CREATE TABLE IF NOT EXISTS {} (
+        rowid INTEGER PRIMARY KEY,
+        chr TEXT NOT NULL,
+        strand INT1,
+        pos INT4
+        )
+    """
+    cursor.execute(sql_cmd.format('train'))
+    cursor.execute(sql_cmd.format('eval'))
+    # indices
+    cursor.execute("CREATE INDEX IF NOT EXISTS train_idx ON train(chr, strand, pos);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS eval_idx ON eval(chr, strand, pos);")
+
+
+
 # init database
 def init_db(db_file, type='basecall'):
     connection = sqlite3.connect(db_file)
@@ -126,7 +146,7 @@ class BaseDatabase():
 # Feature database for modification caller training
 class ModDatabase():
     def __init__(self, db_file, require_index=False,
-                require_filter=False, ref_file=None):
+                require_split=False):
         if not os.path.isfile(db_file):
             init_db(db_file, type='mod')
         self.connection = sqlite3.connect(db_file)
@@ -142,12 +162,9 @@ class ModDatabase():
             __index_reads_table__(self.cursor)
             __index_sites_table__(self.cursor)
             __index_features_table__(self.cursor)
-        # recompute filter tables for train/val split
-        if ref_file:
-            pass
         # require filter tables for train/val split
-        if require_filter:
-            pass
+        if require_split:
+            __init_filter_tables__(self.cursor)
 
     def __del__(self):
         self.connection.commit()
@@ -205,7 +222,17 @@ class ModDatabase():
     def commit(self):
         self.connection.commit()
 
+    def reset_split(self):
+        __init_filter_tables__(self.cursor)
+        # delete existing rows
+        self.cursor.execute("DELETE FROM train;")
+        self.cursor.execute("DELETE FROM eval;")
+
+    def insert_filter(self, chr, strand, pos, table='train'):
+        self.cursor.execute("INSERT INTO {table} (chr, strand, pos) VALUES ('{chr}', {strand}, {pos});".format(table=table, chr=chr, strand=strand, pos=pos))
+
     def get_feature_ids(self, mod_id, max_features=32, filter_table=None):
+        # TODO: add score and filter intersect
         self.cursor.execute("SELECT rowid FROM sites WHERE class = {} AND count <= {} ORDER BY rowid;".format(mod_id, max_features))
         return [x[0] for x in self.cursor]
 

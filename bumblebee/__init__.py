@@ -1,8 +1,9 @@
 from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
-from bumblebee.cli import basecall, modcall, basedb, moddb, basetrain, modtrain, pm
+from bumblebee.cli import pm
+from bumblebee.cli import basecall, basedb, basetrain
+from bumblebee.cli import modcall, moddb, moddbidx, modtrain
 
-
-modules = ['basecall', 'modcall', 'basedb', 'moddb', 'basetrain', 'modtrain', 'pm']
+modules = ['basecall', 'modcall', 'basedb', 'moddb', 'moddbidx', 'basetrain', 'modtrain', 'pm']
 
 __version__ = '0.1.0'
 

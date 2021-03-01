@@ -32,7 +32,7 @@ import numpy as np
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from bumblebee.poremodel import PoreModel
-from bumblebee.db import ModDatabase
+from bumblebee.db import ModDatabase, pattern_template
 from bumblebee.fast5 import Fast5Index
 from bumblebee.alignment import AlignmentIndex
 from bumblebee.poremodel import PoreModel
@@ -53,7 +53,7 @@ def main(args):
     algn_idx = AlignmentIndex(args.bam)
     # read signal normalization
     norm = ReadNormalizer()
-    pattern = r'(?<=[ACGT]{{{ext}}}){pattern}(?=[ACGT]{{{ext}}})'.format(ext=args.pattern_extension, pattern=args.pattern)
+    pattern = pattern_template.format(ext=args.pattern_extension, pattern=args.pattern)
     with tqdm.tqdm(desc='Event align', dynamic_ncols=True, total=len(f5_idx)) as pbar:
         for i, ref_span in enumerate(algn_idx.records()):
             if len(ref_span.seq) < args.min_seq_length or len(ref_span.seq) > args.max_seq_length:
@@ -110,13 +110,15 @@ def argparser():
     return parser
 
 
+
+
 """
 import sqlite3
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-con = sqlite3.connect('5mC.db')
+con = sqlite3.connect('5mC.sample.db')
 cursor = con.cursor()
 
 cursor.execute("SELECT class, offset, mean FROM sites JOIN features ON sites.rowid = features.siteid;")
@@ -126,6 +128,10 @@ df_agg = df.groupby(['offset']).agg(median=('mean', 'median')).reset_index()
 df_agg_m = df.groupby(['offset', 'class']).agg(median=('mean', 'median')).reset_index()
 df_agg_m = df_agg_m.pivot(index='offset', columns='class').reset_index()
 df_agg_m['diff'] = df_agg_m.loc[:, ('median', 0)] - df_agg_m.loc[:, ('median', 1)]
+
+cursor.execute("SELECT score FROM reads;")
+df_score = pd.DataFrame(cursor, columns=['score'])
+
 
 f = plt.figure(figsize=(10,5))
 gs = f.add_gridspec(3,1,height_ratios=[4,1,1])
@@ -138,5 +144,11 @@ ax2.set_ylim(-0.4, 0.4)
 sns.barplot(x='offset', y='diff', data=df_agg_m, ax=ax3)
 ax3.set_ylim(-0.2, 0.2)
 f.savefig('plots/kmer_level.pdf')
+plt.show()
+
+f, ax = plt.subplots(1, figsize=(5,5))
+_ax = sns.kdeplot(x="score", data=df_score, ax=ax)
+_ax.set_title("Signal alignment score")
+f.savefig('plots/signal_align_score.pdf')
 plt.show()
 """

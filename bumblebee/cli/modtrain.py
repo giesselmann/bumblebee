@@ -36,14 +36,13 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from bumblebee.db import ModDatabase
 from bumblebee.ds import ModDataset
-from bumblebee.modmodel import ModCall_v1
+from bumblebee.modnn import BaseModLSTM_v1
 
 
 
 
 def main(args):
     # init torch
-    # CUDA for PyTorch
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:0" if use_cuda else "cpu")
     torch.backends.cudnn.benchmark = True
@@ -53,7 +52,7 @@ def main(args):
     ds = ModDataset(db, args.mod_ids, batch_size=args.batch_size, max_features=args.max_features)
     dl = torch.utils.data.DataLoader(ds, batch_size=None, shuffle=False)
     # init model
-    model = ModCall_v1()
+    model = BaseModLSTM_v1()
     _, _batch = next(iter(dl))
     summary(model, input_data=[_batch['lengths'], _batch['kmers'], _batch['features']], device="cpu")
     model.to(device)
@@ -102,6 +101,7 @@ def argparser():
     parser.add_argument("--mod_ids", nargs='+', required=True, type=int)
     parser.add_argument("--epochs", default=1, type=int)
     parser.add_argument("--batch_size", default=32, type=int)
-    parser.add_argument("--max_features", default=32, type=int)
     parser.add_argument("--split", default=0.05, type=float)
+    parser.add_argument("--max_features", default=32, type=int)
+    parser.add_argument("--min_score", default=1.0, type=float)
     return parser
