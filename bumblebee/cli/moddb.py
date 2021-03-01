@@ -84,8 +84,9 @@ def main(args):
                     feature_template_pos = ref_span.pos + match_begin + valid_offset
                 else:
                     feature_template_pos = ref_span.pos + ref_span_len - match_end - valid_offset
-                db_site_id = db.insert_site(db_read_id, args.mod_id, feature_template_pos)
-                db.insert_features(db_site_id, df_feature, feature_begin)
+                if df_feature.shape[0] > 0 and df_feature.shape[0] < (2**15 - 1):
+                    db_site_id = db.insert_site(db_read_id, args.mod_id, feature_template_pos)
+                    db.insert_features(db_site_id, df_feature, feature_begin)
             pbar.update(1)
             db.commit()
     pbar.close()

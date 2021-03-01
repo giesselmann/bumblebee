@@ -60,6 +60,7 @@ def __init_sites_table__(cursor):
         class INT1,
         batch INT4 DEFAULT 0,
         pos INT4,
+        count INT2,
         FOREIGN KEY (readid) REFERENCES reads (rowid) ON DELETE CASCADE ON UPDATE NO ACTION
     );"""
     cursor.execute(sql_cmd)
@@ -124,7 +125,8 @@ class BaseDatabase():
 
 # Feature database for modification caller training
 class ModDatabase():
-    def __init__(self, db_file, require_index=False):
+    def __init__(self, db_file, require_index=False,
+                require_filter=False, ref_file=None):
         if not os.path.isfile(db_file):
             init_db(db_file, type='mod')
         self.connection = sqlite3.connect(db_file)
@@ -140,6 +142,12 @@ class ModDatabase():
             __index_reads_table__(self.cursor)
             __index_sites_table__(self.cursor)
             __index_features_table__(self.cursor)
+        # recompute filter tables for train/val split
+        if ref_file:
+            pass
+        # require filter tables for train/val split
+        if require_filter:
+            pass
 
     def __del__(self):
         self.connection.commit()
@@ -168,6 +176,9 @@ class ModDatabase():
         return self.next_site_rowid - 1
 
     def insert_features(self, site_id, df, feature_begin):
+        # update counts in sites table
+        self.cursor.execute("UPDATE sites SET count = {} WHERE rowid = {};".format(df.shape[0], site_id))
+        # insert rows into features table
         sql_cmd = """
             INSERT INTO features
             (siteid, enum, offset, min, mean, median, std, max, length, kmer)
@@ -195,8 +206,8 @@ class ModDatabase():
         self.connection.commit()
 
     def get_feature_ids(self, mod_id, max_features=32, filter_table=None):
-        self.cursor.execute("SELECT sites.rowid, COUNT(sites.rowid) FROM reads JOIN sites on reads.rowid = sites.readid JOIN features ON sites.rowid = features.siteid WHERE class = {} GROUP BY sites.rowid ORDER BY sites.rowid;".format(mod_id))
-        return [x[0] for x in self.cursor if x[1] <= max_features]
+        self.cursor.execute("SELECT rowid FROM sites WHERE class = {} AND count <= {} ORDER BY rowid;".format(mod_id, max_features))
+        return [x[0] for x in self.cursor]
 
     # assign each site to batch id, set remaining to -1
     def set_feature_batch(self, feature_batches):
