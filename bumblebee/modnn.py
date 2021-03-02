@@ -83,7 +83,7 @@ class BaseModEncoder_v1(torch.nn.Module):
     def __init__(self,
             num_features=6, num_kmers=4**6, num_classes=2,
             embedding_dim=32, padding_idx=0,
-            conv_dim=64, conv_kernel=2,
+            conv_dim=64, conv_kernel=3,
             num_heads=8
             ):
         super(BaseModEncoder_v1, self).__init__()
