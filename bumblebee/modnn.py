@@ -25,6 +25,7 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
+import math
 import torch
 
 
@@ -79,25 +80,28 @@ class BaseModLSTM_v1(torch.nn.Module):
 
 
 class BaseModEncoder_v1(torch.nn.Module):
-    def __init__(self, num_features=6, num_kmers=4**6, num_classes=2,
+    def __init__(self,
+            num_features=6, num_kmers=4**6, num_classes=2,
             embedding_dim=32, padding_idx=0,
-            conv_dim=64, conv_kernel=1,
+            conv_dim=64, conv_kernel=2,
             num_heads=8
             ):
         super(BaseModEncoder_v1, self).__init__()
-        d_model = embedding_dim + conv_dim
+        self.d_model = embedding_dim + conv_dim
         self.kmer_embedding = torch.nn.Embedding(
             num_embeddings=num_kmers+1,
             embedding_dim=embedding_dim,
             padding_idx=padding_idx
         )
         # N,C,L
-        self.conv = torch.nn.Conv1d(num_features, conv_dim, conv_kernel)
+        self.conv = torch.nn.Conv1d(num_features, conv_dim, conv_kernel,
+            stride=1,
+            padding=1)
         # L,N,E
-        self.enc = torch.nn.TransformerEncoderLayer(d_model, num_heads, d_model*4)
-        self.lstm_dim = 8
+        self.enc = torch.nn.TransformerEncoderLayer(self.d_model, num_heads, self.d_model*4)
+        self.lstm_dim = 16
         self.lstm = torch.nn.LSTM(
-            input_size=d_model,
+            input_size=self.d_model,
             hidden_size=self.lstm_dim,
             num_layers=1,
             batch_first=True,
@@ -113,7 +117,7 @@ class BaseModEncoder_v1(torch.nn.Module):
         emb = self.kmer_embedding(kmers)
         # features are (batch_size, max_len, n_features)
         conv = self.conv(features.permute(0, 2, 1)).permute(0, 2, 1)
-        inner = torch.cat([emb, conv], dim=-1)
+        inner = torch.cat([emb, conv], dim=-1) * math.sqrt(self.d_model)
         # transformer encoder needs (max_len, batch_size, d_model)
         inner = self.enc(inner.permute(1, 0, 2), src_key_padding_mask = mask).permute(1, 0, 2)
         # LSTM classification
