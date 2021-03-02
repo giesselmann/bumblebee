@@ -39,7 +39,7 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from bumblebee.db import ModDatabase
 from bumblebee.ds import ModDataset
-from bumblebee.util import running_average
+from bumblebee.util import running_average, parse_kwargs
 import bumblebee.modnn
 
 
@@ -76,7 +76,8 @@ def main(args):
     print("Loaded {} train and {} evaluation batches.".format(len(dl_train), len(dl_eval)))
 
     # init model
-    model = getattr(bumblebee.modnn, args.model)()
+    model_args = dict((parse_kwargs(arg) for arg in args.kwargs))
+    model = getattr(bumblebee.modnn, args.model)(**model_args)
     _, _batch = next(iter(dl_eval))
     summary(model, input_data=[_batch['lengths'], _batch['kmers'], _batch['features']], device="cpu", depth=4)
     model.to(device)
@@ -171,4 +172,5 @@ def argparser():
     parser.add_argument("--batch_size", default=32, type=int)
     parser.add_argument("--max_features", default=32, type=int)
     parser.add_argument("--min_score", default=1.0, type=float)
+    parser.add_argument("--kwargs", nargs='*', default='')
     return parser

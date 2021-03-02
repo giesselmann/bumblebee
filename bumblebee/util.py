@@ -31,6 +31,20 @@ from collections import deque
 
 
 
+def parse_kwargs(s):
+    key, value = s.split('=')
+    try:
+        return key, int(value)
+    except ValueError:
+        pass
+    try:
+        return key, float(value)
+    except ValueError:
+        return key, value
+
+
+
+
 class running_average():
     def __init__(self, max_len=100):
         self.max_len = max_len
