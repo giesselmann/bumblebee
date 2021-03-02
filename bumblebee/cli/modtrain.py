@@ -78,7 +78,7 @@ def main(args):
     # init model
     model = getattr(bumblebee.modnn, args.model)()
     _, _batch = next(iter(dl_eval))
-    summary(model, input_data=[_batch['lengths'], _batch['kmers'], _batch['features']], device="cpu")
+    summary(model, input_data=[_batch['lengths'], _batch['kmers'], _batch['features']], device="cpu", depth=4)
     model.to(device)
 
     # loss and optimizer
@@ -129,14 +129,13 @@ def main(args):
         with tqdm.tqdm(desc='Epoch {}'.format(epoch), total=len(dl_train)) as pbar:
             for step, (labels, batch) in enumerate(dl_train):
                 step_total = epoch * len(dl_train) + step
-                # copy data to device
+                # train step
                 _train_loss, _train_acc = train_step(labels, batch)
                 train_loss.append(_train_loss)
                 train_acc.append(_train_acc)
-
                 writer.add_scalar('training loss', _train_loss, step_total)
                 writer.add_scalar('training accuracy', _train_acc, step_total)
-                # evaluate
+                # eval step
                 if step % eval_rate == 0:
                     labels, batch = next(dl_eval_iter)
                     _eval_loss, _eval_acc = eval_step(labels, batch)
@@ -144,6 +143,7 @@ def main(args):
                     eval_acc.append(_eval_acc)
                     writer.add_scalar('validation loss', _eval_loss, step_total)
                     writer.add_scalar('validation accuracy', _eval_acc, step_total)
+                # progress
                 pbar.update(1)
                 pbar.set_postfix_str("Train: {:.3f} / {:.3f} Eval: {:.3f} / {:.3f}".format(
                     train_loss.mean(),

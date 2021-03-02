@@ -78,9 +78,57 @@ class BaseModLSTM_v1(torch.nn.Module):
 
 
 
-class SelfAttentionEncoder(torch.nn.Module):
-    def __init__(self):
-        pass
+class BaseModEncoder_v1(torch.nn.Module):
+    def __init__(self, num_features=6, num_kmers=4**6, num_classes=2,
+            embedding_dim=32, padding_idx=0,
+            conv_dim=64, conv_kernel=1,
+            num_heads=8
+            ):
+        super(BaseModEncoder_v1, self).__init__()
+        d_model = embedding_dim + conv_dim
+        self.kmer_embedding = torch.nn.Embedding(
+            num_embeddings=num_kmers+1,
+            embedding_dim=embedding_dim,
+            padding_idx=padding_idx
+        )
+        # N,C,L
+        self.conv = torch.nn.Conv1d(num_features, conv_dim, conv_kernel)
+        # L,N,E
+        self.enc = torch.nn.TransformerEncoderLayer(d_model, num_heads, d_model*4)
+        self.lstm_dim = 8
+        self.lstm = torch.nn.LSTM(
+            input_size=d_model,
+            hidden_size=self.lstm_dim,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True)
+        self.dense = torch.nn.Linear(2*self.lstm_dim, num_classes)
 
-    def forward(self, input):
-        pass
+    def forward(self, lengths, kmers, features):
+        batch_size, max_len, n_features = features.size()
+        # (batch_size, max_len)
+        mask = torch.arange(max_len)[None, :] >= lengths[:, None]
+        mask = mask.cuda(features.get_device()) if features.is_cuda else mask
+        # kmer embedding (batch_size, max_len, embedding_dim)
+        emb = self.kmer_embedding(kmers)
+        # features are (batch_size, max_len, n_features)
+        conv = self.conv(features.permute(0, 2, 1)).permute(0, 2, 1)
+        inner = torch.cat([emb, conv], dim=-1)
+        # transformer encoder needs (max_len, batch_size, d_model)
+        inner = self.enc(inner.permute(1, 0, 2), src_key_padding_mask = mask).permute(1, 0, 2)
+        # LSTM classification
+        # pack inputs
+        inner = torch.nn.utils.rnn.pack_padded_sequence(inner, lengths, batch_first=True, enforce_sorted=False)
+        # run LSTM
+        inner, _  = self.lstm(inner)
+        # unpack output
+        inner, _ = torch.nn.utils.rnn.pad_packed_sequence(inner, batch_first=True)
+        inner_forward = inner[range(len(inner)), lengths - 1, :self.lstm_dim]
+        inner_reverse = inner[:, 0, self.lstm_dim:]
+        # (batch_size, 2*lstm_dim)
+        inner_reduced = torch.cat((inner_forward, inner_reverse), 1)
+        # get class label
+        # (batch_size, num_classes)
+        inner = self.dense(inner_reduced)
+        out = torch.nn.functional.softmax(inner, dim=1)
+        return out
