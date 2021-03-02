@@ -36,6 +36,7 @@ class BaseModLSTM_v1(torch.nn.Module):
             feature_dim=6,
             k=6, embedding_dim=32, padding_idx=0,
             rnn_type='LSTM', rnn_dim=64, rnn_layer=1,
+            dropout=0.1,
             num_classes=2):
         super(BaseModLSTM_v1, self).__init__()
         self.rnn_dim = rnn_dim
@@ -49,6 +50,7 @@ class BaseModLSTM_v1(torch.nn.Module):
             input_size=embedding_dim + feature_dim,
             hidden_size=rnn_dim,
             num_layers=rnn_layer,
+            dropout=dropout,
             batch_first=True,
             bidirectional=True
         )
