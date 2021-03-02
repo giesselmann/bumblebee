@@ -83,20 +83,21 @@ class BaseModEncoder_v1(torch.nn.Module):
     def __init__(self,
             num_features=6, num_kmers=4**6, num_classes=2,
             embedding_dim=32, padding_idx=0,
-            conv_dim=64, conv_kernel=3,
+            d_model=128, conv_kernel=3,
             num_heads=8
             ):
         super(BaseModEncoder_v1, self).__init__()
-        self.d_model = embedding_dim + conv_dim
+        self.d_model = d_model
         self.kmer_embedding = torch.nn.Embedding(
             num_embeddings=num_kmers+1,
             embedding_dim=embedding_dim,
             padding_idx=padding_idx
         )
         # N,C,L
-        self.conv = torch.nn.Conv1d(num_features, conv_dim, conv_kernel,
+        self.conv = torch.nn.Conv1d(num_features+embedding_dim, self.d_model, conv_kernel,
             stride=1,
             padding=1)
+        self.act = torch.nn.GELU()
         # L,N,E
         self.enc = torch.nn.TransformerEncoderLayer(self.d_model, num_heads, self.d_model*4)
         self.lstm_dim = 16
@@ -115,9 +116,11 @@ class BaseModEncoder_v1(torch.nn.Module):
         mask = mask.cuda(features.get_device()) if features.is_cuda else mask
         # kmer embedding (batch_size, max_len, embedding_dim)
         emb = self.kmer_embedding(kmers)
+        # concat signal features and sequence embeddings
+        inner = torch.cat([emb, features], dim=-1)
         # features are (batch_size, max_len, n_features)
-        conv = self.conv(features.permute(0, 2, 1)).permute(0, 2, 1)
-        inner = torch.cat([emb, conv], dim=-1) * math.sqrt(self.d_model)
+        inner = self.conv(inner.permute(0, 2, 1)).permute(0, 2, 1)
+        inner = self.act(inner)
         # transformer encoder needs (max_len, batch_size, d_model)
         inner = self.enc(inner.permute(1, 0, 2), src_key_padding_mask = mask).permute(1, 0, 2)
         # LSTM classification
