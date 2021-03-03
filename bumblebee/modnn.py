@@ -85,8 +85,7 @@ class BaseModEncoder_v1(torch.nn.Module):
     def __init__(self,
             num_features=6, num_kmers=4**6, num_classes=2,
             embedding_dim=32, padding_idx=0,
-            d_model=128, conv_kernel=3,
-            num_heads=8
+            d_model=128, num_heads=8, num_layer=1
             ):
         super(BaseModEncoder_v1, self).__init__()
         self.d_model = d_model
@@ -95,49 +94,42 @@ class BaseModEncoder_v1(torch.nn.Module):
             embedding_dim=embedding_dim,
             padding_idx=padding_idx
         )
-        # N,C,L
-        self.conv = torch.nn.Conv1d(num_features+embedding_dim, self.d_model, conv_kernel,
-            stride=1,
-            padding=1)
-        self.act = torch.nn.GELU()
-        # L,N,E
-        self.enc = torch.nn.TransformerEncoderLayer(self.d_model, num_heads, self.d_model*4)
-        self.lstm_dim = 16
-        self.lstm = torch.nn.LSTM(
-            input_size=self.d_model,
-            hidden_size=self.lstm_dim,
-            num_layers=1,
-            batch_first=True,
-            bidirectional=True)
-        self.dense = torch.nn.Linear(2*self.lstm_dim, num_classes)
+        self.linear1 = torch.nn.Linear(num_features+embedding_dim, d_model)
+        self.act1 = torch.nn.GELU()
+        # encoder
+        self.encoder_layer = torch.nn.TransformerEncoderLayer(d_model=d_model,
+                        nhead=num_heads,
+                        dim_feedforward=d_model*4,
+                        activation='gelu')
+        self.transformer_encoder = torch.nn.TransformerEncoder(self.encoder_layer,
+                        num_layers=num_layer)
+        #self.act2 = torch.nn.GELU()
+        self.linear2 = torch.nn.Linear(d_model, num_classes)
 
     def forward(self, lengths, kmers, features):
         batch_size, max_len, n_features = features.size()
         # (batch_size, max_len)
         mask = torch.arange(max_len)[None, :] >= lengths[:, None]
         mask = mask.cuda(features.get_device()) if features.is_cuda else mask
+        lengths = lengths.cuda(features.get_device()) if features.is_cuda else lengths
         # kmer embedding (batch_size, max_len, embedding_dim)
         emb = self.kmer_embedding(kmers)
         # concat signal features and sequence embeddings
         inner = torch.cat([emb, features], dim=-1)
-        # features are (batch_size, max_len, n_features)
-        inner = self.conv(inner.permute(0, 2, 1)).permute(0, 2, 1)
-        inner = self.act(inner)
+        # generate features as
+        # (batch_size, max_len, d_model)
+        inner = self.linear1(inner)
+        inner = self.act1(inner)
         # transformer encoder needs (max_len, batch_size, d_model)
-        inner = self.enc(inner.permute(1, 0, 2), src_key_padding_mask = mask).permute(1, 0, 2)
-        # LSTM classification
-        # pack inputs
-        inner = torch.nn.utils.rnn.pack_padded_sequence(inner, lengths, batch_first=True, enforce_sorted=False)
-        # run LSTM
-        inner, _  = self.lstm(inner)
-        # unpack output
-        inner, _ = torch.nn.utils.rnn.pad_packed_sequence(inner, batch_first=True)
-        inner_forward = inner[range(len(inner)), lengths - 1, :self.lstm_dim]
-        inner_reverse = inner[:, 0, self.lstm_dim:]
-        # (batch_size, 2*lstm_dim)
-        inner_reduced = torch.cat((inner_forward, inner_reverse), 1)
+        inner = self.transformer_encoder(inner.permute(1, 0, 2),
+                        src_key_padding_mask = mask).permute(1, 0, 2)
         # get class label
+        # (batch_size, max_len, num_classes)
+        inner = self.linear2(inner)
+        #inner = self.act2(inner)
+        inner = torch.mul(inner, ~mask[:,:,None])
+        # melt to
         # (batch_size, num_classes)
-        inner = self.dense(inner_reduced)
+        inner = torch.sum(inner, dim=1) / lengths[:,None]
         out = torch.nn.functional.softmax(inner, dim=1)
         return out

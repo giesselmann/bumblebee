@@ -84,7 +84,7 @@ def main(args):
 
     # loss and optimizer
     criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     # running loss and accuracy
     train_loss = running_average(max_len=500)
     train_acc = running_average(max_len=500)
@@ -168,6 +168,7 @@ def argparser():
     parser.add_argument("model", type=str)
     parser.add_argument("--prefix", default='.', type=str)
     parser.add_argument("--mod_ids", nargs='+', required=True, type=int)
+    parser.add_argument("--lr", default=0.001, type=float)
     parser.add_argument("--epochs", default=1, type=int)
     parser.add_argument("--batch_size", default=32, type=int)
     parser.add_argument("--max_features", default=32, type=int)
