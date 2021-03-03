@@ -151,7 +151,9 @@ def main(args):
                     train_acc.mean(),
                     eval_loss.mean(),
                     eval_acc.mean()))
-            ds_train.shuffle()
+            torch.save(model.state_dict(), os.path.join(summary_dir, 'weights_{}.pt'.format(epoch)))
+            if epoch < args.epochs - 1:
+                ds_train.shuffle()
 
     # close & cleanup
     writer.close()
