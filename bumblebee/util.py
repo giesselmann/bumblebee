@@ -68,7 +68,7 @@ class running_average():
 
 def WarmupScheduler(optimizer, d_model, warmup_steps=4000, last_epoch=-1):
     def lr_lambda(step):
-        arg1 = math.sqrt(step)
-        arg2 = step * (warmup_steps ** -1.5)
-        return math.sqrt(d_model) * min(arg1, arg2)
+        arg1 = (step+1) ** -0.5
+        arg2 = (step+1) * (warmup_steps ** -1.5)
+        return (d_model ** -0.5) * min(arg1, arg2)
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
