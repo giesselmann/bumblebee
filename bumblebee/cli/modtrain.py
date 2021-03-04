@@ -39,7 +39,7 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from bumblebee.db import ModDatabase
 from bumblebee.ds import ModDataset
-from bumblebee.util import running_average, parse_kwargs
+from bumblebee.util import running_average, parse_kwargs, WarmupScheduler
 import bumblebee.modnn
 
 
@@ -81,10 +81,12 @@ def main(args):
     _, _batch = next(iter(dl_eval))
     summary(model, input_data=[_batch['lengths'], _batch['kmers'], _batch['features']], device="cpu", depth=4)
     model.to(device)
-
+    swa_model = torch.optim.swa_utils.AveragedModel(model, device=device)
+    swa_model.eval()
     # loss and optimizer
     criterion = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
+    lr_scheduler = WarmupScheduler(optimizer, model.d_model)
     # running loss and accuracy
     train_loss = running_average(max_len=500)
     train_acc = running_average(max_len=500)
@@ -116,9 +118,9 @@ def main(args):
             kmers = batch['kmers'].to(device)
             features = batch['features'].to(device)
             # forward pass
-            model.eval()
-            logits = model(lengths, kmers, features)
-            model.train()
+            #model.eval()
+            logits = swa_model(lengths, kmers, features)
+            #model.train()
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
@@ -136,6 +138,9 @@ def main(args):
                 train_acc.append(_train_acc)
                 writer.add_scalar('training loss', _train_loss, step_total)
                 writer.add_scalar('training accuracy', _train_acc, step_total)
+                writer.add_scalar("learning rate", optimizer.param_groups[0]['lr'])
+                # swa
+                swa_model.update_parameters(model)
                 # eval step
                 if step % eval_rate == 0:
                     labels, batch = next(dl_eval_iter)
@@ -144,6 +149,8 @@ def main(args):
                     eval_acc.append(_eval_acc)
                     writer.add_scalar('validation loss', _eval_loss, step_total)
                     writer.add_scalar('validation accuracy', _eval_acc, step_total)
+                # learning rate
+                lr_scheduler.step()
                 # progress
                 pbar.update(1)
                 pbar.set_postfix_str("Train: {:.3f} / {:.3f} Eval: {:.3f} / {:.3f}".format(
@@ -152,6 +159,7 @@ def main(args):
                     eval_loss.mean(),
                     eval_acc.mean()))
             torch.save(model.state_dict(), os.path.join(summary_dir, 'weights_{}.pt'.format(epoch)))
+            torch.save(swa_model.state_dict(), os.path.join(summary_dir, 'weights_swa_{}.pt'.format(epoch)))
             if epoch < args.epochs - 1:
                 ds_train.shuffle()
 
@@ -172,6 +180,7 @@ def argparser():
     parser.add_argument("--mod_ids", nargs='+', required=True, type=int)
     parser.add_argument("--lr", default=0.001, type=float)
     parser.add_argument("--epochs", default=1, type=int)
+    parser.add_argument("--swa_start", default=1000, type=int)
     parser.add_argument("--batch_size", default=32, type=int)
     parser.add_argument("--max_features", default=32, type=int)
     parser.add_argument("--min_score", default=1.0, type=float)
