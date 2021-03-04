@@ -118,9 +118,7 @@ def main(args):
             kmers = batch['kmers'].to(device)
             features = batch['features'].to(device)
             # forward pass
-            #model.eval()
             logits = swa_model(lengths, kmers, features)
-            #model.train()
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
@@ -138,7 +136,7 @@ def main(args):
                 train_acc.append(_train_acc)
                 writer.add_scalar('training loss', _train_loss, step_total)
                 writer.add_scalar('training accuracy', _train_acc, step_total)
-                writer.add_scalar("learning rate", optimizer.param_groups[0]['lr'])
+                writer.add_scalar("learning rate", optimizer.param_groups[0]['lr'], step_total)
                 # swa
                 swa_model.update_parameters(model)
                 # eval step
@@ -158,8 +156,10 @@ def main(args):
                     train_acc.mean(),
                     eval_loss.mean(),
                     eval_acc.mean()))
-            torch.save(model.state_dict(), os.path.join(summary_dir, 'weights_{}.pt'.format(epoch)))
-            torch.save(swa_model.state_dict(), os.path.join(summary_dir, 'weights_swa_{}.pt'.format(epoch)))
+            torch.save(model.state_dict(),
+                os.path.join(summary_dir, 'weights_{}.pt'.format(epoch)))
+            torch.save(swa_model.state_dict(),
+                os.path.join(summary_dir, 'weights_swa_{}.pt'.format(epoch)))
             if epoch < args.epochs - 1:
                 ds_train.shuffle()
 
@@ -180,7 +180,6 @@ def argparser():
     parser.add_argument("--mod_ids", nargs='+', required=True, type=int)
     parser.add_argument("--lr", default=0.001, type=float)
     parser.add_argument("--epochs", default=1, type=int)
-    parser.add_argument("--swa_start", default=1000, type=int)
     parser.add_argument("--batch_size", default=32, type=int)
     parser.add_argument("--max_features", default=32, type=int)
     parser.add_argument("--min_score", default=1.0, type=float)
