@@ -35,11 +35,11 @@ class BaseModLSTM_v1(torch.nn.Module):
     def __init__(self,
             feature_dim=6,
             k=6, embedding_dim=32, padding_idx=0,
-            rnn_type='LSTM', rnn_dim=64, rnn_layer=1,
+            rnn_type='LSTM', d_model=64, rnn_layer=1,
             dropout=0.1,
             num_classes=2):
         super(BaseModLSTM_v1, self).__init__()
-        self.rnn_dim = rnn_dim
+        self.d_model = d_model
         self.rnn_layer = rnn_layer
         self.kmer_embedding = torch.nn.Embedding(
             num_embeddings=4**k+1,
@@ -48,13 +48,13 @@ class BaseModLSTM_v1(torch.nn.Module):
         )
         self.rnn = getattr(torch.nn, rnn_type)(
             input_size=embedding_dim + feature_dim,
-            hidden_size=rnn_dim,
+            hidden_size=d_model,
             num_layers=rnn_layer,
             dropout=dropout,
             batch_first=True,
             bidirectional=True
         )
-        self.dense = torch.nn.Linear(2*rnn_dim, num_classes)
+        self.dense = torch.nn.Linear(2*d_model, num_classes)
 
     def forward(self, lengths, kmers, features):
         # embed kmers
@@ -68,9 +68,9 @@ class BaseModLSTM_v1(torch.nn.Module):
         inner, _  = self.rnn(inner)
         # unpack output
         inner, _ = torch.nn.utils.rnn.pad_packed_sequence(inner, batch_first=True)
-        inner_forward = inner[range(len(inner)), lengths - 1, :self.rnn_dim]
-        inner_reverse = inner[:, 0, self.rnn_dim:]
-        # (batch_size, 2*rnn_dim)
+        inner_forward = inner[range(len(inner)), lengths - 1, :self.d_model]
+        inner_reverse = inner[:, 0, self.d_model:]
+        # (batch_size, 2*d_model)
         inner_reduced = torch.cat((inner_forward, inner_reverse), 1)
         # get class label
         # (batch_size, num_classes)
