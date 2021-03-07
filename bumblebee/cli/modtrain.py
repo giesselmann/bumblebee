@@ -85,7 +85,8 @@ def main(args):
     swa_model.eval()
     # loss and optimizer
     criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
+    #optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, amsgrad=False)
     lr_scheduler = WarmupScheduler(optimizer, model.d_model)
     # running loss and accuracy
     train_loss = running_average(max_len=500)

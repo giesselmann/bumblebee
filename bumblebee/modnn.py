@@ -60,7 +60,7 @@ class BaseModLSTM_v1(torch.nn.Module):
         # embed kmers
         # (batch_size, seq_len, embedding_dim)
         inner = self.kmer_embedding(kmers)
-        # (batch_size, seq_len, embedding_dim+k)
+        # (batch_size, seq_len, embedding_dim + feature_dim)
         inner = torch.cat([inner, features], dim=-1)
         # pack inputs
         inner = torch.nn.utils.rnn.pack_padded_sequence(inner, lengths, batch_first=True, enforce_sorted=False)
