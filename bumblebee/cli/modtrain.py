@@ -81,7 +81,8 @@ def main(args):
     _, _batch = next(iter(dl_eval))
     summary(model, input_data=[_batch['lengths'], _batch['kmers'], _batch['features']], device="cpu", depth=4)
     model.to(device)
-    swa_model = torch.optim.swa_utils.AveragedModel(model, device=device)
+    avg_fn = lambda avg_mdl, mdl, step: 0.3 * avg_mdl + 0.7 * mdl
+    swa_model = torch.optim.swa_utils.AveragedModel(model, device=device, avg_fn=avg_fn)
     swa_model.eval()
     # loss and optimizer
     criterion = torch.nn.CrossEntropyLoss()
@@ -101,14 +102,15 @@ def main(args):
         kmers = batch['kmers'].to(device)
         features = batch['features'].to(device)
         # zero gradients
-        optimizer.zero_grad()
-        # forward pass
-        logits = model(lengths, kmers, features)
-        prediction = torch.argmax(logits, dim=1)
-        accuracy = torch.sum(prediction == labels).item() / args.batch_size
-        loss = criterion(logits, labels)
-        loss.backward()
-        optimizer.step()
+        for _ in range(args.echo + 1):
+            optimizer.zero_grad()
+            # forward pass
+            logits = model(lengths, kmers, features)
+            prediction = torch.argmax(logits, dim=1)
+            accuracy = torch.sum(prediction == labels).item() / args.batch_size
+            loss = criterion(logits, labels)
+            loss.backward()
+            optimizer.step()
         return loss.item(), accuracy
 
     # eval step
@@ -182,6 +184,7 @@ def argparser():
     parser.add_argument("--lr", default=0.001, type=float)
     parser.add_argument("--epochs", default=1, type=int)
     parser.add_argument("--batch_size", default=32, type=int)
+    parser.add_argument("--echo", default=0, type=int)
     parser.add_argument("--max_features", default=32, type=int)
     parser.add_argument("--min_score", default=1.0, type=float)
     parser.add_argument("--kwargs", nargs='*', default='')
