@@ -31,25 +31,56 @@ import torch
 
 
 
+class BiDirLSTM(torch.nn.Module):
+    def __init__(self, d_model, num_layer, dropout=0.1, rnn_type='LSTM'):
+        super(BiDirLSTM, self).__init__()
+        self.d_model = d_model
+        self.rnn = getattr(torch.nn, rnn_type)(
+            input_size=d_model,
+            hidden_size=d_model,
+            num_layers=num_layer,
+            dropout=dropout,
+            batch_first=True,
+            bidirectional=True
+        )
+        self.linear = torch.nn.Linear(2*d_model, d_model)
+
+    def forward(self, input, lengths):
+        # pack inputs
+        inner = torch.nn.utils.rnn.pack_padded_sequence(input, lengths, batch_first=True, enforce_sorted=False)
+        # run LSTM
+        inner, _  = self.rnn(inner)
+        # unpack output
+        inner, _ = torch.nn.utils.rnn.pad_packed_sequence(inner, batch_first=True)
+        inner_forward = inner[range(len(inner)), lengths - 1, :self.d_model]
+        inner_reverse = inner[:, 0, self.d_model:]
+        # (batch_size, 2*d_model)
+        inner_reduced = torch.cat((inner_forward, inner_reverse), 1)
+        out = self.linear(inner_reduced)
+        return out
+
+
+
+
 class BaseModLSTM_v1(torch.nn.Module):
     def __init__(self,
-            feature_dim=6,
+            num_features=6,
             k=6, embedding_dim=32, padding_idx=0,
-            rnn_type='LSTM', d_model=64, rnn_layer=1,
+            rnn_type='LSTM', d_model=64, num_layer=1,
             dropout=0.1,
             num_classes=2):
         super(BaseModLSTM_v1, self).__init__()
         self.d_model = d_model
-        self.rnn_layer = rnn_layer
+        self.num_layer = num_layer
         self.kmer_embedding = torch.nn.Embedding(
             num_embeddings=4**k+1,
             embedding_dim=embedding_dim,
             padding_idx=padding_idx
         )
         self.rnn = getattr(torch.nn, rnn_type)(
-            input_size=embedding_dim + feature_dim,
+            input_size=embedding_dim + num_features,
             hidden_size=d_model,
-            num_layers=rnn_layer,
+            num_layers=num_layer,
             dropout=dropout,
             batch_first=True,
             bidirectional=True
@@ -60,7 +91,7 @@ class BaseModLSTM_v1(torch.nn.Module):
         # embed kmers
         # (batch_size, seq_len, embedding_dim)
         inner = self.kmer_embedding(kmers)
-        # (batch_size, seq_len, embedding_dim + feature_dim)
+        # (batch_size, seq_len, embedding_dim + num_features)
         inner = torch.cat([inner, features], dim=-1)
         # pack inputs
         inner = torch.nn.utils.rnn.pack_padded_sequence(inner, lengths, batch_first=True, enforce_sorted=False)
@@ -75,6 +106,47 @@ class BaseModLSTM_v1(torch.nn.Module):
         # get class label
         # (batch_size, num_classes)
         inner = self.dense(inner_reduced)
+        out = torch.nn.functional.softmax(inner, dim=1)
+        return out
+
+
+
+
+class BaseModLSTM_v2(torch.nn.Module):
+    def __init__(self,
+            num_features=6, num_kmers=4**6,
+            embedding_dim=32, padding_idx=0,
+            rnn_type='LSTM', d_model=64,
+            dropout=0.1,
+            num_classes=2):
+        super(BaseModLSTM_v2, self).__init__()
+        self.d_model = d_model
+        self.kmer_embedding = torch.nn.Embedding(
+            num_embeddings=num_kmers+1,
+            embedding_dim=embedding_dim,
+            padding_idx=padding_idx
+        )
+        self.linear1 = torch.nn.Linear(num_features+embedding_dim, d_model)
+        self.act1 = torch.nn.GELU()
+        self.rnn1 = BiDirLSTM(d_model, 1, dropout=dropout, rnn_type=rnn_type)
+        self.rnn2 = BiDirLSTM(d_model, 2, dropout=dropout, rnn_type=rnn_type)
+        self.rnn3 = BiDirLSTM(d_model, 3, dropout=dropout, rnn_type=rnn_type)
+        self.rnn4 = BiDirLSTM(d_model, 4, dropout=dropout, rnn_type=rnn_type)
+        self.linear2 = torch.nn.Linear(d_model*4, num_classes)
+
+    def forward(self, lengths, kmers, features):
+        # embed kmers
+        # (batch_size, seq_len, embedding_dim)
+        emb = self.kmer_embedding(kmers)
+        # (batch_size, seq_len, d_model)
+        inner = self.linear1(torch.cat([emb, features], dim=-1))
+        inner = self.act1(inner)
+        r1 = self.rnn1(inner, lengths)
+        r2 = self.rnn2(inner, lengths)
+        r3 = self.rnn3(inner, lengths)
+        r4 = self.rnn4(inner, lengths)
+        # concat and reduce to num_classes
+        inner = self.linear2(torch.cat([r1, r2, r3, r4], dim=-1))
         out = torch.nn.functional.softmax(inner, dim=1)
         return out
 
