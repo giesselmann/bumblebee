@@ -95,7 +95,8 @@ class BaseModEncoder_v1(torch.nn.Module):
             padding_idx=padding_idx
         )
         self.linear1 = torch.nn.Linear(num_features+embedding_dim, d_model)
-        self.act1 = torch.nn.GELU()
+        #self.act1 = torch.nn.GELU()
+        self.act1 = torch.nn.Tanh()
         # encoder
         self.encoder_layer = torch.nn.TransformerEncoderLayer(d_model=d_model,
                         nhead=num_heads,
