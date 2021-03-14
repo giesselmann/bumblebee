@@ -243,6 +243,12 @@ class ModDatabase():
         ))
         return [x[0] for x in self.cursor]
 
+    # get single feature
+    def get_feature(self, feature_id):
+        self.cursor.execute("SELECT class, kmer, min, mean, median, std, max, length FROM sites JOIN features ON sites.rowid = features.siteid WHERE sites.rowid = {} ORDER BY enum;".format(feature_id))
+        mod_ids, kmers, features = zip(*[(x[0], x[1], x[2:]) for x in self.cursor])
+        return mod_ids[0], len(kmers), kmers, features
+
     # unused rows are set to zero
     def reset_batches(self):
         self.cursor.execute("UPDATE sites SET batch = 0;")
@@ -254,7 +260,7 @@ class ModDatabase():
             self.cursor.execute("UPDATE sites SET batch = {} WHERE rowid = {};".format(batch+1 if train else -batch-1, siteid))
         self.connection.commit()
 
-    # return labels, lengths, kmers, features
+    # get batch of labels, lengths, kmers, features
     def get_feature_batch(self, batch_id, train=True):
         self.cursor.execute("SELECT siteid, class, kmer, min, mean, median, std, max, length FROM sites JOIN features ON sites.rowid = features.siteid WHERE batch = {} ORDER BY siteid, enum;".format(batch_id+1 if train else -batch_id-1))
         def pack_feature(iterable):

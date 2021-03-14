@@ -39,6 +39,7 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from bumblebee.db import ModDatabase
 from bumblebee.ds import ModDataset
+from bumblebee.optimizer import Lookahead
 from bumblebee.util import running_average, parse_kwargs, WarmupScheduler
 import bumblebee.modnn
 
@@ -48,12 +49,8 @@ import bumblebee.modnn
 def main(args):
     # init torch
     use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda:0" if use_cuda else "cpu")
+    device = torch.device("cuda:{}".format(args.device) if use_cuda else "cpu")
     torch.backends.cudnn.benchmark = True
-
-    # open db and index if necessary, datasets could use multiprocessing
-    db = ModDatabase(args.db, require_index=True, require_split=True)
-    db.reset_batches()
 
     # summary writer
     summary_dir = os.path.join(args.prefix, args.model, datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -61,17 +58,27 @@ def main(args):
     writer = SummaryWriter(summary_dir)
 
     # init dataset and dataloader
-    ds_train = ModDataset(db, args.mod_ids,
-                batch_size=args.batch_size,
+    ds_train = ModDataset(args.db, args.mod_ids,
                 max_features=args.max_features,
                 min_score=args.min_score)
-    ds_eval = ModDataset(db, args.mod_ids,
+    ds_eval = ModDataset(args.db, args.mod_ids,
                 train=False,
-                batch_size=args.batch_size,
                 max_features=args.max_features,
                 min_score=args.min_score)
-    dl_train = torch.utils.data.DataLoader(ds_train, batch_size=None, shuffle=False)
-    dl_eval = torch.utils.data.DataLoader(ds_eval, batch_size=None, shuffle=False)
+    dl_train = torch.utils.data.DataLoader(ds_train,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=4, worker_init_fn=ModDataset.worker_init_fn,
+            prefetch_factor=20 * args.batch_size,
+            pin_memory=True,
+            drop_last=True)
+    dl_eval = torch.utils.data.DataLoader(ds_eval,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=1, worker_init_fn=ModDataset.worker_init_fn,
+            prefetch_factor=20 * args.batch_size,
+            pin_memory=True,
+            drop_last=True)
     eval_rate = np.ceil(len(dl_train) / len(dl_eval)).astype(int)
     print("Loaded {} train and {} evaluation batches.".format(len(dl_train), len(dl_eval)))
 
@@ -81,14 +88,14 @@ def main(args):
     _, _batch = next(iter(dl_eval))
     summary(model, input_data=[_batch['lengths'], _batch['kmers'], _batch['features']], device="cpu", depth=4)
     model.to(device)
-    avg_fn = lambda avg_mdl, mdl, step: 0.3 * avg_mdl + 0.7 * mdl
+    avg_fn = lambda avg_mdl, mdl, step: 0.5 * avg_mdl + 0.5 * mdl
     swa_model = torch.optim.swa_utils.AveragedModel(model, device=device, avg_fn=avg_fn)
     swa_model.eval()
     # loss and optimizer
     criterion = torch.nn.CrossEntropyLoss()
-    #optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, amsgrad=False)
-    lr_scheduler = WarmupScheduler(optimizer, model.d_model)
+    lookahead = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
+    lr_scheduler = WarmupScheduler(optimizer, model.d_model, warmup_steps=8000)
     # running loss and accuracy
     train_loss = running_average(max_len=500)
     train_acc = running_average(max_len=500)
@@ -103,14 +110,14 @@ def main(args):
         features = batch['features'].to(device)
         # zero gradients
         for _ in range(args.echo + 1):
-            optimizer.zero_grad()
+            lookahead.zero_grad()
             # forward pass
             logits = model(lengths, kmers, features)
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
             loss.backward()
-            optimizer.step()
+            lookahead.step()
         return loss.item(), accuracy
 
     # eval step
@@ -137,8 +144,8 @@ def main(args):
                 _train_loss, _train_acc = train_step(labels, batch)
                 train_loss.append(_train_loss)
                 train_acc.append(_train_acc)
-                writer.add_scalar('training loss', _train_loss, step_total)
-                writer.add_scalar('training accuracy', _train_acc, step_total)
+                writer.add_scalar('training/loss', _train_loss, step_total)
+                writer.add_scalar('training/accuracy', _train_acc, step_total)
                 writer.add_scalar("learning rate", optimizer.param_groups[0]['lr'], step_total)
                 # swa
                 swa_model.update_parameters(model)
@@ -148,8 +155,8 @@ def main(args):
                     _eval_loss, _eval_acc = eval_step(labels, batch)
                     eval_loss.append(_eval_loss)
                     eval_acc.append(_eval_acc)
-                    writer.add_scalar('validation loss', _eval_loss, step_total)
-                    writer.add_scalar('validation accuracy', _eval_acc, step_total)
+                    writer.add_scalar('validation/loss', _eval_loss, step_total)
+                    writer.add_scalar('validation/accuracy', _eval_acc, step_total)
                 # learning rate
                 lr_scheduler.step()
                 # progress
@@ -163,8 +170,6 @@ def main(args):
                 os.path.join(summary_dir, 'weights_{}.pt'.format(epoch)))
             torch.save(swa_model.state_dict(),
                 os.path.join(summary_dir, 'weights_swa_{}.pt'.format(epoch)))
-            if epoch < args.epochs - 1:
-                ds_train.shuffle()
 
     # close & cleanup
     writer.close()
@@ -181,6 +186,7 @@ def argparser():
     parser.add_argument("model", type=str)
     parser.add_argument("--prefix", default='.', type=str)
     parser.add_argument("--mod_ids", nargs='+', required=True, type=int)
+    parser.add_argument("--device", default=0, type=int)
     parser.add_argument("--lr", default=0.001, type=float)
     parser.add_argument("--epochs", default=1, type=int)
     parser.add_argument("--batch_size", default=32, type=int)

@@ -31,6 +31,38 @@ import torch
 
 
 
+class ResidualNetwork(torch.nn.Module):
+    """
+    Feed forward Residual Neural Network as seen in Roost.
+    https://doi.org/10.1038/s41467-020-19964-7
+    """
+    def __init__(self, input_dim, output_dim, hidden_layer_dims):
+        """
+        Inputs
+        ----------
+        input_dim: int
+        output_dim: int
+        hidden_layer_dims: list(int)
+        """
+        super(ResidualNetwork, self).__init__()
+        dims = [input_dim]+hidden_layer_dims
+        self.fcs = torch.nn.ModuleList([torch.nn.Linear(dims[i], dims[i+1])
+                                  for i in range(len(dims)-1)])
+        self.res_fcs = torch.nn.ModuleList([torch.nn.Linear(dims[i], dims[i+1], bias=False)
+                                      if (dims[i] != dims[i+1])
+                                      else torch.nn.Identity()
+                                      for i in range(len(dims)-1)])
+        self.acts = torch.nn.ModuleList([torch.nn.LeakyReLU() for _ in range(len(dims)-1)])
+        self.fc_out = torch.nn.Linear(dims[-1], output_dim)
+
+    def forward(self, fea):
+        for fc, res_fc, act in zip(self.fcs, self.res_fcs, self.acts):
+            fea = act(fc(fea))+res_fc(fea)
+        return self.fc_out(fea)
+
+
+
+
 class BiDirLSTM(torch.nn.Module):
     def __init__(self, d_model, num_layer, dropout=0.1, rnn_type='LSTM'):
         super(BiDirLSTM, self).__init__()
@@ -157,7 +189,7 @@ class BaseModEncoder_v1(torch.nn.Module):
     def __init__(self,
             num_features=6, num_kmers=4**6, num_classes=2,
             embedding_dim=32, padding_idx=0,
-            d_model=128, num_heads=8, num_layer=1
+            d_model=512, num_heads=4, num_layer=3
             ):
         super(BaseModEncoder_v1, self).__init__()
         self.d_model = d_model
@@ -166,9 +198,8 @@ class BaseModEncoder_v1(torch.nn.Module):
             embedding_dim=embedding_dim,
             padding_idx=padding_idx
         )
-        self.linear1 = torch.nn.Linear(num_features+embedding_dim, d_model)
+        self.linear1 = torch.nn.Linear(num_features + embedding_dim, d_model)
         #self.act1 = torch.nn.GELU()
-        self.act1 = torch.nn.Tanh()
         # encoder
         self.encoder_layer = torch.nn.TransformerEncoderLayer(d_model=d_model,
                         nhead=num_heads,
@@ -177,7 +208,7 @@ class BaseModEncoder_v1(torch.nn.Module):
         self.transformer_encoder = torch.nn.TransformerEncoder(self.encoder_layer,
                         num_layers=num_layer)
         #self.act2 = torch.nn.GELU()
-        self.linear2 = torch.nn.Linear(d_model, num_classes)
+        self.output_nn = ResidualNetwork(d_model, num_classes, [1024, 512, 256, 128])
 
     def forward(self, lengths, kmers, features):
         batch_size, max_len, n_features = features.size()
@@ -192,13 +223,13 @@ class BaseModEncoder_v1(torch.nn.Module):
         # generate features as
         # (batch_size, max_len, d_model)
         inner = self.linear1(inner)
-        inner = self.act1(inner)
+        #inner = self.act1(inner)
         # transformer encoder needs (max_len, batch_size, d_model)
         inner = self.transformer_encoder(inner.permute(1, 0, 2),
                         src_key_padding_mask = mask).permute(1, 0, 2)
         # get class label
         # (batch_size, max_len, num_classes)
-        inner = self.linear2(inner)
+        inner = self.output_nn(inner)
         #inner = self.act2(inner)
         inner = torch.mul(inner, ~mask[:,:,None])
         # melt to

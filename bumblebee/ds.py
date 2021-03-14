@@ -27,12 +27,71 @@
 # ---------------------------------------------------------------------------------
 import random
 import torch
+import multiprocessing
 import numpy as np
+
+from bumblebee.db import ModDatabase
+
+
+
+
+class ModDataset(torch.utils.data.Dataset):
+    def worker_init_fn(worker_id):
+        worker_info = torch.utils.data.get_worker_info()
+        self = worker_info.dataset  # the dataset copy in this worker process
+        self.init_db()
+
+    def __init__(self, db_file, mod_ids,
+                 train=True, balance=True,
+                 max_features=32, min_score=1.0):
+        self.db_file = db_file
+        self.max_features = max_features
+        db = ModDatabase(db_file, require_index=True, require_split=True)
+        # read feature IDs
+        print("[ModDataset] : Loading feature IDs.")
+        feature_ids = {mod_id:db.get_feature_ids(mod_id,
+            max_features=max_features,
+            train=train,
+            min_score=min_score) for mod_id in mod_ids}
+        feature_count = [len(feature_ids) for feature_ids in feature_ids.values()]
+        # truncate to smallest class
+        if balance:
+            min_feature_count = min(feature_count)
+            self.total = min_feature_count * len(mod_ids)
+        else:
+            min_feature_count = max(feature_count)
+            self.total = sum(feature_count)
+        self.features = multiprocessing.Array('Q', self.total, lock=False)
+        # copy feature rowid into shared memory
+        it = (id for value in feature_ids.values() for id in value[:min_feature_count])
+        for i, rowid in enumerate(it):
+            self.features[i] = rowid
+        random.shuffle(self.features)
+        # init if running in main process
+        if not torch.utils.data.get_worker_info():
+            self.init_db()
+
+    def init_db(self):
+        self.db = ModDatabase(self.db_file)
+
+    def __len__(self):
+        return self.total
+
+    def __getitem__(self, index):
+        label, length, kmers, features = self.db.get_feature(self.features[index])
+        kmers_padd = np.zeros(self.max_features, dtype=np.int64)
+        features_padd = np.zeros((self.max_features, 6), dtype=np.float32)
+        kmers_padd[:length] = kmers
+        features_padd[:length, :] = features
+        return (label, {'lengths': length,
+                        'kmers': kmers_padd,
+                        'features': features_padd})
+
 
 
 
 # dataset yielding batches of (class, lengths, kmers, features)
-class ModDataset(torch.utils.data.Dataset):
+class BatchedModDataset(torch.utils.data.Dataset):
     def __init__(self, db, mod_ids,
                 train=True, balance=True,
                 batch_size=32, max_features=32,
