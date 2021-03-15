@@ -93,7 +93,7 @@ def main(args):
     swa_model.eval()
     # loss and optimizer
     criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, amsgrad=False)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     lookahead = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
     lr_scheduler = WarmupScheduler(optimizer, model.d_model, warmup_steps=8000)
     # running loss and accuracy

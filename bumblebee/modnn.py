@@ -31,6 +31,26 @@ import torch
 
 
 
+# https://pytorch.org/tutorials/beginner/transformer_tutorial.html
+class PositionalEncoding(torch.nn.Module):
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = torch.nn.Dropout(p=dropout)
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:, :x.size(1), :]
+        return self.dropout(x)
+
+
+
+
 class ResidualNetwork(torch.nn.Module):
     """
     Feed forward Residual Neural Network as seen in Roost.
@@ -198,8 +218,12 @@ class BaseModEncoder_v1(torch.nn.Module):
             embedding_dim=embedding_dim,
             padding_idx=padding_idx
         )
-        self.linear1 = torch.nn.Linear(num_features + embedding_dim, d_model)
-        #self.act1 = torch.nn.GELU()
+        #self.input_nn = torch.nn.Linear(num_features + embedding_dim, d_model)
+        self.input_nn = ResidualNetwork(num_features + embedding_dim,
+            d_model, [128, 256])
+        self.pos_encoder = PositionalEncoding(d_model,
+            dropout=0.1,
+            max_len=64)
         # encoder
         self.encoder_layer = torch.nn.TransformerEncoderLayer(d_model=d_model,
                         nhead=num_heads,
@@ -207,8 +231,7 @@ class BaseModEncoder_v1(torch.nn.Module):
                         activation='gelu')
         self.transformer_encoder = torch.nn.TransformerEncoder(self.encoder_layer,
                         num_layers=num_layer)
-        #self.act2 = torch.nn.GELU()
-        self.output_nn = ResidualNetwork(d_model, num_classes, [1024, 512, 256, 128])
+        self.output_nn = ResidualNetwork(d_model, num_classes, [512, 256, 128])
 
     def forward(self, lengths, kmers, features):
         batch_size, max_len, n_features = features.size()
@@ -222,15 +245,15 @@ class BaseModEncoder_v1(torch.nn.Module):
         inner = torch.cat([emb, features], dim=-1)
         # generate features as
         # (batch_size, max_len, d_model)
-        inner = self.linear1(inner)
-        #inner = self.act1(inner)
+        inner = self.input_nn(inner)
+        # positional encoding
+        inner = self.pos_encoder(inner)
         # transformer encoder needs (max_len, batch_size, d_model)
         inner = self.transformer_encoder(inner.permute(1, 0, 2),
                         src_key_padding_mask = mask).permute(1, 0, 2)
         # get class label
         # (batch_size, max_len, num_classes)
         inner = self.output_nn(inner)
-        #inner = self.act2(inner)
         inner = torch.mul(inner, ~mask[:,:,None])
         # melt to
         # (batch_size, num_classes)
