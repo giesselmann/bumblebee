@@ -145,19 +145,20 @@ class AdaptiveComputeTime(torch.nn.Module):
 class TransformerACTEncoder(torch.nn.Module):
     def __init__(self, d_model, max_len=64,
                 num_heads=4, max_depth=4,
-                time_penalty=0.01):
+                time_penalty=0.01, eps=0.01):
         super(TransformerACTEncoder, self).__init__()
         self.max_depth = max_depth
         self.time_penalty = time_penalty
+        self.halt_threshold = 1 - eps
         self.pos_encoder = PositionalDepthEncoding(d_model, max_depth,
             max_len=max_len)
         self.encoder_layer = torch.nn.TransformerEncoderLayer(d_model=d_model,
             nhead=num_heads,
             dim_feedforward=d_model*4,
             activation='gelu')
-        self.act_layer = AdaptiveComputeTime(d_model)
+        self.act_layer = AdaptiveComputeTime(d_model, eps=eps)
 
-    def forward(self, input, mask=None):
+    def forward(self, input, mask):
         # init ACT buffers
         batch_size, max_len, d_model = input.size()
         halting_prob = torch.zeros((batch_size, max_len), device=input.device)
@@ -171,9 +172,13 @@ class TransformerACTEncoder(torch.nn.Module):
             transformed_state = self.encoder_layer(state.permute(1, 0, 2), src_key_padding_mask=mask).permute(1, 0, 2)
             update_weights, halting_prob, remainders, n_updates = self.act_layer(transformed_state, state, halting_prob, remainders, n_updates, mask=mask)
             transformed_state = (transformed_state * update_weights) + state * (1-update_weights)
+            if torch.all(halting_prob > self.halt_threshold):
+                break
         # compute ACT loss
         lengths = torch.sum(~mask, dim=-1, keepdim=False)
         n_updates *= ~mask
         remainders *= ~mask
         act_loss = torch.sum(n_updates + remainders, dim=-1) / lengths * self.time_penalty
-        return transformed_state, act_loss
+        n_updates_mean = torch.sum(n_updates, dim=-1) / lengths
+        remainders_mean = torch.sum(remainders, dim=-1) / lengths
+        return transformed_state, act_loss, n_updates_mean, remainders_mean

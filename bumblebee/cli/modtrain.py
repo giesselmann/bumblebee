@@ -112,16 +112,16 @@ def main(args):
         for _ in range(args.echo + 1):
             lookahead.zero_grad()
             # forward pass
-            logits, _loss = model(lengths, kmers, features)
+            logits, model_loss, metrics = model(lengths, kmers, features)
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
-            if _loss is not None:
-                loss += _loss
+            if model_loss is not None:
+                loss += model_loss
             loss = torch.mean(loss)
             loss.backward()
             lookahead.step()
-        return loss.item(), accuracy
+        return loss.item(), accuracy, metrics
 
     # eval step
     def eval_step(labels, batch):
@@ -131,14 +131,14 @@ def main(args):
             kmers = batch['kmers'].to(device)
             features = batch['features'].to(device)
             # forward pass
-            logits, _loss = swa_model(lengths, kmers, features)
+            logits, model_loss, metrics = swa_model(lengths, kmers, features)
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
-            if _loss is not None:
-                loss += _loss
+            if model_loss is not None:
+                loss += model_loss
             loss = torch.mean(loss)
-            return loss.item(), accuracy
+            return loss.item(), accuracy, metrics
 
     # training loop
     for epoch in range(args.epochs):
@@ -147,18 +147,20 @@ def main(args):
             for step, (labels, batch) in enumerate(dl_train):
                 step_total = epoch * len(dl_train) + step
                 # train step
-                _train_loss, _train_acc = train_step(labels, batch)
+                _train_loss, _train_acc, metrics = train_step(labels, batch)
                 train_loss.append(_train_loss)
                 train_acc.append(_train_acc)
                 writer.add_scalar('training/loss', _train_loss, step_total)
                 writer.add_scalar('training/accuracy', _train_acc, step_total)
                 writer.add_scalar("learning rate", optimizer.param_groups[0]['lr'], step_total)
+                for key, tensor in metrics.items():
+                    writer.add_scalar('training/{}'.format(key), torch.mean(tensor).item(), step_total)
                 # swa
                 swa_model.update_parameters(model)
                 # eval step
                 if step % eval_rate == 0:
                     labels, batch = next(dl_eval_iter)
-                    _eval_loss, _eval_acc = eval_step(labels, batch)
+                    _eval_loss, _eval_acc, kwout = eval_step(labels, batch)
                     eval_loss.append(_eval_loss)
                     eval_acc.append(_eval_acc)
                     writer.add_scalar('validation/loss', _eval_loss, step_total)

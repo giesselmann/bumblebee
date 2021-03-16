@@ -110,7 +110,7 @@ class BaseModLSTM_v1(torch.nn.Module):
         # (batch_size, num_classes)
         inner = self.dense(inner_reduced)
         out = torch.nn.functional.softmax(inner, dim=1)
-        return out
+        return out, None, {}
 
 
 
@@ -151,7 +151,7 @@ class BaseModLSTM_v2(torch.nn.Module):
         # concat and reduce to num_classes
         inner = self.linear2(torch.cat([r1, r2, r3, r4], dim=-1))
         out = torch.nn.functional.softmax(inner, dim=1)
-        return out
+        return out, None, {}
 
 
 
@@ -210,7 +210,7 @@ class BaseModEncoder_v1(torch.nn.Module):
         # (batch_size, num_classes)
         inner = torch.sum(inner, dim=1) / lengths[:,None]
         out = torch.nn.functional.softmax(inner, dim=1)
-        return out, None
+        return out, None, {}
 
 
 
@@ -219,7 +219,8 @@ class BaseModEncoder_v2(torch.nn.Module):
     def __init__(self,
             num_features=6, num_kmers=4**6, num_classes=2,
             embedding_dim=32, padding_idx=0,
-            d_model=512, num_heads=4, max_depth=5
+            d_model=512, num_heads=4, max_depth=5,
+            max_len=64
             ):
         super(BaseModEncoder_v2, self).__init__()
         self.d_model = d_model
@@ -232,6 +233,7 @@ class BaseModEncoder_v2(torch.nn.Module):
             d_model, [128, 256])
         # encoder
         self.encoder = TransformerACTEncoder(d_model,
+            max_len=max_len,
             num_heads=num_heads,
             max_depth=max_depth)
         self.output_nn = ResidualNetwork(d_model, num_classes, [512, 256, 128])
@@ -250,7 +252,7 @@ class BaseModEncoder_v2(torch.nn.Module):
         # (batch_size, max_len, d_model)
         inner = self.input_nn(inner)
         # encoder (batch_size, max_len, d_model)
-        inner, act_loss = self.encoder(inner, mask=mask)
+        inner, act_loss, ponder_time, remainder = self.encoder(inner, mask)
         # get class label
         # (batch_size, max_len, num_classes)
         inner = self.output_nn(inner)
@@ -259,4 +261,5 @@ class BaseModEncoder_v2(torch.nn.Module):
         # (batch_size, num_classes)
         inner = torch.sum(inner, dim=1) / lengths[:,None]
         out = torch.nn.functional.softmax(inner, dim=1)
-        return out, act_loss
+        return out, act_loss, {'ponder_time': ponder_time,
+                               'remainder': remainder}
