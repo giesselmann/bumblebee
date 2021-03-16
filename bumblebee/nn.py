@@ -111,11 +111,10 @@ class AdaptiveComputeTime(torch.nn.Module):
             torch.nn.init.ones_(self.ponder_nn.fc_out.bias)
 
     def forward(self, state, halting_prob, remainders, n_updates, mask=None):
-        # (batch_size, max_len, 1)
+        # (batch_size, max_len, d_model)
         p = self.ponder_nn(state)
-        p = self.ponder_act(p)
         # (batch_size, max_len)
-        p = p.squeeze(-1)
+        p = self.ponder_act(p).squeeze(-1)
         # Mask for inputs which have not halted yet
         still_running = halting_prob < 1.0
         # length mask as (batch_size, max_len)
@@ -147,7 +146,7 @@ class AdaptiveComputeTime(torch.nn.Module):
 class TransformerACTEncoder(torch.nn.Module):
     def __init__(self, d_model, max_len=64,
                 num_heads=4, max_depth=4,
-                time_penalty=0.01, eps=0.01):
+                time_penalty=0.05, eps=0.01):
         super(TransformerACTEncoder, self).__init__()
         self.max_depth = max_depth
         self.time_penalty = time_penalty
