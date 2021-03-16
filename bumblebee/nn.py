@@ -160,14 +160,13 @@ class TransformerACTEncoder(torch.nn.Module):
             activation='gelu')
         self.act_layer = AdaptiveComputeTime(d_model, eps=eps)
 
-    def forward(self, input, mask):
+    def forward(self, state, mask):
         # init ACT buffers
         batch_size, max_len, d_model = input.size()
         halting_prob = torch.zeros((batch_size, max_len), device=input.device)
         remainders = torch.zeros_like(halting_prob)
         n_updates = torch.zeros_like(halting_prob)
-        state = input * math.sqrt(d_model)
-        del input
+        #state = state * math.sqrt(d_model)
         # run encoder for max depth with ACT update weights
         for step in range(self.max_depth):
             state = self.pos_encoder(state, step)
