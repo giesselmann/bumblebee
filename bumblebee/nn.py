@@ -162,8 +162,8 @@ class TransformerACTEncoder(torch.nn.Module):
 
     def forward(self, state, mask):
         # init ACT buffers
-        batch_size, max_len, d_model = input.size()
-        halting_prob = torch.zeros((batch_size, max_len), device=input.device)
+        batch_size, max_len, d_model = state.size()
+        halting_prob = torch.zeros((batch_size, max_len), device=state.device)
         remainders = torch.zeros_like(halting_prob)
         n_updates = torch.zeros_like(halting_prob)
         #state = state * math.sqrt(d_model)
