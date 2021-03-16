@@ -28,57 +28,8 @@
 import math
 import torch
 
-
-
-
-# https://pytorch.org/tutorials/beginner/transformer_tutorial.html
-class PositionalEncoding(torch.nn.Module):
-    def __init__(self, d_model, dropout=0.1, max_len=5000):
-        super(PositionalEncoding, self).__init__()
-        self.dropout = torch.nn.Dropout(p=dropout)
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        x = x + self.pe[:, :x.size(1), :]
-        return self.dropout(x)
-
-
-
-
-class ResidualNetwork(torch.nn.Module):
-    """
-    Feed forward Residual Neural Network as seen in Roost.
-    https://doi.org/10.1038/s41467-020-19964-7
-    """
-    def __init__(self, input_dim, output_dim, hidden_layer_dims):
-        """
-        Inputs
-        ----------
-        input_dim: int
-        output_dim: int
-        hidden_layer_dims: list(int)
-        """
-        super(ResidualNetwork, self).__init__()
-        dims = [input_dim]+hidden_layer_dims
-        self.fcs = torch.nn.ModuleList([torch.nn.Linear(dims[i], dims[i+1])
-                                  for i in range(len(dims)-1)])
-        self.res_fcs = torch.nn.ModuleList([torch.nn.Linear(dims[i], dims[i+1], bias=False)
-                                      if (dims[i] != dims[i+1])
-                                      else torch.nn.Identity()
-                                      for i in range(len(dims)-1)])
-        self.acts = torch.nn.ModuleList([torch.nn.LeakyReLU() for _ in range(len(dims)-1)])
-        self.fc_out = torch.nn.Linear(dims[-1], output_dim)
-
-    def forward(self, fea):
-        for fc, res_fc, act in zip(self.fcs, self.res_fcs, self.acts):
-            fea = act(fc(fea))+res_fc(fea)
-        return self.fc_out(fea)
+from bumblebee.nn import PositionalEncoding, ResidualNetwork
+from bumblebee.nn import TransformerACTEncoder
 
 
 
@@ -259,4 +210,53 @@ class BaseModEncoder_v1(torch.nn.Module):
         # (batch_size, num_classes)
         inner = torch.sum(inner, dim=1) / lengths[:,None]
         out = torch.nn.functional.softmax(inner, dim=1)
-        return out
+        return out, None
+
+
+
+
+class BaseModEncoder_v2(torch.nn.Module):
+    def __init__(self,
+            num_features=6, num_kmers=4**6, num_classes=2,
+            embedding_dim=32, padding_idx=0,
+            d_model=512, num_heads=4, max_depth=5
+            ):
+        super(BaseModEncoder_v2, self).__init__()
+        self.d_model = d_model
+        self.kmer_embedding = torch.nn.Embedding(
+            num_embeddings=num_kmers+1,
+            embedding_dim=embedding_dim,
+            padding_idx=padding_idx
+        )
+        self.input_nn = ResidualNetwork(num_features + embedding_dim,
+            d_model, [128, 256])
+        # encoder
+        self.encoder = TransformerACTEncoder(d_model,
+            num_heads=num_heads,
+            max_depth=max_depth)
+        self.output_nn = ResidualNetwork(d_model, num_classes, [512, 256, 128])
+
+    def forward(self, lengths, kmers, features):
+        batch_size, max_len, n_features = features.size()
+        # (batch_size, max_len)
+        mask = torch.arange(max_len)[None, :] >= lengths[:, None]
+        mask = mask.cuda(features.get_device()) if features.is_cuda else mask
+        lengths = lengths.cuda(features.get_device()) if features.is_cuda else lengths
+        # kmer embedding (batch_size, max_len, embedding_dim)
+        emb = self.kmer_embedding(kmers)
+        # concat signal features and sequence embeddings
+        inner = torch.cat([emb, features], dim=-1)
+        # generate features as
+        # (batch_size, max_len, d_model)
+        inner = self.input_nn(inner)
+        # encoder (batch_size, max_len, d_model)
+        inner, act_loss = self.encoder(inner, mask=mask)
+        # get class label
+        # (batch_size, max_len, num_classes)
+        inner = self.output_nn(inner)
+        inner = torch.mul(inner, ~mask[:,:,None])
+        # melt to
+        # (batch_size, num_classes)
+        inner = torch.sum(inner, dim=1) / lengths[:,None]
+        out = torch.nn.functional.softmax(inner, dim=1)
+        return out, act_loss

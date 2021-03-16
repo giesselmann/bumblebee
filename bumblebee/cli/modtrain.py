@@ -69,14 +69,14 @@ def main(args):
             batch_size=args.batch_size,
             shuffle=True,
             num_workers=4, worker_init_fn=ModDataset.worker_init_fn,
-            prefetch_factor=20 * args.batch_size,
+            #prefetch_factor=20 * args.batch_size,
             pin_memory=True,
             drop_last=True)
     dl_eval = torch.utils.data.DataLoader(ds_eval,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=1, worker_init_fn=ModDataset.worker_init_fn,
-            prefetch_factor=20 * args.batch_size,
+            #prefetch_factor=20 * args.batch_size,
             pin_memory=True,
             drop_last=True)
     eval_rate = np.ceil(len(dl_train) / len(dl_eval)).astype(int)
@@ -92,7 +92,7 @@ def main(args):
     swa_model = torch.optim.swa_utils.AveragedModel(model, device=device, avg_fn=avg_fn)
     swa_model.eval()
     # loss and optimizer
-    criterion = torch.nn.CrossEntropyLoss()
+    criterion = torch.nn.CrossEntropyLoss(reduction='none')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     lookahead = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
     lr_scheduler = WarmupScheduler(optimizer, model.d_model, warmup_steps=8000)
@@ -112,10 +112,13 @@ def main(args):
         for _ in range(args.echo + 1):
             lookahead.zero_grad()
             # forward pass
-            logits = model(lengths, kmers, features)
+            logits, _loss = model(lengths, kmers, features)
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
+            if _loss is not None:
+                loss += _loss
+            loss = torch.mean(loss)
             loss.backward()
             lookahead.step()
         return loss.item(), accuracy
@@ -128,10 +131,13 @@ def main(args):
             kmers = batch['kmers'].to(device)
             features = batch['features'].to(device)
             # forward pass
-            logits = swa_model(lengths, kmers, features)
+            logits, _loss = swa_model(lengths, kmers, features)
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
+            if _loss is not None:
+                loss += _loss
+            loss = torch.mean(loss)
             return loss.item(), accuracy
 
     # training loop
@@ -191,7 +197,7 @@ def argparser():
     parser.add_argument("--epochs", default=1, type=int)
     parser.add_argument("--batch_size", default=32, type=int)
     parser.add_argument("--echo", default=0, type=int)
-    parser.add_argument("--max_features", default=32, type=int)
+    parser.add_argument("--max_features", default=40, type=int)
     parser.add_argument("--min_score", default=1.0, type=float)
     parser.add_argument("--kwargs", nargs='*', default='')
     return parser
