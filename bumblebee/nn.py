@@ -105,14 +105,14 @@ class AdaptiveComputeTime(torch.nn.Module):
         super(AdaptiveComputeTime, self).__init__()
         self.eps = eps
         self.halt_threshold = 1 - eps
-        self.ponder_nn = torch.nn.Linear(2*d_model, 1)
+        self.ponder_nn = ResidualNetwork(d_model, 1, [128, 32])
         self.ponder_act = torch.nn.Sigmoid()
         with torch.no_grad():
             torch.nn.init.ones_(self.ponder_nn.bias)
 
-    def forward(self, state, previous_state, halting_prob, remainders, n_updates, mask=None):
+    def forward(self, state, halting_prob, remainders, n_updates, mask=None):
         # (batch_size, max_len, 1)
-        p = self.ponder_nn(torch.cat([state, previous_state], axis=-1))
+        p = self.ponder_nn(state)
         p = self.ponder_act(p)
         # (batch_size, max_len)
         p = p.squeeze(-1)

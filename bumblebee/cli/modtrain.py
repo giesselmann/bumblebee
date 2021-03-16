@@ -117,7 +117,7 @@ def main(args):
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
             if model_loss is not None:
-                loss += model_loss
+                loss += model_loss * 1/loss
             loss = torch.mean(loss)
             loss.backward()
             lookahead.step()
