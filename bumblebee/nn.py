@@ -25,8 +25,15 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
+import copy
 import math
 import torch
+
+
+
+
+def _get_clones(module, N):
+    return torch.nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
 
@@ -145,7 +152,7 @@ class AdaptiveComputeTime(torch.nn.Module):
 
 class TransformerACTEncoder(torch.nn.Module):
     def __init__(self, d_model, max_len=64,
-                num_heads=4, max_depth=4,
+                num_heads=4, max_depth=4, clone=True,
                 time_penalty=0.05, eps=0.01):
         super(TransformerACTEncoder, self).__init__()
         self.max_depth = max_depth
@@ -153,10 +160,14 @@ class TransformerACTEncoder(torch.nn.Module):
         self.halt_threshold = 1 - eps
         self.pos_encoder = PositionalDepthEncoding(d_model, max_depth,
             max_len=max_len)
-        self.encoder_layer = torch.nn.TransformerEncoderLayer(d_model=d_model,
+        encoder_layer = torch.nn.TransformerEncoderLayer(d_model=d_model,
             nhead=num_heads,
             dim_feedforward=d_model*4,
             activation='gelu')
+        if clone:
+            self.encoder = torch.nn.ModuleList([encoder_layer for _ in range(max_depth)])
+        else:
+            self.encoder = _get_clones(encoder_layer, max_depth)
         self.act_layer = AdaptiveComputeTime(d_model, eps=eps)
 
     def forward(self, state, mask):
@@ -167,9 +178,9 @@ class TransformerACTEncoder(torch.nn.Module):
         n_updates = torch.zeros_like(halting_prob)
         #state = state * math.sqrt(d_model)
         # run encoder for max depth with ACT update weights
-        for step in range(self.max_depth):
+        for step, layer in enumerate(self.encoder):
             state = self.pos_encoder(state, step)
-            transformed_state = self.encoder_layer(state.permute(1, 0, 2), src_key_padding_mask=mask).permute(1, 0, 2)
+            transformed_state = layer(state.permute(1, 0, 2), src_key_padding_mask=mask).permute(1, 0, 2)
             update_weights, halting_prob, remainders, n_updates = self.act_layer(transformed_state, halting_prob, remainders, n_updates, mask=mask)
             transformed_state = (transformed_state * update_weights) + state * (1-update_weights)
             if torch.all(halting_prob > self.halt_threshold):
