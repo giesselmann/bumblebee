@@ -107,6 +107,8 @@ class AdaptiveComputeTime(torch.nn.Module):
         self.halt_threshold = 1 - eps
         self.ponder_nn = torch.nn.Linear(2*d_model, 1)
         self.ponder_act = torch.nn.Sigmoid()
+        with torch.no_grad():
+            torch.nn.init.ones_(self.ponder_nn.bias)
 
     def forward(self, state, previous_state, halting_prob, remainders, n_updates, mask=None):
         # (batch_size, max_len, 1)
