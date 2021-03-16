@@ -219,7 +219,7 @@ class BaseModEncoder_v2(torch.nn.Module):
     def __init__(self,
             num_features=6, num_kmers=4**6, num_classes=2,
             embedding_dim=32, padding_idx=0,
-            d_model=512, num_heads=4, max_depth=5,
+            d_model=512, num_heads=4, max_depth=6,
             max_len=64
             ):
         super(BaseModEncoder_v2, self).__init__()
@@ -230,7 +230,7 @@ class BaseModEncoder_v2(torch.nn.Module):
             padding_idx=padding_idx
         )
         self.input_nn = ResidualNetwork(num_features + embedding_dim,
-            d_model, [128, 256])
+            d_model, [64, 128, 256])
         # encoder
         self.encoder = TransformerACTEncoder(d_model,
             max_len=max_len,
