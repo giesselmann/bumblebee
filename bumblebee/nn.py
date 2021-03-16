@@ -108,7 +108,7 @@ class AdaptiveComputeTime(torch.nn.Module):
         self.ponder_nn = ResidualNetwork(d_model, 1, [128, 32])
         self.ponder_act = torch.nn.Sigmoid()
         with torch.no_grad():
-            torch.nn.init.ones_(self.ponder_nn.bias)
+            torch.nn.init.ones_(self.ponder_nn.fc_out.bias)
 
     def forward(self, state, halting_prob, remainders, n_updates, mask=None):
         # (batch_size, max_len, 1)
@@ -171,7 +171,7 @@ class TransformerACTEncoder(torch.nn.Module):
         for step in range(self.max_depth):
             state = self.pos_encoder(state, step)
             transformed_state = self.encoder_layer(state.permute(1, 0, 2), src_key_padding_mask=mask).permute(1, 0, 2)
-            update_weights, halting_prob, remainders, n_updates = self.act_layer(transformed_state, state, halting_prob, remainders, n_updates, mask=mask)
+            update_weights, halting_prob, remainders, n_updates = self.act_layer(transformed_state, halting_prob, remainders, n_updates, mask=mask)
             transformed_state = (transformed_state * update_weights) + state * (1-update_weights)
             if torch.all(halting_prob > self.halt_threshold):
                 break
