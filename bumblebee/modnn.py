@@ -220,8 +220,8 @@ class BaseModEncoder_v2(torch.nn.Module):
             num_features=6, num_kmers=4**6, num_classes=2,
             embedding_dim=32, padding_idx=0,
             d_model=512, num_heads=4, max_depth=3,
-            clone=False, time_penalty=0.05,
-            max_len=64
+            clone=True, time_penalty=0.05,
+            max_len=40
             ):
         super(BaseModEncoder_v2, self).__init__()
         self.d_model = d_model
