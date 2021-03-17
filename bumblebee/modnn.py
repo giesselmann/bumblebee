@@ -159,7 +159,7 @@ class BaseModLSTM_v2(torch.nn.Module):
 class BaseModEncoder_v1(torch.nn.Module):
     def __init__(self,
             num_features=6, num_kmers=4**6, num_classes=2,
-            embedding_dim=32, padding_idx=0,
+            embedding_dim=40, padding_idx=0,
             d_model=512, num_heads=4, num_layer=3
             ):
         super(BaseModEncoder_v1, self).__init__()
@@ -169,9 +169,9 @@ class BaseModEncoder_v1(torch.nn.Module):
             embedding_dim=embedding_dim,
             padding_idx=padding_idx
         )
-        #self.input_nn = torch.nn.Linear(num_features + embedding_dim, d_model)
         self.input_nn = ResidualNetwork(num_features + embedding_dim,
-            d_model, [128, 256])
+            d_model,
+            [64, 128, 256])
         self.pos_encoder = PositionalEncoding(d_model,
             dropout=0.1,
             max_len=64)
@@ -182,7 +182,9 @@ class BaseModEncoder_v1(torch.nn.Module):
                         activation='gelu')
         self.transformer_encoder = torch.nn.TransformerEncoder(self.encoder_layer,
                         num_layers=num_layer)
-        self.output_nn = ResidualNetwork(d_model, num_classes, [512, 256, 128])
+        self.output_nn = ResidualNetwork(d_model,
+            num_classes,
+            [512, 256, 128])
 
     def forward(self, lengths, kmers, features):
         batch_size, max_len, n_features = features.size()
