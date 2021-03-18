@@ -120,7 +120,7 @@ def main(args):
                 loss += model_loss
             loss = torch.mean(loss)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.5)
             lookahead.step()
         return loss.item(), accuracy, metrics
 

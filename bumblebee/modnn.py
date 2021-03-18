@@ -160,7 +160,7 @@ class BaseModEncoder_v1(torch.nn.Module):
     def __init__(self,
             num_features=6, num_kmers=4**6, num_classes=2,
             embedding_dim=40, padding_idx=0,
-            d_model=512, num_heads=4, num_layer=3
+            d_model=768, num_heads=6, num_layer=3
             ):
         super(BaseModEncoder_v1, self).__init__()
         self.d_model = d_model
@@ -184,7 +184,7 @@ class BaseModEncoder_v1(torch.nn.Module):
                         num_layers=num_layer)
         self.output_nn = ResidualNetwork(d_model,
             num_classes,
-            [512, 256, 128])
+            [512, 256, 128, 64])
 
     def forward(self, lengths, kmers, features):
         batch_size, max_len, n_features = features.size()
