@@ -159,8 +159,8 @@ class BaseModLSTM_v2(torch.nn.Module):
 class BaseModEncoder_v1(torch.nn.Module):
     def __init__(self,
             num_features=6, num_kmers=4**6, num_classes=2,
-            embedding_dim=40, padding_idx=0,
-            d_model=768, num_heads=6, num_layer=3
+            embedding_dim=32, padding_idx=0,
+            d_model=512, num_heads=4, num_layer=3
             ):
         super(BaseModEncoder_v1, self).__init__()
         self.d_model = d_model

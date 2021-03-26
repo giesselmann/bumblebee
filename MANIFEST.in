@@ -1,4 +1,4 @@
 include README.md
-include LICENCE
+include LICENSE
 include requirements.txt
 include bumblebee/data/r9.4_450bps.model
