@@ -91,7 +91,8 @@ class WorkerProcess():
         self.q_in = input_queue
         self.q_out = mp.Queue(queue_len)
         self.e = mp.Event()
-        def fn(e, q_in, q_out, worker_type, *args, **kwargs):
+        self.barrier = mp.Barrier(num_worker)
+        def fn(e, barrier, q_in, q_out, worker_type, *args, **kwargs):
             pid = '(PID: {})'.format(os.getpid())
             log.debug("Started Worker {}".format(pid))
             worker = worker_type(*args, **kwargs)
@@ -101,10 +102,8 @@ class WorkerProcess():
                 except queue.Empty:
                     obj = None
                 if obj is StopIteration or e.is_set():
-                    log.debug("Received StopIteration/StopEvent in Worker {}".format(pid))
+                    log.debug("Received StopIteration/StopEvent in WorkerProcess {}".format(pid))
                     e.set()
-                    q_out.put(StopIteration)
-                    q_in.put(StopIteration)
                     break
                 elif obj is not None:
                     try:
@@ -116,12 +115,16 @@ class WorkerProcess():
                         q_out.put(res)
                 else:
                     continue
-            log.debug("Terminating Worker {}".format(pid))
+            i = barrier.wait()
+            if i == 0:
+                q_out.put(StopIteration)
+            q_out.close()
+            log.debug("Terminating WorkerProcess {}".format(pid))
         self.p = []
         for _ in range(num_worker):
             self.p.append(
                 mp.Process(target=fn,
-                    args=(self.e, self.q_in, self.q_out, worker_type) + args,
+                    args=(self.e, self.barrier, self.q_in, self.q_out, worker_type) + args,
                     kwargs=kwargs))
             self.p[-1].start()
 
@@ -130,7 +133,7 @@ class WorkerProcess():
         return self.q_out
 
     def terminate(self):
-        log.debug("Sending StopEvent to Worker")
+        log.debug("Sending StopEvent to WorkerProcess")
         self.e.set()
         self.q_in.put(StopIteration)
         for p in self.p:
@@ -161,7 +164,7 @@ class SinkProcess():
                 except queue.Empty:
                     obj = None
                 if obj is StopIteration or e.is_set():
-                    log.debug("Received StopIteration/StopEvent in Sink {}".format(pid))
+                    log.debug("Received StopIteration/StopEvent in SinkProcess {}".format(pid))
                     e.set()
                     break
                 elif obj is not None:
@@ -171,7 +174,7 @@ class SinkProcess():
                         log.error("Exception in sink (Proceeding with remaining jobs):\n{}".format(str(e)))
                 else:
                     continue
-            log.debug("Terminating Sink {}".format(pid))
+            log.debug("Terminating SinkProcess {}".format(pid))
         self.p = mp.Process(target=fn,
             args=(self.e, self.q_in, sink_type) + args,
             kwargs=kwargs)

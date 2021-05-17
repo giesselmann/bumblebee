@@ -54,6 +54,10 @@ class ReadSource(StateFunction):
         self.algn_idx = AlignmentIndex(bam)
         self.min_seq_length = min_seq_length
         self.max_seq_length = max_seq_length
+        self.read_counter = 0
+
+    def __del__(self):
+        log.info("Loaded {} reads from disk.".format(self.read_counter))
 
     def call(self):
         for i, ref_span in enumerate(self.algn_idx.records()):
@@ -63,6 +67,7 @@ class ReadSource(StateFunction):
             read_signal = self.f5_idx[ref_span.qname]
             read = Read(read_signal, ref_span=ref_span)
             yield (read, )
+            self.read_counter += 1
 
 
 
@@ -94,6 +99,10 @@ class RecordWriter(StateFunction):
         self.pattern = Pattern(pattern, extension)
         read_normalizer = ReadNormalizer()
         self.read_aligner = ReadAligner(read_normalizer)
+        self.site_counter = 0
+
+    def __del__(self):
+        log.info("Wrote {} sites to database.".format(self.site_counter))
 
     def call(self, read, df_events, score):
         # write read_record
@@ -103,6 +112,7 @@ class RecordWriter(StateFunction):
             self.pattern, self.read_aligner.pm.k):
             db_site_id = self.db.insert_site(db_read_id, self.mod_id, template_begin)
             self.db.insert_features(db_site_id, df_feature, feature_begin)
+            self.site_counter += 1
         self.db.commit()
 
 
@@ -121,9 +131,9 @@ def main(args):
         args=(args.db, args.mod_id),
         kwargs={'pattern':args.pattern,
                 'extension':args.extension})
-    src.join()
-    worker.join()
     sink.join()
+    worker.join()
+    src.join()
 
 
 
@@ -143,3 +153,9 @@ def argparser():
     parser.add_argument("--min_score", default=0.0, type=float)
     parser.add_argument("-t", "--threads", default=1, type=int)
     return parser
+
+
+### 3199 reads`
+### 90012 sites
+### 89690 sites
+### 89957

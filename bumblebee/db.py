@@ -150,9 +150,9 @@ class ModDatabase():
             init_db(db_file, type='mod')
         self.connection = sqlite3.connect(db_file)
         self.cursor = self.connection.cursor()
-        self.cursor.execute("pragma journal_mode = MEMORY;")
-        self.cursor.execute("pragma synchronous = OFF;")
-        self.cursor.execute("""pragma cache_size = 100000;""")
+        #self.cursor.execute("pragma journal_mode = MEMORY;")
+        #self.cursor.execute("pragma synchronous = OFF;")
+        self.cursor.execute("""pragma cache_size = 5000000;""")
         self.cursor.execute("SELECT MAX(rowid) FROM reads;")
         self.next_read_rowid = (next(self.cursor)[0] or 0) + 1
         self.cursor.execute("SELECT MAX(rowid) FROM sites;")
@@ -170,6 +170,9 @@ class ModDatabase():
     def __del__(self):
         self.connection.commit()
         self.connection.close()
+
+    def commit(self):
+        self.connection.commit()
 
     def insert_read(self, ref_span, score=0.0):
         self.cursor.execute("INSERT INTO reads (rowid, readid, chr, pos, strand, score) VALUES ({rowid}, {readid}, {chr}, {pos}, {strand}, {score});".format(
@@ -219,9 +222,6 @@ class ModDatabase():
                 ))
             except sqlite3.OperationalError:
                 print(row)
-
-    def commit(self):
-        self.connection.commit()
 
     def reset_split(self):
         __init_filter_tables__(self.cursor)
