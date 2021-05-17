@@ -54,12 +54,23 @@ class PoreModel():
             v_min = min(values)
             v_max = max(values)
             self.pm = {key:(value - v_min)/(v_max - v_min) * 2.2 - 1.1 for key, value in self.pm.items()}
+        # enumerate kmers, reserve 0 for kmers containing Ns
+        self.kmer_idx = {kmer:i+1 for i, kmer in
+            enumerate(sorted(list(self.pm.keys())))}
+        self.pm_mean = np.mean(list(self.pm.values()))
 
     def __getattr__(self, name):
         return getattr(self.pm, name)
 
     def __getitem__(self, key):
         return self.pm.get(key) or 0.0
+
+    def idx(self, kmer):
+        return self.kmer_idx.get(kmer) or 0
+
+    def signal(self, sequence):
+        return np.array([self.pm.get(sequence[i:i+self.k]) or self.pm_mean
+            for i in range(len(sequence) - self.k + 1)])
 
     def to_tsv(self, name, sep='\t'):
         keys = sorted(list(self.pm.keys()))

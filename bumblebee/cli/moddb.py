@@ -26,70 +26,104 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, re
+import time
+import logging
 import tqdm
 import pkg_resources
 import numpy as np
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from bumblebee.poremodel import PoreModel
-from bumblebee.db import ModDatabase, pattern_template
+from bumblebee.db import ModDatabase
 from bumblebee.fast5 import Fast5Index
 from bumblebee.alignment import AlignmentIndex
 from bumblebee.poremodel import PoreModel
-from bumblebee.signal import Read, ReadNormalizer
+from bumblebee.read import Pattern, Read, ReadNormalizer, ReadAligner
+from bumblebee.multiprocessing import StateFunction, SourceProcess, WorkerProcess, SinkProcess
+
+
+log = logging.getLogger(__name__)
+
+
+# parse reads from fast5 and bam input
+class ReadSource(StateFunction):
+    def __init__(self, fast5, bam,
+                 min_seq_length=500, max_seq_length=10000):
+        super(StateFunction).__init__()
+        self.f5_idx = Fast5Index(fast5)
+        self.algn_idx = AlignmentIndex(bam)
+        self.min_seq_length = min_seq_length
+        self.max_seq_length = max_seq_length
+
+    def call(self):
+        for i, ref_span in enumerate(self.algn_idx.records()):
+            if (len(ref_span.seq) < self.min_seq_length or
+                len(ref_span.seq) > self.max_seq_length):
+                continue
+            read_signal = self.f5_idx[ref_span.qname]
+            read = Read(read_signal, ref_span=ref_span)
+            yield (read, )
+
+
+
+
+# align read signal to reference sequence
+class EventAligner(StateFunction):
+    def __init__(self, min_score=0.0):
+        super(StateFunction).__init__()
+        self.min_score = min_score
+        read_normalizer = ReadNormalizer()
+        self.read_aligner = ReadAligner(read_normalizer)
+
+    def call(self, read):
+        score, df_events = read.event_alignments(self.read_aligner)
+        log.debug("Aligned read {} with score {}".format(read.name, score))
+        if score < self.min_score:
+            return None
+        else:
+            return read, df_events, score
+
+
+
+
+class RecordWriter(StateFunction):
+    def __init__(self, db, mod_id, pattern='CG', extension=6):
+        super(StateFunction).__init__()
+        self.db = ModDatabase(db)
+        self.mod_id = mod_id
+        self.pattern = Pattern(pattern, extension)
+        read_normalizer = ReadNormalizer()
+        self.read_aligner = ReadAligner(read_normalizer)
+
+    def call(self, read, df_events, score):
+        # write read_record
+        db_read_id = self.db.insert_read(read.ref_span, score=score)
+        # write features
+        for template_begin, feature_begin, df_feature in read.feature_sites(df_events,
+            self.pattern, self.read_aligner.pm.k):
+            db_site_id = self.db.insert_site(db_read_id, self.mod_id, template_begin)
+            self.db.insert_features(db_site_id, df_feature, feature_begin)
+        self.db.commit()
 
 
 
 
 def main(args):
-    # end debug
-    pore_model = PoreModel(pkg_resources.resource_filename('bumblebee', 'data/r9.4_450bps.model'))
-    # enumerate kmers, reserve 0 for kmers with 'N'
-    kmer_idx = {kmer:i+1 for i, kmer in enumerate(sorted(list(pore_model.keys())))}
-    # open/init database
-    db = ModDatabase(args.db)
-    # create bam and fast5 iterator
-    f5_idx = Fast5Index(args.fast5)
-    algn_idx = AlignmentIndex(args.bam)
-    # read signal normalization
-    norm = ReadNormalizer()
-    pattern = pattern_template.format(ext=args.pattern_extension, pattern=args.pattern)
-    with tqdm.tqdm(desc='Event align', dynamic_ncols=True, total=len(f5_idx)) as pbar:
-        for i, ref_span in enumerate(algn_idx.records()):
-            if len(ref_span.seq) < args.min_seq_length or len(ref_span.seq) > args.max_seq_length:
-                continue
-            read = Read(f5_idx[ref_span.qname], norm)
-            score, df_events = read.event_alignment(ref_span, pore_model)
-            # event_id  event_min  event_mean  event_median  event_std  event_max  event_len  sequence_offset    kmer
-            if score < args.min_score:
-                continue
-            df_events['kmer'] = df_events.kmer.apply(lambda x: kmer_idx.get(x) or 0)
-            # clip and normalize event lengths
-            df_events['event_length'] = np.clip(df_events.event_len, 0, 40) / 40
-            # mapped part of read sequence
-            valid_offset = df_events.sequence_offset.min()
-            valid_sequence = ref_span.seq[valid_offset : df_events.sequence_offset.max() + 1]
-            ref_span_len = len(ref_span.seq)
-            df_events.set_index('sequence_offset', inplace=True)
-            # write read_record
-            db_read_id = db.insert_read(ref_span, score=score)
-            # iterate over pattern positions and write features
-            for match in re.finditer(pattern, valid_sequence):
-                match_begin = match.start()
-                match_end = match.end()
-                feature_begin = match_begin - args.pattern_extension + valid_offset
-                df_feature = df_events.loc[feature_begin : match_end + valid_offset + args.pattern_extension - pore_model.k]
-                # reference position on template strand
-                if not ref_span.is_reverse:
-                    feature_template_pos = ref_span.pos + match_begin + valid_offset
-                else:
-                    feature_template_pos = ref_span.pos + ref_span_len - match_end - valid_offset
-                if df_feature.shape[0] > 0 and df_feature.shape[0] < (2**15 - 1):
-                    db_site_id = db.insert_site(db_read_id, args.mod_id, feature_template_pos)
-                    db.insert_features(db_site_id, df_feature, feature_begin)
-            pbar.update(1)
-            db.commit()
-    pbar.close()
+    src = SourceProcess(ReadSource,
+        args=(args.fast5, args.bam),
+        kwargs={'min_seq_length':args.min_seq_length,
+                'max_seq_length':args.max_seq_length})
+    worker = WorkerProcess(src.output_queue, EventAligner,
+        args=(),
+        kwargs={'min_score':args.min_score},
+        num_worker=args.threads)
+    sink = SinkProcess(worker.output_queue, RecordWriter,
+        args=(args.db, args.mod_id),
+        kwargs={'pattern':args.pattern,
+                'extension':args.extension})
+    src.join()
+    worker.join()
+    sink.join()
 
 
 
@@ -103,52 +137,9 @@ def argparser():
     parser.add_argument("bam", type=str)
     parser.add_argument("--mod_id", default=0, type=int)
     parser.add_argument("--pattern", default='CG', type=str)
-    parser.add_argument("--pattern_extension", default=6, type=int)
+    parser.add_argument("--extension", default=6, type=int)
     parser.add_argument("--min_seq_length", default=500, type=int)
-    parser.add_argument("--max_seq_length", default=10000, type=int)
+    parser.add_argument("--max_seq_length", default=50000, type=int)
     parser.add_argument("--min_score", default=0.0, type=float)
+    parser.add_argument("-t", "--threads", default=1, type=int)
     return parser
-
-
-
-
-"""
-import sqlite3
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-con = sqlite3.connect('5mC.sample.db')
-cursor = con.cursor()
-
-cursor.execute("SELECT class, offset, mean FROM sites JOIN features ON sites.rowid = features.siteid;")
-
-df = pd.DataFrame(cursor, columns=['class', 'offset', 'mean'])
-df_agg = df.groupby(['offset']).agg(median=('mean', 'median')).reset_index()
-df_agg_m = df.groupby(['offset', 'class']).agg(median=('mean', 'median')).reset_index()
-df_agg_m = df_agg_m.pivot(index='offset', columns='class').reset_index()
-df_agg_m['diff'] = df_agg_m.loc[:, ('median', 0)] - df_agg_m.loc[:, ('median', 1)]
-
-cursor.execute("SELECT score FROM reads;")
-df_score = pd.DataFrame(cursor, columns=['score'])
-
-
-f = plt.figure(figsize=(10,5))
-gs = f.add_gridspec(3,1,height_ratios=[4,1,1])
-ax1 = f.add_subplot(gs[0])
-ax2 = f.add_subplot(gs[1])
-ax3 = f.add_subplot(gs[2])
-sns.boxplot(x='offset', y='mean', hue='class', data=df, fliersize=0, ax=ax1)
-sns.barplot(x='offset', y='median', data=df_agg, ax=ax2)
-ax2.set_ylim(-0.4, 0.4)
-sns.barplot(x='offset', y='diff', data=df_agg_m, ax=ax3)
-ax3.set_ylim(-0.2, 0.2)
-f.savefig('plots/kmer_level.pdf')
-plt.show()
-
-f, ax = plt.subplots(1, figsize=(5,5))
-_ax = sns.kdeplot(x="score", data=df_score, ax=ax)
-_ax.set_title("Signal alignment score")
-f.savefig('plots/signal_align_score.pdf')
-plt.show()
-"""

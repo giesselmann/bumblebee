@@ -31,7 +31,7 @@ import numpy as np
 from collections import namedtuple
 
 
-Fast5Record = namedtuple('Fast5Record', ['name', 'raw'])
+ReadSignal = namedtuple('ReadSignal', ['name', 'raw'])
 
 
 class Fast5Index():
@@ -70,9 +70,9 @@ class Fast5Index():
             with h5py.File(self.index[key], 'r') as fp:
                 name = key
                 raw = fp['{}/Raw/Signal'.format(Fast5Index.id2grp(name))][...].astype(np.float32)
-                return Fast5Record(name=name, raw=raw)
+                return ReadSignal(name=name, raw=raw)
         else:
-            raise KeyError("Key {} not in fast5 files".format(key))
+            raise KeyError("ID {} not in fast5 files".format(key))
 
     # list of read IDs
     def names(self):
@@ -89,4 +89,4 @@ class Fast5Index():
                         continue
                     name = Fast5Index.grp2id(key)
                     raw = grp['Raw/Signal'][...].astype(np.float32)
-                    yield Fast5Record(name=name, raw=raw)
+                    yield ReadSignal(name=name, raw=raw)

@@ -37,7 +37,8 @@ import matplotlib.pyplot as plt
 from bumblebee.fast5 import Fast5Index
 from bumblebee.alignment import AlignmentIndex
 from bumblebee.poremodel import PoreModel
-from bumblebee.signal import Read, ReadNormalizer
+# TODO check for changes in interfaces!
+from bumblebee.read import Read, ReadNormalizer
 
 
 

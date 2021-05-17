@@ -33,7 +33,6 @@ import numpy as np
 from bumblebee.ref import reference
 
 
-pattern_template = r'(?<=[ACGT]{{{ext}}}){pattern}(?=[ACGT]{{{ext}}})'
 
 
 # init tables

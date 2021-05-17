@@ -32,12 +32,15 @@ from collections import defaultdict
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from bumblebee.ref import reference
+from bumblebee.read import Pattern
 from bumblebee.alignment import reverse_complement
-from bumblebee.db import ModDatabase, pattern_template
+from bumblebee.db import ModDatabase
+
+
 
 
 def main(args):
-    pattern = pattern_template.format(ext=args.pattern_extension, pattern=args.pattern)
+    pattern = Pattern(args.pattern, args.pattern_extension)
     # load database and reset existing split
     db = ModDatabase(args.db, require_index=True)
     db.reset_split()
@@ -50,10 +53,10 @@ def main(args):
     for name, contig in ref.contigs():
         print("Processing {}".format(name))
         # matches on template strand
-        for match in re.finditer(pattern, contig):
+        for match in re.finditer(pattern.pattern_string, contig):
             match_begin = match.start()
             match_end = match.end()
-            context = contig[match_begin - args.pattern_extension : match_end + args.pattern_extension]
+            context = contig[match_begin - pattern.extension : match_end + pattern.extension]
             context_dict[context].append((name, 0, match_begin))
             template_count += 1
             if is_palindrome:
@@ -63,10 +66,10 @@ def main(args):
             continue
         # matches on reverse strand
         contig = reverse_complement(contig)
-        for match in re.finditer(pattern, contig):
+        for match in re.finditer(pattern.pattern_string, contig):
             match_begin = match.start()
             match_end = match.end()
-            context = contig[match_begin - args.pattern_extension : match_end + args.pattern_extension]
+            context = contig[match_begin - pattern.extension : match_end + pattern.extension]
             context_dict[context].append((name, 1, len(contig) - match_end))
             reverse_count += 1
     print("Found {} forward and {} reverse strand matches.".format(template_count, reverse_count))

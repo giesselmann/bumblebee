@@ -25,28 +25,29 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-import os
-import random
-import tqdm
-import torch
-import itertools
-import collections
-import numpy as np
-from datetime import datetime
-from torchinfo import summary
-from torch.utils.tensorboard import SummaryWriter
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
-
-from bumblebee.db import ModDatabase
-from bumblebee.ds import ModDataset
-from bumblebee.optimizer import Lookahead
-from bumblebee.util import running_average, parse_kwargs, WarmupScheduler
-import bumblebee.modnn
 
 
 
 
 def main(args):
+    import os
+    import random
+    import tqdm
+    import torch
+    import itertools
+    import collections
+    import numpy as np
+    from datetime import datetime
+    from torchinfo import summary
+    from torch.utils.tensorboard import SummaryWriter
+
+    from bumblebee.db import ModDatabase
+    from bumblebee.ds import ModDataset
+    from bumblebee.optimizer import Lookahead
+    from bumblebee.util import running_average, parse_kwargs, WarmupScheduler
+    import bumblebee.modnn
+
     # init torch
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:{}".format(args.device) if use_cuda else "cpu")
