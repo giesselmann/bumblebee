@@ -150,9 +150,9 @@ class ModDatabase():
             init_db(db_file, type='mod')
         self.connection = sqlite3.connect(db_file)
         self.cursor = self.connection.cursor()
-        #self.cursor.execute("pragma journal_mode = MEMORY;")
-        #self.cursor.execute("pragma synchronous = OFF;")
-        self.cursor.execute("""pragma cache_size = 5000000;""")
+        self.cursor.execute("pragma journal_mode = MEMORY;")
+        self.cursor.execute("pragma synchronous = OFF;")
+        self.cursor.execute("""pragma cache_size = 10000;""")
         self.cursor.execute("SELECT MAX(rowid) FROM reads;")
         self.next_read_rowid = (next(self.cursor)[0] or 0) + 1
         self.cursor.execute("SELECT MAX(rowid) FROM sites;")

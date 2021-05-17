@@ -147,15 +147,9 @@ def argparser():
     parser.add_argument("bam", type=str)
     parser.add_argument("--mod_id", default=0, type=int)
     parser.add_argument("--pattern", default='CG', type=str)
-    parser.add_argument("--extension", default=6, type=int)
-    parser.add_argument("--min_seq_length", default=500, type=int)
-    parser.add_argument("--max_seq_length", default=50000, type=int)
+    parser.add_argument("--extension", default=7, type=int)
+    parser.add_argument("--min_seq_length", default=2000, type=int)
+    parser.add_argument("--max_seq_length", default=10000, type=int)
     parser.add_argument("--min_score", default=0.0, type=float)
     parser.add_argument("-t", "--threads", default=1, type=int)
     return parser
-
-
-### 3199 reads`
-### 90012 sites
-### 89690 sites
-### 89957

@@ -26,9 +26,13 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, re
+import logging
 import h5py
 import numpy as np
 from collections import namedtuple
+
+
+log = logging.getLogger(__name__)
 
 
 ReadSignal = namedtuple('ReadSignal', ['name', 'raw'])
@@ -56,6 +60,7 @@ class Fast5Index():
         return len(self.index)
 
     def __index__(self):
+        log.info("Indexing fast5 input")
         self.index = {}
         for f in self.batch_files:
             with h5py.File(f, 'r') as fp:
