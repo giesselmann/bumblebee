@@ -155,7 +155,7 @@ def main(args):
         worker.join()
         src.join()
     else:   # index
-        db = ModDatabase(args.db, require_index=args.index)
+        db = ModDatabase(args.db)
         db.reset_split()
         ref = Reference(args.ref)
         fwd_pattern = Pattern(args.pattern, args.extension)
@@ -185,6 +185,8 @@ def main(args):
             else:
                 for p in positions:
                     db.insert_filter(*p, table='train')
+        log.info("Indexing database")
+        db = ModDatabase(args.db, require_index=True)
         db.commit()
         log.info("Finished indexing for {} forward and {} reverse matches in total".format(
             fwd_count, rev_count))
@@ -223,8 +225,6 @@ def argparser():
     p_index = subparsers.add_parser('index', help='Index database', parents=[common], add_help=True)
     p_index.add_argument("ref", type=str, metavar='str',
         help='Reference file for eval/train split')
-    p_index.add_argument("--index", action='store_true',
-        help='Create database indices if not existing')
     p_index.add_argument("--split", default=0.1, type=float, metavar='float',
         help='Ratio for eval/train split (default: %(default)s)')
 

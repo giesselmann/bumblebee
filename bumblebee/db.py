@@ -109,7 +109,10 @@ def __init_filter_tables__(cursor):
     """
     cursor.execute(sql_cmd.format('train'))
     cursor.execute(sql_cmd.format('eval'))
-    # indices
+
+
+def __index_filter_tables__(cursor):
+    __init_filter_tables__(cursor)
     cursor.execute("CREATE INDEX IF NOT EXISTS train_idx ON train(chr, strand, pos);")
     cursor.execute("CREATE INDEX IF NOT EXISTS eval_idx ON eval(chr, strand, pos);")
 
@@ -126,6 +129,7 @@ def init_db(db_file, type='base'):
     elif type == 'mod':
         __init_sites_table__(cursor)
         __init_features_table__(cursor)
+        __init_filter_tables__(cursor)
     else:
         raise NotImplementedError
     connection.commit()
@@ -163,9 +167,11 @@ class ModDatabase():
             __index_reads_table__(self.cursor)
             __index_sites_table__(self.cursor)
             __index_features_table__(self.cursor)
+            __index_filter_tables__(self.cursor)
         # require filter tables for train/val split
         if require_split:
-            __init_filter_tables__(self.cursor)
+            pass
+            # TODO check split table not empty
         # in case new indices where created
         self.connection.commit()
 
