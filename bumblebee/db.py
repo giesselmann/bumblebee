@@ -112,7 +112,6 @@ def __init_filter_tables__(cursor):
 
 
 def __index_filter_tables__(cursor):
-    __init_filter_tables__(cursor)
     cursor.execute("CREATE INDEX IF NOT EXISTS train_idx ON train(chr, strand, pos);")
     cursor.execute("CREATE INDEX IF NOT EXISTS eval_idx ON eval(chr, strand, pos);")
 

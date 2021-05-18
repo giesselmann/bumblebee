@@ -185,6 +185,8 @@ def main(args):
             else:
                 for p in positions:
                     db.insert_filter(*p, table='train')
+        db.commit()
+        del db
         log.info("Indexing database")
         db = ModDatabase(args.db, require_index=True)
         db.commit()
