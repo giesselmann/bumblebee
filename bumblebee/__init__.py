@@ -26,24 +26,34 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import logging
-from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
+import textwrap
+from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from bumblebee.cli import pm
 from bumblebee.cli import basecall, basedb, basetrain
-from bumblebee.cli import modcall, moddb, moddbidx, modtrain
+from bumblebee.cli import modcall, moddb, modtrain
 
-modules = ['basecall', 'modcall', 'basedb', 'moddb', 'moddbidx', 'basetrain', 'modtrain', 'pm']
+modules = ['basecall', 'modcall', 'basedb', 'moddb', 'basetrain', 'modtrain', 'pm']
 
 __version__ = '0.1.0'
 
 
 
 
-def setup_logger():
+def log_level(string):
+    levels = {'error': logging.ERROR,
+              'warning': logging.WARNING,
+              'info': logging.INFO,
+              'debug': logging.DEBUG}
+    return levels[string]
+
+
+
+def setup_logger(level=logging.INFO):
     handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
+    handler.setLevel(level)
     formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
     handler.setFormatter(formatter)
-    logging.basicConfig(level=logging.DEBUG, handlers=[handler])
+    logging.basicConfig(level=level, handlers=[handler])
     logger = logging.getLogger(__name__)
     logger.debug("Logging initialized.")
 
@@ -51,22 +61,32 @@ def setup_logger():
 
 
 def main():
-    setup_logger()
     parser = ArgumentParser(
         'bumblebee',
-        formatter_class=ArgumentDefaultsHelpFormatter
+        formatter_class=RawDescriptionHelpFormatter
     )
-
-    parser.add_argument(
-        '-v', '--version', action='version',
-        version='%(prog)s {}'.format(__version__)
-    )
+    parser.add_argument('-v', '--version',
+        action='version', version='%(prog)s {}'.format(__version__))
+    parser.add_argument('--log', type=log_level, metavar='level', default='debug',
+        choices=['error', 'warning', 'info', 'debug'], help='Log level')
 
     subparsers = parser.add_subparsers(
-        title='subcommands', description='valid commands',
-        help='additional help', dest='command'
+        title='subcommands',
+        dest='command',
+        required=True,
+        metavar='',
+        description=textwrap.dedent('''\
+        Nanopore signal analysis software
+            basecall        Basecalling from fast5 input
+            modcall         Modificatin detection from fast5 and bam
+
+            basetrain       Train new base caller model
+            modtrain        Train new modification caller model
+
+            basedb          Setup database for base caller training
+            moddb           Setup database for modification caller training
+            '''),
     )
-    subparsers.required = True
 
     for module in modules:
         mod = globals()[module]
@@ -74,4 +94,5 @@ def main():
         p.set_defaults(func=mod.main)
 
     args = parser.parse_args()
+    setup_logger(args.log)
     args.func(args)

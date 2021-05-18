@@ -32,7 +32,7 @@ import re
 
 
 # load reference in fasta format
-class reference:
+class Reference:
     def __init__(self, ref_file):
         self._contigs = {}
         self.ref_file = ref_file

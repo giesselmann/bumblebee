@@ -31,12 +31,14 @@ import logging
 import tqdm
 import pkg_resources
 import numpy as np
+from collections import defaultdict
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 from bumblebee.poremodel import PoreModel
 from bumblebee.db import ModDatabase
 from bumblebee.fast5 import Fast5Index
-from bumblebee.alignment import AlignmentIndex
+from bumblebee.ref import Reference
+from bumblebee.alignment import AlignmentIndex, reverse_complement
 from bumblebee.poremodel import PoreModel
 from bumblebee.read import Pattern, Read, ReadNormalizer, ReadAligner
 from bumblebee.multiprocessing import StateFunction, SourceProcess, WorkerProcess, SinkProcess
@@ -118,38 +120,112 @@ class RecordWriter(StateFunction):
 
 
 
+def update_contexts(context_dict,
+                    name, contig, strand,
+                    pattern, extension):
+    count = 0
+    for match in re.finditer(pattern, contig):
+        match_begin = match.start()
+        context = contig[match_begin - extension : match.end() + extension]
+        if strand == 0:
+            context_dict[context].append((name, strand, match_begin))
+        else:
+            context_dict[reverse_complement(context)].append((name, strand, match_begin))
+        count += 1
+    return count
+
+
+
+
 def main(args):
-    src = SourceProcess(ReadSource,
-        args=(args.fast5, args.bam),
-        kwargs={'min_seq_length':args.min_seq_length,
-                'max_seq_length':args.max_seq_length})
-    worker = WorkerProcess(src.output_queue, EventAligner,
-        args=(),
-        kwargs={'min_score':args.min_score},
-        num_worker=args.threads)
-    sink = SinkProcess(worker.output_queue, RecordWriter,
-        args=(args.db, args.mod_id),
-        kwargs={'pattern':args.pattern,
-                'extension':args.extension})
-    sink.join()
-    worker.join()
-    src.join()
+    if args.command == 'insert':
+        src = SourceProcess(ReadSource,
+            args=(args.fast5, args.bam),
+            kwargs={'min_seq_length':args.min_seq_length,
+                    'max_seq_length':args.max_seq_length})
+        worker = WorkerProcess(src.output_queue, EventAligner,
+            args=(),
+            kwargs={'min_score':args.min_score},
+            num_worker=args.threads)
+        sink = SinkProcess(worker.output_queue, RecordWriter,
+            args=(args.db, args.mod_id),
+            kwargs={'pattern':args.pattern,
+                    'extension':args.extension})
+        sink.join()
+        worker.join()
+        src.join()
+    else:   # index
+        db = ModDatabase(args.db, require_index=args.index)
+        db.reset_split()
+        ref = Reference(args.ref)
+        fwd_pattern = Pattern(args.pattern, args.extension)
+        rev_pattern = Pattern(reverse_complement(args.pattern), args.extension)
+        fwd_count = 0
+        rev_count = 0
+        context_dict = defaultdict(list)
+        for name, contig in ref.contigs():
+            fwd_c = update_contexts(context_dict, name, contig, 0,
+                fwd_pattern.pattern_string, args.extension)
+            fwd_count += fwd_c
+            rev_c = update_contexts(context_dict, name, contig, 1,
+                rev_pattern.pattern_string, args.extension)
+            rev_count += rev_c
+            log.info("Processed contig {}: {} forward and {} reverse matches".format(
+                name, fwd_c, rev_c))
+        del ref
+        # sort by number of occurences
+        context_positions = [(context, positions) for context, positions in context_dict.items()]
+        context_positions.sort(key = lambda x: len(x[1]), reverse=True)
+        # get validation samples from all context frequencies
+        val_ids = set(np.linspace(0, len(context_positions), int(args.split * len(context_positions)), endpoint=False, dtype=int))
+        for i, (context, positions) in tqdm.tqdm(enumerate(context_positions), desc='Writing', total=len(context_positions)):
+            if i in val_ids:
+                for p in positions:
+                    db.insert_filter(*p, table='eval')
+            else:
+                for p in positions:
+                    db.insert_filter(*p, table='train')
+        db.commit()
+        log.info("Finished indexing for {} forward and {} reverse matches in total".format(
+            fwd_count, rev_count))
 
 
 
 
 def argparser():
-    parser = ArgumentParser(
-        formatter_class=ArgumentDefaultsHelpFormatter,
+    parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter,
         add_help=False)
-    parser.add_argument("db", type=str)
-    parser.add_argument("fast5", type=str)
-    parser.add_argument("bam", type=str)
-    parser.add_argument("--mod_id", default=0, type=int)
-    parser.add_argument("--pattern", default='CG', type=str)
-    parser.add_argument("--extension", default=7, type=int)
-    parser.add_argument("--min_seq_length", default=2000, type=int)
-    parser.add_argument("--max_seq_length", default=10000, type=int)
-    parser.add_argument("--min_score", default=0.0, type=float)
-    parser.add_argument("-t", "--threads", default=1, type=int)
+    subparsers = parser.add_subparsers(title='subcommands', dest='command',
+        metavar='', required=True)
+
+    common = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter,
+        add_help=False)
+    common.add_argument("db", type=str, help='Training database')
+    common.add_argument("--pattern", default='CG', type=str, metavar='',
+        help='Sequence pattern for modification detection (default: %(default)s)')
+    common.add_argument("--extension", default=7, type=int, metavar='int',
+        help='Sequence context extension around pattern matches (default: %(default)s)')
+
+    p_insert = subparsers.add_parser('insert', help='Insert new data', parents=[common])
+    p_insert.add_argument("fast5", type=str, help='Raw signal input (file/directory)')
+    p_insert.add_argument("bam", type=str, help='Alignment input (file/directory)')
+    p_insert.add_argument("--mod_id", default=0, type=int, metavar='int',
+        help='Modification ID of input data (default: %(default)s)')
+    p_insert.add_argument("--min_seq_length", default=2000, type=int, metavar='int',
+        help='Minimum sequence length (default: %(default)s)')
+    p_insert.add_argument("--max_seq_length", default=10000, type=int, metavar='int',
+        help='Maximum sequence length (default: %(default)s)')
+    p_insert.add_argument("--min_score", default=0.0, type=float, metavar='float',
+        help='Min. alignment score (default: %(default)s)')
+    p_insert.add_argument("-t", default=1, type=int, metavar='int',
+        help='Worker (default: %(default)s)')
+
+    p_index = subparsers.add_parser('index', help='Index database', parents=[common], add_help=True)
+    p_index.add_argument("ref", type=str, metavar='str',
+        help='Reference file for eval/train split')
+    p_index.add_argument("--index", action='store_true',
+        help='Create database indices if not existing')
+    p_index.add_argument("--split", default=0.1, type=float, metavar='float',
+        help='Ratio for eval/train split (default: %(default)s)')
+
     return parser

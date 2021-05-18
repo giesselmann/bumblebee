@@ -26,13 +26,13 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os
+import logging
 import sqlite3
 import itertools
 import numpy as np
 
-from bumblebee.ref import reference
 
-
+log = logging.getLogger(__name__)
 
 
 # init tables
@@ -115,8 +115,9 @@ def __init_filter_tables__(cursor):
 
 
 
+
 # init database
-def init_db(db_file, type='basecall'):
+def init_db(db_file, type='base'):
     connection = sqlite3.connect(db_file)
     cursor = connection.cursor()
     __init_reads_table__(cursor)
@@ -158,6 +159,7 @@ class ModDatabase():
         self.cursor.execute("SELECT MAX(rowid) FROM sites;")
         self.next_site_rowid = (next(self.cursor)[0] or 0) + 1
         if require_index:
+            log.info("Creating database indices if not existing")
             __index_reads_table__(self.cursor)
             __index_sites_table__(self.cursor)
             __index_features_table__(self.cursor)
