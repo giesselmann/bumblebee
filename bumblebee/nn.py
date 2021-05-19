@@ -107,6 +107,32 @@ class ResidualNetwork(torch.nn.Module):
 
 
 
+class ConvolutionalNetwork(torch.nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_layer_dims):
+        super(ConvolutionalNetwork, self).__init__()
+        dims = [input_dim]+hidden_layer_dims
+        self.layer = torch.nn.ModuleList([
+            torch.nn.Conv1d(dims[i], dims[i+1],
+                kernel_size=5,
+                stride=1,
+                padding=2)
+                for i in range(len(dims)-1)])
+        self.acts = torch.nn.ModuleList([
+            torch.nn.ReLU()
+                for _ in range(len(dims)-1)])
+        self.linear = torch.nn.Linear(hidden_layer_dims[-1], output_dim)
+
+    def forward(self, input):
+        # CNN need NCL
+        inner = input.permute(0,2,1)
+        for layer, act in zip(self.layer, self.acts):
+            inner = act(layer(inner))
+        output = self.linear(inner.permute(0,2,1))
+        return output
+
+
+
+
 class BiDirLSTM(torch.nn.Module):
     def __init__(self, d_model, num_layer, dropout=0.1, rnn_type='LSTM'):
         super(BiDirLSTM, self).__init__()

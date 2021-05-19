@@ -29,7 +29,8 @@ import math
 import torch
 
 from bumblebee.nn import BiDirLSTM
-from bumblebee.nn import PositionalEncoding, ResidualNetwork
+from bumblebee.nn import PositionalEncoding
+from bumblebee.nn import ResidualNetwork, ConvolutionalNetwork
 from bumblebee.nn import TransformerACTEncoder
 
 
@@ -147,7 +148,7 @@ class BaseModEncoder(torch.nn.Module):
                 embedding_dim=embedding_dim,
                 padding_idx=padding_idx
         )
-        self.input_nn = ResidualNetwork(num_features + embedding_dim,
+        self.input_nn = ConvolutionalNetwork(num_features + embedding_dim,
                 d_model,
                 input_nn_dims)
         self.pos_encoder = PositionalEncoding(d_model,
