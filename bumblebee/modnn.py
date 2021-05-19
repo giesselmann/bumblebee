@@ -132,7 +132,7 @@ class BaseModEncoder(torch.nn.Module):
         # default config
         num_features = config.get("num_features") or 6
         num_kmers = config.get('num_kmers') or 4096
-        embedding_dim = config.get('embedding_dim') or 64
+        embedding_dim = config.get('embedding_dim') or 32
         padding_idx = config.get("padding_idx") or 0
         dropout = config.get("dropout") or 0.1
         input_nn_dims = config.get("input_nn_dims") or [64, 128, 256]
@@ -179,15 +179,15 @@ class BaseModEncoder(torch.nn.Module):
         inner = torch.cat([emb, features], dim=-1)
         # generate features as
         # (batch_size, max_len, d_model)
-        inner = self.input_nn(inner)
+        inner_nn = self.input_nn(inner)
         # positional encoding
-        inner = self.pos_encoder(inner)
+        inner = self.pos_encoder(inner_nn)
         # transformer encoder needs (max_len, batch_size, d_model)
         inner = self.transformer_encoder(inner.permute(1, 0, 2),
                         src_key_padding_mask = mask).permute(1, 0, 2)
         # get class label
         # (batch_size, max_len, num_classes)
-        inner = self.output_nn(inner)
+        inner = self.output_nn(inner + inner_nn)
         # melt to
         # (batch_size, num_classes)
         inner = torch.mul(inner, ~mask[:,:,None])

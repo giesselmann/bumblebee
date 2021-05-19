@@ -136,7 +136,7 @@ def main(args):
     # loss and optimizer
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
-    #lookahead = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
+    optimizer = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
     lr_scheduler = WarmupScheduler(optimizer, config['model']['d_model'], warmup_steps=8000)
     swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=0.001, anneal_epochs=10)
     # load checkpoint

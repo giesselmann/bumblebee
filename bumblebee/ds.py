@@ -50,7 +50,7 @@ class ModDataset(torch.utils.data.Dataset):
         self.max_features = max_features
         db = ModDatabase(db_file, require_index=True, require_split=True)
         # read feature IDs
-        log.info("Loading feature IDs.")
+        log.info("Loading site IDs.")
         feature_ids = {mod_id:db.get_feature_ids(mod_id,
             max_features=max_features,
             train=train,
@@ -60,10 +60,14 @@ class ModDataset(torch.utils.data.Dataset):
         if balance:
             min_feature_count = min(feature_count)
             self.total = min_feature_count * len(mod_ids)
+            if self.total == 0:
+                log.error("Found 0 balanced sites for mod-IDs {}".format(
+                    ','.join(mod_ids)))
+                exit(0)
         else:
             min_feature_count = max(feature_count)
             self.total = sum(feature_count)
-        log.info("Found {} {} features".format(self.total, 'train' if train else 'eval'))
+        log.info("Found {} {} sites".format(self.total, 'train' if train else 'eval'))
         self.features = multiprocessing.Array('Q', self.total, lock=False)
         # copy feature rowid into shared memory
         it = (id for value in feature_ids.values() for id in value[:min_feature_count])
