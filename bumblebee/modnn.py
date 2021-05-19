@@ -179,7 +179,7 @@ class BaseModEncoder(torch.nn.Module):
         inner = torch.cat([emb, features], dim=-1)
         # generate features as
         # (batch_size, max_len, d_model)
-        inner_nn = self.input_nn(inner)
+        inner = self.input_nn(inner)
         # positional encoding
         inner = self.pos_encoder(inner_nn)
         # transformer encoder needs (max_len, batch_size, d_model)
@@ -187,7 +187,7 @@ class BaseModEncoder(torch.nn.Module):
                         src_key_padding_mask = mask).permute(1, 0, 2)
         # get class label
         # (batch_size, max_len, num_classes)
-        inner = self.output_nn(inner + inner_nn)
+        inner = self.output_nn(inner)
         # melt to
         # (batch_size, num_classes)
         inner = torch.mul(inner, ~mask[:,:,None])
