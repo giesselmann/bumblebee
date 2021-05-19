@@ -25,6 +25,7 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
+import logging
 import random
 import torch
 import multiprocessing
@@ -33,6 +34,7 @@ import numpy as np
 from bumblebee.db import ModDatabase
 
 
+log = logging.getLogger(__name__)
 
 
 class ModDataset(torch.utils.data.Dataset):
@@ -48,7 +50,7 @@ class ModDataset(torch.utils.data.Dataset):
         self.max_features = max_features
         db = ModDatabase(db_file, require_index=True, require_split=True)
         # read feature IDs
-        print("[ModDataset] : Loading feature IDs.")
+        log.info("Loading feature IDs.")
         feature_ids = {mod_id:db.get_feature_ids(mod_id,
             max_features=max_features,
             train=train,
@@ -61,6 +63,7 @@ class ModDataset(torch.utils.data.Dataset):
         else:
             min_feature_count = max(feature_count)
             self.total = sum(feature_count)
+        log.info("Found {} {} features".format('train' if train else 'eval', self.total))
         self.features = multiprocessing.Array('Q', self.total, lock=False)
         # copy feature rowid into shared memory
         it = (id for value in feature_ids.values() for id in value[:min_feature_count])

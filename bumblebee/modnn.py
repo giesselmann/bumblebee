@@ -128,7 +128,7 @@ class BaseModLSTM_v2(torch.nn.Module):
 
 class BaseModEncoder(torch.nn.Module):
     def __init__(self, max_features, config={}):
-        super(BaseModEncoder_v1, self).__init__()
+        super(BaseModEncoder, self).__init__()
         # default config
         num_features = config.get("num_features") or 6
         num_kmers = config.get('num_kmers') or 4096
@@ -205,7 +205,7 @@ class BaseModACTEncoder(torch.nn.Module):
             d_model=512, num_heads=4, max_depth=3,
             clone=True, time_penalty=0.05
             ):
-        super(BaseModEncoder_v2, self).__init__()
+        super(BaseModACTEncoder, self).__init__()
         self.d_model = d_model
         self.kmer_embedding = torch.nn.Embedding(
             num_embeddings=num_kmers+1,

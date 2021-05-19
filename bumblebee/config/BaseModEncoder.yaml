@@ -1,5 +1,5 @@
+name: BaseModEncoder
 model:
-    name: BaseModEncoder
     num_features: 6
     num_kmers: 4096
     embedding_dim: 64

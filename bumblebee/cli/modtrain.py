@@ -43,7 +43,7 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from bumblebee.db import ModDatabase
 from bumblebee.ds import ModDataset
 from bumblebee.optimizer import Lookahead
-from bumblebee.util import running_average, parse_kwargs, WarmupScheduler
+from bumblebee.util import running_average, WarmupScheduler
 import bumblebee.modnn
 
 
@@ -101,8 +101,7 @@ def main(args):
         # config is provided as file
         with open(args.config, 'r') as fp:
             config = yaml.safe_load(fp)
-        with open(run_config, 'w') as fp:
-            yaml.dump(config, fp)
+
         log.info("Loaded config file {}".format(args.config))
     elif os.path.isfile(pkg_config):
         # config is found in installation path
@@ -113,11 +112,15 @@ def main(args):
         log.error("Could not find config file for {}".format(args.config))
         exit(-1)
 
+    # copy config into output directory
+    with open(run_config, 'w') as fp:
+        yaml.dump(config, fp)
+
     # init model
     try:
-        model = getattr(bumblebee.modnn, config['name'])(args.max_features, **config['model'])
-    except:
-        log.error("Coud not get model definition for {}".format(config['name']))
+        model = getattr(bumblebee.modnn, config['name'])(args.max_features, config['model'])
+    except Exception as e:
+        log.error("Coud not find model definition for {}:\n{}".format(config['name'], e))
         exit(-1)
 
     # model summary
@@ -135,7 +138,7 @@ def main(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     #lookahead = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
     lr_scheduler = WarmupScheduler(optimizer, config['model']['d_model'], warmup_steps=8000)
-    swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=0.05, anneal_epochs=10)
+    swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=0.001, anneal_epochs=10)
     # load checkpoint
     chkpt_file = os.path.join(args.prefix, 'latest.chkpt')
     if os.path.isfile(chkpt_file):
@@ -274,7 +277,7 @@ def argparser():
     parser.add_argument("--prefix", default='.', type=str)
     parser.add_argument("--mod_ids", nargs='+', required=True, type=int)
     parser.add_argument("--device", default=0, type=int)
-    parser.add_argument("--lr", default=0.001, type=float)
+    parser.add_argument("--lr", default=1.0, type=float)
     parser.add_argument("--epochs", default=20, type=int)
     parser.add_argument("--swa_start", default=10, type=int)
     parser.add_argument("--batch_size", default=64, type=int)
@@ -282,5 +285,4 @@ def argparser():
     parser.add_argument("--clip_grad_norm", default=2.5, type=float)
     parser.add_argument("--max_features", default=40, type=int)
     parser.add_argument("--min_score", default=1.0, type=float)
-    parser.add_argument("--kwargs", nargs='*', default='')
     return parser
