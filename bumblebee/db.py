@@ -241,7 +241,7 @@ class ModDatabase():
         self.cursor.execute("INSERT INTO {table} (chr, strand, pos) VALUES ('{chr}', {strand}, {pos});".format(table=table, chr=chr, strand=strand, pos=pos))
 
     def get_feature_ids(self, mod_id, max_features=32, train=True, min_score=1.0):
-        self.cursor.execute("SELECT sites.rowid FROM reads JOIN sites ON reads.rowid = sites.readid JOIN {table} ON reads.chr = {table}.chr AND reads.strand = {table}.strand AND sites.pos = {table}.pos WHERE sites.class = {mod_id} AND reads.score >= {min_score} AND sites.count <= {max_features};".format(
+        self.cursor.execute("SELECT sites.rowid FROM reads JOIN sites ON reads.rowid = sites.readid JOIN {table} ON reads.chr = {table}.chr AND reads.strand = {table}.strand AND sites.pos = {table}.pos WHERE sites.class = {mod_id} AND reads.score >= {min_score} AND sites.count <= {max_features} AND sites.count > 0;".format(
             table='train' if train else 'eval',
             mod_id=mod_id,
             min_score=min_score,
@@ -252,7 +252,11 @@ class ModDatabase():
     # get single feature
     def get_feature(self, feature_id):
         self.cursor.execute("SELECT class, kmer, min, mean, median, std, max, length FROM sites JOIN features ON sites.rowid = features.siteid WHERE sites.rowid = {} ORDER BY enum;".format(feature_id))
-        mod_ids, kmers, features = zip(*[(x[0], x[1], x[2:]) for x in self.cursor])
+        try:
+            mod_ids, kmers, features = zip(*[(x[0], x[1], x[2:]) for x in self.cursor])
+        except:
+            print(feature_id)
+            raise
         return mod_ids[0], len(kmers), kmers, features
 
     # unused rows are set to zero

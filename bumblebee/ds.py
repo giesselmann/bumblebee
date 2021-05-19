@@ -63,7 +63,7 @@ class ModDataset(torch.utils.data.Dataset):
         else:
             min_feature_count = max(feature_count)
             self.total = sum(feature_count)
-        log.info("Found {} {} features".format('train' if train else 'eval', self.total))
+        log.info("Found {} {} features".format(self.total, 'train' if train else 'eval'))
         self.features = multiprocessing.Array('Q', self.total, lock=False)
         # copy feature rowid into shared memory
         it = (id for value in feature_ids.values() for id in value[:min_feature_count])
