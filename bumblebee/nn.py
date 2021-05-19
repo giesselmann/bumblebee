@@ -87,7 +87,8 @@ class ResidualNetwork(torch.nn.Module):
     Feed forward Residual Neural Network as seen in Roost.
     https://doi.org/10.1038/s41467-020-19964-7
     """
-    def __init__(self, input_dim, output_dim, hidden_layer_dims):
+    def __init__(self, input_dim, output_dim, hidden_layer_dims,
+                 dropout=0.1):
         super(ResidualNetwork, self).__init__()
         dims = [input_dim]+hidden_layer_dims
         self.fcs = torch.nn.ModuleList([torch.nn.Linear(dims[i], dims[i+1])
@@ -97,11 +98,13 @@ class ResidualNetwork(torch.nn.Module):
                                       else torch.nn.Identity()
                                       for i in range(len(dims)-1)])
         self.acts = torch.nn.ModuleList([torch.nn.ELU() for _ in range(len(dims)-1)])
+        self.dropout = torch.nn.Dropout(p=dropout)
         self.fc_out = torch.nn.Linear(dims[-1], output_dim)
 
     def forward(self, fea):
         for fc, res_fc, act in zip(self.fcs, self.res_fcs, self.acts):
             fea = act(fc(fea))+res_fc(fea)
+        fea = self.dropout(fea)
         return self.fc_out(fea)
 
 
@@ -110,7 +113,7 @@ class ResidualNetwork(torch.nn.Module):
 class ConvolutionalNetwork(torch.nn.Module):
     def __init__(self, input_dim, output_dim, hidden_layer_dims):
         super(ConvolutionalNetwork, self).__init__()
-        dims = [input_dim]+hidden_layer_dims
+        dims = [input_dim] + hidden_layer_dims
         self.layer = torch.nn.ModuleList([
             torch.nn.Conv1d(dims[i], dims[i+1],
                 kernel_size=5,
@@ -120,7 +123,7 @@ class ConvolutionalNetwork(torch.nn.Module):
         self.acts = torch.nn.ModuleList([
             torch.nn.ReLU()
                 for _ in range(len(dims)-1)])
-        self.linear = torch.nn.Linear(hidden_layer_dims[-1], output_dim)
+        self.linear = torch.nn.Linear(dims[-1], output_dim)
 
     def forward(self, input):
         # CNN need NCL

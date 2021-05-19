@@ -148,9 +148,10 @@ class BaseModEncoder(torch.nn.Module):
                 embedding_dim=embedding_dim,
                 padding_idx=padding_idx
         )
-        self.input_nn = ConvolutionalNetwork(num_features + embedding_dim,
+        self.input_nn = ResidualNetwork(num_features + embedding_dim,
                 d_model,
-                input_nn_dims)
+                input_nn_dims,
+                dropout=dropout)
         self.pos_encoder = PositionalEncoding(d_model,
                 dropout=dropout,
                 max_len=max_features)
@@ -166,7 +167,8 @@ class BaseModEncoder(torch.nn.Module):
                 num_layers=num_layer)
         self.output_nn = ResidualNetwork(d_model,
                 num_classes,
-                output_nn_dims)
+                output_nn_dims,
+                dropout=dropout)
 
     def forward(self, lengths, kmers, features):
         batch_size, max_len, n_features = features.size()
