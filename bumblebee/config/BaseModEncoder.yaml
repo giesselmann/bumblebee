@@ -2,19 +2,19 @@ name: BaseModEncoder
 model:
     num_features: 6
     num_kmers: 4096
-    embedding_dim: 64
+    embedding_dim: 26
     padding_idx: 0
     dropout: 0.1
     input_nn_dims:
         - 64
         - 128
-        - 128
+        - 256
     d_model: 512
     num_heads: 4
     num_layer: 3
     output_nn_dims:
+        - 512
         - 256
-        - 128
         - 128
         - 64
     num_classes: 2

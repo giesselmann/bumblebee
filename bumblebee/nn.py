@@ -97,14 +97,14 @@ class ResidualNetwork(torch.nn.Module):
                                       if (dims[i] != dims[i+1])
                                       else torch.nn.Identity()
                                       for i in range(len(dims)-1)])
-        self.acts = torch.nn.ModuleList([torch.nn.ELU() for _ in range(len(dims)-1)])
-        self.dropout = torch.nn.Dropout(p=dropout)
+        self.acts = torch.nn.ModuleList([torch.nn.LeakyReLU() for _ in range(len(dims)-1)])
+        #self.dropout = torch.nn.Dropout(p=dropout)
         self.fc_out = torch.nn.Linear(dims[-1], output_dim)
 
     def forward(self, fea):
         for fc, res_fc, act in zip(self.fcs, self.res_fcs, self.acts):
             fea = act(fc(fea))+res_fc(fea)
-        fea = self.dropout(fea)
+        #fea = self.dropout(fea)
         return self.fc_out(fea)
 
 

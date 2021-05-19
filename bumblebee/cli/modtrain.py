@@ -64,11 +64,8 @@ def main(args):
     os.makedirs(weights_dir, exist_ok=True)
 
     # init dataset and dataloader
+    log.info("Loading training dataset")
     ds_train = ModDataset(args.db, args.mod_ids,
-                max_features=args.max_features,
-                min_score=args.min_score)
-    ds_eval = ModDataset(args.db, args.mod_ids,
-                train=False,
                 max_features=args.max_features,
                 min_score=args.min_score)
     dl_train = torch.utils.data.DataLoader(ds_train,
@@ -78,6 +75,11 @@ def main(args):
             prefetch_factor=args.batch_size,
             pin_memory=True,
             drop_last=True)
+    log.info("Loading evaluation dataset")
+    ds_eval = ModDataset(args.db, args.mod_ids,
+                train=False,
+                max_features=args.max_features,
+                min_score=args.min_score)
     dl_eval = torch.utils.data.DataLoader(ds_eval,
             batch_size=args.batch_size,
             shuffle=False,
@@ -138,7 +140,7 @@ def main(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     optimizer = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
     lr_scheduler = WarmupScheduler(optimizer, config['model']['d_model'], warmup_steps=8000)
-    swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=0.001, anneal_epochs=10)
+    swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=0.001, anneal_epochs=1)
     # load checkpoint
     chkpt_file = os.path.join(args.prefix, 'latest.chkpt')
     if os.path.isfile(chkpt_file):
@@ -150,7 +152,8 @@ def main(args):
         optimizer.load_state_dict(checkpoint['optimizer'])
         lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
         swa_scheduler.load_state_dict(checkpoint['swa_scheduler'])
-        log.info("Loaded latest checkpoint")
+        log.info("Loaded latest checkpoint: Epoch {} at step {}".format(
+            last_epoch+1, step_total))
     else:
         step_total = 0
         last_epoch = 0
@@ -278,8 +281,8 @@ def argparser():
     parser.add_argument("--mod_ids", nargs='+', required=True, type=int)
     parser.add_argument("--device", default=0, type=int)
     parser.add_argument("--lr", default=1.0, type=float)
-    parser.add_argument("--epochs", default=20, type=int)
-    parser.add_argument("--swa_start", default=10, type=int)
+    parser.add_argument("--epochs", default=10, type=int)
+    parser.add_argument("--swa_start", default=5, type=int)
     parser.add_argument("--batch_size", default=64, type=int)
     parser.add_argument("--echo", default=0, type=int)
     parser.add_argument("--clip_grad_norm", default=2.5, type=float)
