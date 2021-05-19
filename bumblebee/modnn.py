@@ -181,7 +181,7 @@ class BaseModEncoder(torch.nn.Module):
         # (batch_size, max_len, d_model)
         inner = self.input_nn(inner)
         # positional encoding
-        inner = self.pos_encoder(inner_nn)
+        inner = self.pos_encoder(inner)
         # transformer encoder needs (max_len, batch_size, d_model)
         inner = self.transformer_encoder(inner.permute(1, 0, 2),
                         src_key_padding_mask = mask).permute(1, 0, 2)
