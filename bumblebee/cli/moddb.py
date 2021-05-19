@@ -29,7 +29,6 @@ import os, re
 import time
 import logging
 import tqdm
-import pkg_resources
 import numpy as np
 from collections import defaultdict
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
@@ -170,7 +169,7 @@ def main(args):
             rev_c = update_contexts(context_dict, name, contig, 1,
                 rev_pattern.pattern_string, args.extension)
             rev_count += rev_c
-            log.info("Processed contig {}: {} forward and {} reverse matches".format(
+            log.info("Processed contig {}: {} forward and {} reverse sites".format(
                 name, fwd_c, rev_c))
         del ref
         # sort by number of occurences
@@ -187,10 +186,9 @@ def main(args):
                     db.insert_filter(*p, table='train')
         db.commit()
         del db
-        log.info("Indexing database")
         db = ModDatabase(args.db, require_index=True)
         db.commit()
-        log.info("Finished indexing for {} forward and {} reverse matches in total".format(
+        log.info("Finished indexing of {} forward and {} reverse sites in total".format(
             fwd_count, rev_count))
 
 

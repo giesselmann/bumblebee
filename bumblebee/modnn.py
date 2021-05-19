@@ -28,45 +28,15 @@
 import math
 import torch
 
+from bumblebee.nn import BiDirLSTM
 from bumblebee.nn import PositionalEncoding, ResidualNetwork
 from bumblebee.nn import TransformerACTEncoder
 
 
 
 
-class BiDirLSTM(torch.nn.Module):
-    def __init__(self, d_model, num_layer, dropout=0.1, rnn_type='LSTM'):
-        super(BiDirLSTM, self).__init__()
-        self.d_model = d_model
-        self.rnn = getattr(torch.nn, rnn_type)(
-            input_size=d_model,
-            hidden_size=d_model,
-            num_layers=num_layer,
-            dropout=dropout,
-            batch_first=True,
-            bidirectional=True
-        )
-        self.linear = torch.nn.Linear(2*d_model, d_model)
-
-    def forward(self, input, lengths):
-        # pack inputs
-        inner = torch.nn.utils.rnn.pack_padded_sequence(input, lengths, batch_first=True, enforce_sorted=False)
-        # run LSTM
-        inner, _  = self.rnn(inner)
-        # unpack output
-        inner, _ = torch.nn.utils.rnn.pad_packed_sequence(inner, batch_first=True)
-        inner_forward = inner[range(len(inner)), lengths - 1, :self.d_model]
-        inner_reverse = inner[:, 0, self.d_model:]
-        # (batch_size, 2*d_model)
-        inner_reduced = torch.cat((inner_forward, inner_reverse), 1)
-        out = self.linear(inner_reduced)
-        return out
-
-
-
-
 class BaseModLSTM_v1(torch.nn.Module):
-    def __init__(self,
+    def __init__(self, max_features,
             num_features=6,
             k=6, embedding_dim=32, padding_idx=0,
             rnn_type='LSTM', d_model=64, num_layer=1,
@@ -116,7 +86,7 @@ class BaseModLSTM_v1(torch.nn.Module):
 
 
 class BaseModLSTM_v2(torch.nn.Module):
-    def __init__(self,
+    def __init__(self, max_features,
             num_features=6, num_kmers=4**6,
             embedding_dim=32, padding_idx=0,
             rnn_type='LSTM', d_model=64,
@@ -156,35 +126,46 @@ class BaseModLSTM_v2(torch.nn.Module):
 
 
 
-class BaseModEncoder_v1(torch.nn.Module):
-    def __init__(self,
-            num_features=6, num_kmers=4**6, num_classes=2,
-            embedding_dim=32, padding_idx=0,
-            d_model=512, num_heads=4, num_layer=3
-            ):
+class BaseModEncoder(torch.nn.Module):
+    def __init__(self, max_features, config={}):
         super(BaseModEncoder_v1, self).__init__()
-        self.d_model = d_model
+        # default config
+        num_features = config.get("num_features") or 6
+        num_kmers = config.get('num_kmers') or 4096
+        embedding_dim = config.get('embedding_dim') or 64
+        padding_idx = config.get("padding_idx") or 0
+        dropout = config.get("dropout") or 0.1
+        input_nn_dims = config.get("input_nn_dims") or [64, 128, 256]
+        d_model = config.get("d_model") or 512
+        num_heads = config.get("num_heads") or 4
+        num_layer = config.get("num_layer") or 3
+        output_nn_dims = config.get("output_nn_dims") or [512, 256, 128, 64]
+        num_classes = config.get("num_classes") or 2
+        # layer
         self.kmer_embedding = torch.nn.Embedding(
-            num_embeddings=num_kmers+1,
-            embedding_dim=embedding_dim,
-            padding_idx=padding_idx
+                num_embeddings=num_kmers + 1,
+                embedding_dim=embedding_dim,
+                padding_idx=padding_idx
         )
         self.input_nn = ResidualNetwork(num_features + embedding_dim,
-            d_model,
-            [64, 128, 256])
+                d_model,
+                input_nn_dims)
         self.pos_encoder = PositionalEncoding(d_model,
-            dropout=0.1,
-            max_len=64)
+                dropout=dropout,
+                max_len=max_features)
         # encoder
-        self.encoder_layer = torch.nn.TransformerEncoderLayer(d_model=d_model,
-                        nhead=num_heads,
-                        dim_feedforward=d_model*4,
-                        activation='gelu')
-        self.transformer_encoder = torch.nn.TransformerEncoder(self.encoder_layer,
-                        num_layers=num_layer)
+        self.encoder_layer = torch.nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=num_heads,
+                dim_feedforward=d_model*4,
+                activation='gelu',
+                dropout=dropout)
+        self.transformer_encoder = torch.nn.TransformerEncoder(
+                self.encoder_layer,
+                num_layers=num_layer)
         self.output_nn = ResidualNetwork(d_model,
-            num_classes,
-            [512, 256, 128, 64])
+                num_classes,
+                output_nn_dims)
 
     def forward(self, lengths, kmers, features):
         batch_size, max_len, n_features = features.size()
@@ -207,9 +188,9 @@ class BaseModEncoder_v1(torch.nn.Module):
         # get class label
         # (batch_size, max_len, num_classes)
         inner = self.output_nn(inner)
-        inner = torch.mul(inner, ~mask[:,:,None])
         # melt to
         # (batch_size, num_classes)
+        inner = torch.mul(inner, ~mask[:,:,None])
         inner = torch.sum(inner, dim=1) / lengths[:,None]
         out = torch.nn.functional.softmax(inner, dim=1)
         return out, None, {}
@@ -217,13 +198,12 @@ class BaseModEncoder_v1(torch.nn.Module):
 
 
 
-class BaseModEncoder_v2(torch.nn.Module):
-    def __init__(self,
+class BaseModACTEncoder(torch.nn.Module):
+    def __init__(self, max_features,
             num_features=6, num_kmers=4**6, num_classes=2,
             embedding_dim=32, padding_idx=0,
             d_model=512, num_heads=4, max_depth=3,
-            clone=True, time_penalty=0.05,
-            max_len=40
+            clone=True, time_penalty=0.05
             ):
         super(BaseModEncoder_v2, self).__init__()
         self.d_model = d_model
@@ -237,7 +217,7 @@ class BaseModEncoder_v2(torch.nn.Module):
             [64, 128, 256])
         # encoder
         self.encoder = TransformerACTEncoder(d_model,
-            max_len=max_len,
+            max_len=max_features,
             num_heads=num_heads,
             max_depth=max_depth,
             clone=clone,

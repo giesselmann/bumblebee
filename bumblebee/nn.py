@@ -48,8 +48,8 @@ class PositionalEncoding(torch.nn.Module):
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
+        self.pe = pe.unsqueeze(0)
+        #self.register_buffer('pe', pe)
 
     def forward(self, x):
         x = x + self.pe[:, :x.size(1), :]
@@ -72,8 +72,8 @@ class PositionalDepthEncoding(torch.nn.Module):
         pe[:, :, 0::2] = torch.sin(position * div_term) + torch.sin(depth * div_term)
         pe[:, :, 1::2] = torch.cos(position * div_term) + torch.cos(depth * div_term)
         # (1, depth, max_len, d_model)
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
+        self.pe = pe.unsqueeze(0)
+        #self.register_buffer('pe', pe)
 
     def forward(self, x, step):
         x = x + self.pe[:, step, :x.size(1), :]
@@ -96,13 +96,44 @@ class ResidualNetwork(torch.nn.Module):
                                       if (dims[i] != dims[i+1])
                                       else torch.nn.Identity()
                                       for i in range(len(dims)-1)])
-        self.acts = torch.nn.ModuleList([torch.nn.LeakyReLU() for _ in range(len(dims)-1)])
+        self.acts = torch.nn.ModuleList([torch.nn.ELU() for _ in range(len(dims)-1)])
         self.fc_out = torch.nn.Linear(dims[-1], output_dim)
 
     def forward(self, fea):
         for fc, res_fc, act in zip(self.fcs, self.res_fcs, self.acts):
             fea = act(fc(fea))+res_fc(fea)
         return self.fc_out(fea)
+
+
+
+
+class BiDirLSTM(torch.nn.Module):
+    def __init__(self, d_model, num_layer, dropout=0.1, rnn_type='LSTM'):
+        super(BiDirLSTM, self).__init__()
+        self.d_model = d_model
+        self.rnn = getattr(torch.nn, rnn_type)(
+            input_size=d_model,
+            hidden_size=d_model,
+            num_layers=num_layer,
+            dropout=dropout,
+            batch_first=True,
+            bidirectional=True
+        )
+        self.linear = torch.nn.Linear(2*d_model, d_model)
+
+    def forward(self, input, lengths):
+        # pack inputs
+        inner = torch.nn.utils.rnn.pack_padded_sequence(input, lengths, batch_first=True, enforce_sorted=False)
+        # run LSTM
+        inner, _  = self.rnn(inner)
+        # unpack output
+        inner, _ = torch.nn.utils.rnn.pad_packed_sequence(inner, batch_first=True)
+        inner_forward = inner[range(len(inner)), lengths - 1, :self.d_model]
+        inner_reverse = inner[:, 0, self.d_model:]
+        # (batch_size, 2*d_model)
+        inner_reduced = torch.cat((inner_forward, inner_reverse), 1)
+        out = self.linear(inner_reduced)
+        return out
 
 
 

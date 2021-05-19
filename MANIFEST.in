@@ -2,3 +2,5 @@ include README.md
 include LICENSE
 include requirements.txt
 include bumblebee/data/r9.4_450bps.model
+
+include bumblebee/config/BaseModEncoder.yaml
