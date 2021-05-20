@@ -232,7 +232,6 @@ def main(args):
                 if epoch >= args.swa_start:
                     swa_model.update_parameters(model)
                     #swa_scheduler.step()
-                else:
                 # learning rate
                 lr_scheduler.step()
                 # eval step
