@@ -147,7 +147,7 @@ class BaseModEncoder(torch.nn.Module):
                 num_embeddings=num_kmers + 1,
                 embedding_dim=embedding_dim,
                 padding_idx=padding_idx)
-        self.input_nn = ResidualNetwork(num_features + embedding_dim,
+        self.input_nn = ResidualNetwork(num_features,# + embedding_dim,
                 d_model,
                 input_nn_dims,
                 dropout=dropout)
@@ -177,11 +177,11 @@ class BaseModEncoder(torch.nn.Module):
         lengths = lengths.cuda(features.get_device()) if features.is_cuda else lengths
         # kmer embedding (batch_size, max_len, embedding_dim)
         emb = self.kmer_embedding(kmers)
-        # concat signal features and sequence embeddings
-        inner = torch.cat([emb, features], dim=-1)
         # generate features as
-        # (batch_size, max_len, d_model)
-        inner = self.input_nn(inner)
+        # (batch_size, max_len, d_model - embedding_dim)
+        inner = self.input_nn(features)
+        # concat signal features and sequence embeddings
+        inner = torch.cat([emb, inner], dim=-1)
         # positional encoding
         inner = self.pos_encoder(inner)
         # transformer encoder needs (max_len, batch_size, d_model)
