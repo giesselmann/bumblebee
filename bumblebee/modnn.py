@@ -146,8 +146,7 @@ class BaseModEncoder(torch.nn.Module):
         self.kmer_embedding = torch.nn.Embedding(
                 num_embeddings=num_kmers + 1,
                 embedding_dim=embedding_dim,
-                padding_idx=padding_idx
-        )
+                padding_idx=padding_idx)
         self.input_nn = ResidualNetwork(num_features + embedding_dim,
                 d_model,
                 input_nn_dims,
@@ -160,7 +159,7 @@ class BaseModEncoder(torch.nn.Module):
                 d_model=d_model,
                 nhead=num_heads,
                 dim_feedforward=d_model*4,
-                activation='gelu',
+                activation='relu',
                 dropout=dropout)
         self.transformer_encoder = torch.nn.TransformerEncoder(
                 self.encoder_layer,
