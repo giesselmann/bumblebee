@@ -148,7 +148,7 @@ class BaseModEncoder(torch.nn.Module):
                 embedding_dim=embedding_dim,
                 padding_idx=padding_idx)
         self.input_nn = ResidualNetwork(num_features,# + embedding_dim,
-                d_model,
+                d_model - embedding_dim,
                 input_nn_dims,
                 dropout=dropout)
         self.pos_encoder = PositionalEncoding(d_model,
