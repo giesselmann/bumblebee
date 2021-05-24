@@ -229,7 +229,7 @@ def main(args):
                 for key, tensor in metrics.items():
                     writer.add_scalar('training/{}'.format(key), torch.mean(tensor).item(), step_total)
                 # swa
-                if epoch >= args.swa_start:
+                if epoch > args.swa_start:
                     swa_model.update_parameters(model)
                     #swa_scheduler.step()
                 # learning rate
@@ -251,7 +251,7 @@ def main(args):
                     eval_loss.mean(),
                     eval_acc.mean()))
                 step_total += 1
-            if epoch < args.swa_start:
+            if epoch <= args.swa_start:
                 torch.save(model.state_dict(),
                     os.path.join(weights_dir, 'weights_{}.pt'.format(step_total)))
             else:
