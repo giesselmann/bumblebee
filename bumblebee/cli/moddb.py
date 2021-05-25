@@ -26,74 +26,25 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, re
-import time
 import logging
 import tqdm
 import numpy as np
 from collections import defaultdict
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
-from bumblebee.poremodel import PoreModel
 from bumblebee.db import ModDatabase
-from bumblebee.fast5 import Fast5Index
 from bumblebee.ref import Reference
-from bumblebee.alignment import AlignmentIndex, reverse_complement
-from bumblebee.poremodel import PoreModel
+from bumblebee.alignment import reverse_complement
 from bumblebee.read import Pattern, Read, ReadNormalizer, ReadAligner
 from bumblebee.multiprocessing import StateFunction, SourceProcess, WorkerProcess, SinkProcess
+from bumblebee.worker import ReadSource, EventAligner
 
 
 log = logging.getLogger(__name__)
 
 
-# parse reads from fast5 and bam input
-class ReadSource(StateFunction):
-    def __init__(self, fast5, bam,
-                 min_seq_length=500, max_seq_length=10000):
-        super(StateFunction).__init__()
-        self.f5_idx = Fast5Index(fast5)
-        self.algn_idx = AlignmentIndex(bam)
-        self.min_seq_length = min_seq_length
-        self.max_seq_length = max_seq_length
-        self.read_counter = 0
-
-    def __del__(self):
-        log.info("Loaded {} reads from disk.".format(self.read_counter))
-
-    def call(self):
-        for i, ref_span in enumerate(self.algn_idx.records()):
-            if (len(ref_span.seq) < self.min_seq_length or
-                len(ref_span.seq) > self.max_seq_length):
-                continue
-            read_signal = self.f5_idx[ref_span.qname]
-            read = Read(read_signal, ref_span=ref_span)
-            yield (read, )
-            self.read_counter += 1
-
-
-
-
-# align read signal to reference sequence
-class EventAligner(StateFunction):
-    def __init__(self, min_score=0.0):
-        super(StateFunction).__init__()
-        self.min_score = min_score
-        read_normalizer = ReadNormalizer()
-        self.read_aligner = ReadAligner(read_normalizer)
-
-    def call(self, read):
-        score, df_events = read.event_alignments(self.read_aligner)
-        log.debug("Aligned read {} with score {}".format(read.name, score))
-        if score < self.min_score or df_events.shape[0] == 0:
-            return None
-        else:
-            return read, df_events, score
-
-
-
-
 class RecordWriter(StateFunction):
-    def __init__(self, db, mod_id, pattern='CG', extension=6):
+    def __init__(self, db, mod_id, pattern='CG', extension=7):
         super(StateFunction).__init__()
         self.db = ModDatabase(db)
         self.mod_id = mod_id

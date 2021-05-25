@@ -1,3 +1,7 @@
+# Downloaded model files
+bumblebee/models/*.pt
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

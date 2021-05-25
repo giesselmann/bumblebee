@@ -108,8 +108,8 @@ class WorkerProcess():
                 elif obj is not None:
                     try:
                         res = worker(*obj)
-                    except Exception as e:
-                        log.error("Exception in worker (Proceeding with remaining jobs):\n {}".format(str(e)))
+                    except Exception as ex:
+                        log.error("Exception in worker (Proceeding with remaining jobs):\n {}".format(str(ex)))
                         continue
                     if res is not None:
                         q_out.put(res)
@@ -170,8 +170,8 @@ class SinkProcess():
                 elif obj is not None:
                     try:
                         sink(*obj)
-                    except Exception as e:
-                        log.error("Exception in sink (Proceeding with remaining jobs):\n{}".format(str(e)))
+                    except Exception as ex:
+                        log.error("Exception in sink (Proceeding with remaining jobs):\n{}".format(str(ex)))
                 else:
                     continue
             log.debug("Terminating SinkProcess {}".format(pid))

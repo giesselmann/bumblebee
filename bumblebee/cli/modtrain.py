@@ -35,7 +35,6 @@ import itertools
 import collections
 import pkg_resources as pkg
 import numpy as np
-from datetime import datetime
 from torchinfo import summary
 from torch.utils.tensorboard import SummaryWriter
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
@@ -120,9 +119,9 @@ def main(args):
 
     # init model
     try:
-        model = getattr(bumblebee.modnn, config['name'])(args.max_features, config['model'])
+        model = getattr(bumblebee.modnn, config['model'])(args.max_features, config['params'])
     except Exception as e:
-        log.error("Coud not find model definition for {}:\n{}".format(config['name'], e))
+        log.error("Coud not find model definition for {}:\n{}".format(config['model'], e))
         exit(-1)
 
     # model summary
@@ -141,7 +140,7 @@ def main(args):
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     optimizer = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
-    lr_scheduler = WarmupScheduler(optimizer, config['model']['d_model'], warmup_steps=8000)
+    lr_scheduler = WarmupScheduler(optimizer, config['params']['d_model'], warmup_steps=8000)
     #swa_scheduler = torch.optim.swa_utils.SWALR(optimizer,
     #    swa_lr=args.swa_lr, anneal_epochs=1)
     # load checkpoint
