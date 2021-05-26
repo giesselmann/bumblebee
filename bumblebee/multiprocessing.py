@@ -26,6 +26,7 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os
+import time
 import logging
 import queue
 import multiprocessing as mp
@@ -62,6 +63,7 @@ class SourceProcess():
                     break
             q.put(StopIteration)
             q.close()
+            q.join_thread()
             log.debug("Terminating SourceProcess {}".format(pid))
         self.p = mp.Process(target=fn,
             args=(self.e, self.q, src_type) + args,
@@ -102,7 +104,7 @@ class WorkerProcess():
                 except queue.Empty:
                     obj = None
                 if obj is StopIteration:
-                    log.debug("Received StopIteration/StopEvent in WorkerProcess {}".format(pid))
+                    log.debug("Received StopIteration in WorkerProcess {}".format(pid))
                     e.set()
                     break
                 elif obj is not None:
@@ -116,9 +118,12 @@ class WorkerProcess():
                 else:
                     continue
             i = barrier.wait()
+            while not q_out.empty():
+                time.sleep(0.1)
             if i == 0:
                 q_out.put(StopIteration)
             q_out.close()
+            q_out.join_thread()
             log.debug("Terminating WorkerProcess {}".format(pid))
         self.p = []
         for _ in range(num_worker):
@@ -163,8 +168,8 @@ class SinkProcess():
                     obj = q_in.get(block=True, timeout=1)
                 except queue.Empty:
                     obj = None
-                if obj is StopIteration or e.is_set():
-                    log.debug("Received StopIteration/StopEvent in SinkProcess {}".format(pid))
+                if obj is StopIteration:
+                    log.debug("Received StopIteration in SinkProcess {}".format(pid))
                     e.set()
                     break
                 elif obj is not None:

@@ -26,6 +26,7 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, re
+import time
 import logging
 import yaml
 import tqdm
@@ -99,7 +100,11 @@ class ModCaller(StateFunction):
         # run remaining sites
         if len(inputs):
             predictions.extend(self.__predict__(inputs[:self.batch_size]))
-        return (read, template_pos, predictions)
+        if len(template_pos):
+            return (read, template_pos, predictions)
+        else:
+            log.debug("No target sites on read {}".format(read.name))
+            return None
 
 
 
@@ -200,7 +205,7 @@ def main(args):
                 try:
                     res = caller(*obj)
                 except Exception as ex:
-                    log.error("Exception in worker (Proceeding with remaining jobs):\n {}".format(str(ex)))
+                    log.error("Exception in MainProcess (Proceeding with remaining jobs):\n {}".format(str(ex)))
                     continue
                 if res is not None:
                     writer_queue.put(res)
@@ -209,10 +214,16 @@ def main(args):
                 continue
     writer_queue.put(StopIteration)
     writer_queue.close()
+    writer_queue.join_thread()
     # wait for completion
-    sink.join()
-    aligner.join()
+    log.debug("Waiting for reader to complete")
     src.join()
+    log.debug("Waiting for aligner to complete")
+    aligner.join()
+    log.debug("Waiting for writer to complete")
+    sink.join()
+
+
 
 
 

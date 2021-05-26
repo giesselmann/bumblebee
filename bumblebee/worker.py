@@ -77,7 +77,7 @@ class EventAligner(StateFunction):
     def call(self, read):
         score, df_events = read.event_alignments(self.read_aligner)
         if score < self.min_score or df_events.shape[0] == 0:
-            log.debug("Droping read {} with alignment score {}".format(
+            log.debug("Droping read {} with alignment score {:.3f}".format(
                 read.name, score))
             return None
         else:
