@@ -56,11 +56,15 @@ class SourceProcess():
             pid = '(PID: {})'.format(os.getpid())
             log.debug("Started ReaderProcess {}".format(pid))
             src = src_type(*args, **kwargs)
-            for obj in src():
-                q.put(obj)
-                if e.is_set():
-                    log.debug("Received StopEvent in ReaderProcess {}".format(pid))
-                    break
+            try:
+                for obj in src():
+                    q.put(obj)
+                    if e.is_set():
+                        log.debug("Received StopEvent in ReaderProcess {}".format(pid))
+                        break
+            except Exception as ex:
+                log.error("Error in ReaderProcess:\n{}".format(ex))
+                break
             q.put(StopIteration)
             q.close()
             q.join_thread()
