@@ -194,6 +194,7 @@ class BaseModEncoder(torch.nn.Module):
         # (batch_size, num_classes)
         inner = torch.mul(inner, ~mask[:,:,None])
         inner = torch.sum(inner, dim=1) / lengths[:,None]
+        # TODO check normalization, softmax can give nan
         out = torch.nn.functional.softmax(inner, dim=1)
         return out, None, {}
 

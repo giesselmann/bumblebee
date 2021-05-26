@@ -101,7 +101,7 @@ class WorkerProcess():
                     obj = q_in.get(block=True, timeout=1)
                 except queue.Empty:
                     obj = None
-                if obj is StopIteration or e.is_set():
+                if obj is StopIteration:
                     log.debug("Received StopIteration/StopEvent in WorkerProcess {}".format(pid))
                     e.set()
                     break

@@ -55,13 +55,13 @@ class ReadSource(StateFunction):
         for i, ref_span in enumerate(self.algn_idx.records()):
             if (len(ref_span.seq) < self.min_seq_length or
                 len(ref_span.seq) > self.max_seq_length):
+                log.debug("Droping read {} with length {}".format(
+                    ref_span.qname, len(ref_span.seq)))
                 continue
             read_signal = self.f5_idx[ref_span.qname]
             read = Read(read_signal, ref_span=ref_span)
             yield (read, )
             self.read_counter += 1
-            if self.read_counter >= 10:
-                break
 
 
 
@@ -76,8 +76,10 @@ class EventAligner(StateFunction):
 
     def call(self, read):
         score, df_events = read.event_alignments(self.read_aligner)
-        log.debug("Aligned read {} with score {}".format(read.name, score))
         if score < self.min_score or df_events.shape[0] == 0:
+            log.debug("Droping read {} with alignment score {}".format(
+                read.name, score))
             return None
         else:
+            #log.debug("Aligned read {} with score {}".format(read.name, score))
             return read, df_events, score
