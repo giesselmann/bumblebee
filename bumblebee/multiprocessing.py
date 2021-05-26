@@ -64,7 +64,6 @@ class SourceProcess():
                         break
             except Exception as ex:
                 log.error("Error in ReaderProcess:\n{}".format(ex))
-                break
             q.put(StopIteration)
             q.close()
             q.join_thread()
