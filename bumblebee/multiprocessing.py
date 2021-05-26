@@ -54,17 +54,17 @@ class SourceProcess():
         self.e = mp.Event()
         def fn(e, q, src_type, *args, **kwargs):
             pid = '(PID: {})'.format(os.getpid())
-            log.debug("Started SourceProcess {}".format(pid))
+            log.debug("Started ReaderProcess {}".format(pid))
             src = src_type(*args, **kwargs)
             for obj in src():
                 q.put(obj)
                 if e.is_set():
-                    log.debug("Received StopEvent in SourceProcess {}".format(pid))
+                    log.debug("Received StopEvent in ReaderProcess {}".format(pid))
                     break
             q.put(StopIteration)
             q.close()
             q.join_thread()
-            log.debug("Terminating SourceProcess {}".format(pid))
+            log.debug("Terminating ReaderProcess {}".format(pid))
         self.p = mp.Process(target=fn,
             args=(self.e, self.q, src_type) + args,
             kwargs=kwargs)
@@ -75,7 +75,7 @@ class SourceProcess():
         return self.q
 
     def terminate(self):
-        log.debug("Sending StopEvent to SourceProcess")
+        log.debug("Sending StopEvent to ReaderProcess")
         self.e.set()
         self.p.join()
 
@@ -161,7 +161,7 @@ class SinkProcess():
         self.q_in = input_queue
         def fn(e, q_in, sink_type, *args, **kwargs):
             pid = '(PID: {})'.format(os.getpid())
-            log.debug("Started SinkProcess {}".format(pid))
+            log.debug("Started WriterProcess {}".format(pid))
             sink = sink_type(*args, **kwargs)
             while not e.is_set():
                 try:
@@ -169,7 +169,7 @@ class SinkProcess():
                 except queue.Empty:
                     obj = None
                 if obj is StopIteration:
-                    log.debug("Received StopIteration in SinkProcess {}".format(pid))
+                    log.debug("Received StopIteration in WriterProcess {}".format(pid))
                     e.set()
                     break
                 elif obj is not None:
@@ -179,7 +179,7 @@ class SinkProcess():
                         log.error("Exception in sink (Proceeding with remaining jobs):\n{}".format(str(ex)))
                 else:
                     continue
-            log.debug("Terminating SinkProcess {}".format(pid))
+            log.debug("Terminating WriterProcess {}".format(pid))
         self.p = mp.Process(target=fn,
             args=(self.e, self.q_in, sink_type) + args,
             kwargs=kwargs)

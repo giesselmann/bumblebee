@@ -58,7 +58,11 @@ class ReadSource(StateFunction):
                 log.debug("Droping read {} with length {}".format(
                     ref_span.qname, len(ref_span.seq)))
                 continue
-            read_signal = self.f5_idx[ref_span.qname]
+            try:
+                read_signal = self.f5_idx[ref_span.qname]
+            except KeyError:
+                log.debug("Read {} not in fast5 files".format(ref_span.qname))
+                continue
             read = Read(read_signal, ref_span=ref_span)
             yield (read, )
             self.read_counter += 1
