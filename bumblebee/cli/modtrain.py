@@ -244,7 +244,7 @@ def main(args):
                 if step % eval_rate == 0:
                     labels, batch = next(dl_eval_iter)
                     _eval_loss, _eval_acc, kwout = eval_step(labels, batch,
-                        swa=epoch >= args.swa_start)
+                        swa=epoch > args.swa_start)
                     eval_loss.append(_eval_loss)
                     eval_acc.append(_eval_acc)
                     writer.add_scalar('validation/loss', _eval_loss, step_total)
