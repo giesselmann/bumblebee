@@ -134,6 +134,8 @@ class RecordWriter(StateFunction):
 
 def main(args):
     use_cuda = torch.cuda.is_available()
+    if use_cuda:
+        torch.cuda.set_device(args.device)
     device = torch.device("cuda:{}".format(args.device) if use_cuda else "cpu")
     log.info("Using device {}".format(device))
     # load config

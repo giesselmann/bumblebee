@@ -45,9 +45,11 @@ class ModDataset(torch.utils.data.Dataset):
 
     def __init__(self, db_file, mod_ids,
                  train=True, balance=True,
-                 max_features=32, min_score=1.0):
+                 max_features=32, min_score=1.0,
+                 include_offset=False):
         self.db_file = db_file
         self.max_features = max_features
+        self.include_offset = include_offset
         db = ModDatabase(db_file, require_index=True, require_split=True)
         # read feature IDs
         log.info("Loading site IDs.")
@@ -85,12 +87,25 @@ class ModDataset(torch.utils.data.Dataset):
         return self.total
 
     def __getitem__(self, index):
-        label, length, kmers, features = self.db.get_feature(self.features[index])
+        if self.include_offset:
+            label, length, kmers, features, offsets = self.db.get_feature(
+                self.features[index], include_offset=True)
+            offsets_padd = np.zeros(self.max_features, dtype=np.int64)
+            offsets_padd[:length] = [offset + 1 for offset in offsets]
+        else:
+            label, length, kmers, features = self.db.get_feature(
+                self.features[index])
         kmers_padd = np.zeros(self.max_features, dtype=np.int64)
         features_padd = np.zeros((self.max_features, 6), dtype=np.float32)
         kmers_padd[:length] = kmers
         features_padd[:length, :] = features
-        return (label, {'lengths': length,
+        if self.include_offset:
+            return (label, {'lengths': length,
+                        'kmers': kmers_padd,
+                        'features': features_padd,
+                        'offsets': offsets_padd})
+        else:
+            return (label, {'lengths': length,
                         'kmers': kmers_padd,
                         'features': features_padd})
 

@@ -62,34 +62,6 @@ def main(args):
     weights_dir = os.path.join(args.prefix, 'weights')
     os.makedirs(weights_dir, exist_ok=True)
 
-    # init dataset and dataloader
-    log.info("Loading training dataset")
-    ds_train = ModDataset(args.db, args.mod_ids,
-                max_features=args.max_features,
-                min_score=args.min_score)
-    dl_train = torch.utils.data.DataLoader(ds_train,
-            batch_size=args.batch_size,
-            shuffle=True,
-            num_workers=4, worker_init_fn=ModDataset.worker_init_fn,
-            prefetch_factor=args.batch_size,
-            pin_memory=True,
-            drop_last=True)
-    log.info("Loading evaluation dataset")
-    ds_eval = ModDataset(args.db, args.mod_ids,
-                train=False,
-                max_features=args.max_features,
-                min_score=args.min_score)
-    dl_eval = torch.utils.data.DataLoader(ds_eval,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=1, worker_init_fn=ModDataset.worker_init_fn,
-            prefetch_factor=args.batch_size,
-            pin_memory=True,
-            drop_last=True)
-    eval_rate = np.ceil(len(dl_train) / len(dl_eval)).astype(int)
-    log.info("Loaded {} train and {} evaluation batches.".format(
-        len(dl_train), len(dl_eval)))
-
     # load model config
     run_config = os.path.join(output_dir, 'config.yaml')
     pkg_config = pkg.resource_filename('bumblebee', 'config/{}.yaml'.format(args.config))
@@ -113,6 +85,36 @@ def main(args):
         log.error("Could not find config file for {}".format(args.config))
         exit(-1)
 
+    # init dataset and dataloader
+    log.info("Loading training dataset")
+    ds_train = ModDataset(args.db, args.mod_ids,
+                max_features=args.max_features,
+                min_score=args.min_score,
+                include_offset=config.get('include_offset'))
+    dl_train = torch.utils.data.DataLoader(ds_train,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=4, worker_init_fn=ModDataset.worker_init_fn,
+            prefetch_factor=args.batch_size,
+            pin_memory=True,
+            drop_last=True)
+    log.info("Loading evaluation dataset")
+    ds_eval = ModDataset(args.db, args.mod_ids,
+                train=False,
+                max_features=args.max_features,
+                min_score=args.min_score,
+                include_offset=config.get('include_offset'))
+    dl_eval = torch.utils.data.DataLoader(ds_eval,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=1, worker_init_fn=ModDataset.worker_init_fn,
+            prefetch_factor=args.batch_size,
+            pin_memory=True,
+            drop_last=True)
+    eval_rate = np.ceil(len(dl_train) / len(dl_eval)).astype(int)
+    log.info("Loaded {} train and {} evaluation batches.".format(
+        len(dl_train), len(dl_eval)))
+
     # copy config into output directory
     with open(run_config, 'w') as fp:
         yaml.dump(config, fp)
@@ -127,7 +129,10 @@ def main(args):
     # model summary
     _, _batch = next(iter(dl_eval))
     summary(model,
-        input_data=[_batch['lengths'], _batch['kmers'], _batch['features']],
+        input_data=[_batch['lengths'],
+                    _batch['kmers'],
+                    _batch['features'],
+                    _batch['offsets']],
         device="cpu", depth=1)
     model.to(device)
     def avg_fn(avg_mdl, mdl, step):
@@ -140,7 +145,7 @@ def main(args):
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     optimizer = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
-    lr_scheduler = WarmupScheduler(optimizer, config['params']['d_model'], warmup_steps=8000)
+    lr_scheduler = WarmupScheduler(optimizer, config['params']['d_model'], warmup_steps=4000)
     #swa_scheduler = torch.optim.swa_utils.SWALR(optimizer,
     #    swa_lr=args.swa_lr, anneal_epochs=1)
     # load checkpoint
@@ -175,11 +180,12 @@ def main(args):
         lengths = batch['lengths']
         kmers = batch['kmers'].to(device)
         features = batch['features'].to(device)
+        offsets = batch['offsets'].to(device) if 'offsets' in batch else None
         # zero gradients
         for _ in range(args.echo + 1):
             optimizer.zero_grad()
             # forward pass
-            logits, model_loss, metrics = model(lengths, kmers, features)
+            logits, model_loss, metrics = model(lengths, kmers, features, offsets)
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
@@ -198,12 +204,13 @@ def main(args):
             lengths = batch['lengths']
             kmers = batch['kmers'].to(device)
             features = batch['features'].to(device)
+            offsets = batch['offsets'].to(device) if 'offsets' in batch else None
             # forward pass
             if swa:
-                logits, model_loss, metrics = swa_model(lengths, kmers, features)
+                logits, model_loss, metrics = swa_model(lengths, kmers, features, offsets)
             else:
                 model.eval()
-                logits, model_loss, metrics = model(lengths, kmers, features)
+                logits, model_loss, metrics = model(lengths, kmers, features, offsets)
                 model.train()
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
