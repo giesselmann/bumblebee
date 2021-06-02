@@ -9,6 +9,7 @@ params:
     input_nn_dims:
         - 64
         - 128
-    d_model: 256
+    rnn_type: 'LSTM'
+    d_model: 512
     num_layer: 3
     num_classes: 2

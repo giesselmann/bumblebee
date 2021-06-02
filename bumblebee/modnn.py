@@ -46,9 +46,9 @@ class BaseModLSTM_v1(torch.nn.Module):
         padding_idx = config.get("padding_idx") or 0
         dropout = config.get("dropout") or 0.1
         input_nn_dims = config.get("input_nn_dims") or [64, 128]
+        rnn_type = config.get("rnn_type") or "LSTM"
         d_model = config.get("d_model") or 128
         num_layer = config.get("num_layer") or 3
-        rnn_type = config.get("rnn_type") or "LSTM"
         num_classes = config.get("num_classes") or 2
         self.d_model = d_model
         self.num_layer = num_layer
@@ -80,7 +80,7 @@ class BaseModLSTM_v1(torch.nn.Module):
         # positional encoding
         inner = inner + self.offset_embedding(offsets)
         # run LSTM
-        inner = self.rnn(inner)
+        inner = self.rnn(inner, lengths)
         # get class label
         # (batch_size, num_classes)
         out = self.linear(inner)

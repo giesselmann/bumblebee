@@ -143,7 +143,8 @@ def main(args):
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     optimizer = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
-    lr_scheduler = WarmupScheduler(optimizer, config['params']['d_model'],
+    if args.lr_schedule:
+        lr_scheduler = WarmupScheduler(optimizer, config['params']['d_model'],
         warmup_steps=4000)
     # load checkpoint
     chkpt_file = os.path.join(args.prefix, 'latest.chkpt')
@@ -154,7 +155,8 @@ def main(args):
         model.load_state_dict(checkpoint['model'])
         swa_model.load_state_dict(checkpoint['swa_model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+        if args.lr_schedule:
+            lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
         log.info("Loaded latest checkpoint: Epoch {} at step {}".format(
             last_epoch+1, step_total))
     else:
@@ -234,7 +236,8 @@ def main(args):
                 if epoch > args.swa_start:
                     swa_model.update_parameters(model)
                 # learning rate
-                lr_scheduler.step()
+                if args.lr_schedule:
+                    lr_scheduler.step()
                 # eval step
                 if step % eval_rate == 0:
                     labels, batch = next(dl_eval_iter)
@@ -264,7 +267,7 @@ def main(args):
                 "model": model.state_dict(),
                 "swa_model": swa_model.state_dict(),
                 "optimizer": optimizer.state_dict(),
-                "lr_scheduler": lr_scheduler.state_dict()
+                "lr_scheduler": lr_scheduler.state_dict() if args.lr_schedule else None
                 }, chkpt_file)
 
     # close & cleanup
@@ -286,7 +289,7 @@ def argparser():
     parser.add_argument("--max_features", default=40, type=int)
     parser.add_argument("--min_score", default=1.0, type=float)
     parser.add_argument("--lr", default=1.0, type=float)
-    parser.add_argument("--swa_lr", default=0.0001, type=float)
+    parser.add_argument("--lr_schedule", action='store_true')
     parser.add_argument("--epochs", default=10, type=int)
     parser.add_argument("--swa_start", default=5, type=int)
     parser.add_argument("--batch_size", default=64, type=int)
