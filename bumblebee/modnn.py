@@ -61,7 +61,7 @@ class BaseModLSTM_v1(torch.nn.Module):
         )
         self.dense = torch.nn.Linear(2*d_model, num_classes)
 
-    def forward(self, lengths, kmers, features):
+    def forward(self, lengths, kmers, offsets, features):
         # embed kmers
         # (batch_size, seq_len, embedding_dim)
         inner = self.kmer_embedding(kmers)
@@ -108,7 +108,7 @@ class BaseModLSTM_v2(torch.nn.Module):
         self.rnn4 = BiDirLSTM(d_model, 4, dropout=dropout, rnn_type=rnn_type)
         self.linear2 = torch.nn.Linear(d_model*4, num_classes)
 
-    def forward(self, lengths, kmers, features):
+    def forward(self, lengths, kmers, offsets, features):
         # embed kmers
         # (batch_size, seq_len, embedding_dim)
         emb = self.kmer_embedding(kmers)
@@ -169,7 +169,7 @@ class BaseModEncoder(torch.nn.Module):
                 output_nn_dims,
                 dropout=dropout)
 
-    def forward(self, lengths, kmers, features, steps=None):
+    def forward(self, lengths, kmers, offsets, features):
         batch_size, max_len, n_features = features.size()
         # (batch_size, max_len)
         mask = torch.arange(max_len)[None, :] >= lengths[:, None]
@@ -206,7 +206,7 @@ class BaseModEncoder_v2(torch.nn.Module):
         super(BaseModEncoder_v2, self).__init__()
         # default config
         num_features = config.get("num_features") or 6
-        feature_window = config.get('feature_window') or max_features
+        feature_window = config.get("feature_window") or 20
         num_kmers = config.get('num_kmers') or 4096
         embedding_dim = config.get('embedding_dim') or 32
         padding_idx = config.get("padding_idx") or 0
@@ -230,9 +230,6 @@ class BaseModEncoder_v2(torch.nn.Module):
                 num_embeddings=feature_window,
                 embedding_dim=d_model,
                 padding_idx=padding_idx)
-        #self.pos_encoder = PositionalEncoding(d_model,
-        #        dropout=dropout,
-        #        max_len=max_features)
         # encoder
         self.encoder_layer = torch.nn.TransformerEncoderLayer(
                 d_model=d_model,
@@ -248,7 +245,7 @@ class BaseModEncoder_v2(torch.nn.Module):
                 output_nn_dims,
                 dropout=dropout)
 
-    def forward(self, lengths, kmers, features, offsets):
+    def forward(self, lengths, kmers, offsets, features):
         batch_size, max_len, n_features = features.size()
         # (batch_size, max_len)
         mask = torch.arange(max_len)[None, :] >= lengths[:, None]
@@ -262,7 +259,6 @@ class BaseModEncoder_v2(torch.nn.Module):
         # concat signal features and sequence embeddings
         inner = torch.cat([emb, inner], dim=-1)
         # positional encoding
-        #inner = self.pos_encoder(inner)
         inner = inner + self.offset_embedding(offsets)
         # transformer encoder needs (max_len, batch_size, d_model)
         inner = self.transformer_encoder(inner.permute(1, 0, 2),
@@ -309,7 +305,7 @@ class BaseModACTEncoder(torch.nn.Module):
             num_classes,
             [512, 256, 128])
 
-    def forward(self, lengths, kmers, features):
+    def forward(self, lengths, kmers, offsets, features):
         batch_size, max_len, n_features = features.size()
         # (batch_size, max_len)
         mask = torch.arange(max_len)[None, :] >= lengths[:, None]

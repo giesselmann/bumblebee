@@ -60,24 +60,30 @@ class ModCaller(StateFunction):
         self.device = device
         self.batch_size = 32
 
-    def __padded_tensor__(self, length, kmers, features):
+    def __padded_tensor__(self, length, kmers, offsets, features):
         kmers_padd = np.zeros(self.max_features, dtype=np.int64)
+        offsets_padd = np.zeros(self.max_features, dtype=np.int64)
         features_padd = np.zeros((self.max_features, 6), dtype=np.float32)
         kmers_padd[:length] = kmers
+        offsets_padd[:length] = [offset + 1 for offset in offsets]
         features_padd[:length, :] = features
         return (torch.tensor(length),
                 torch.tensor(kmers_padd),
+                torch.tensor(offsets_padd),
                 torch.tensor(features_padd))
 
     def __predict__(self, inputs):
         # list of tensor tuples to tuple of stacked tensors
-        lengths, kmers, features = [torch.stack(value)
+        lengths, kmers, offsets, features = [torch.stack(value)
             for value in zip(*inputs)]
         # run forward
         with torch.no_grad():
             kmers = kmers.to(self.device)
+            offsets = offsets.to(self.device)
             features = features.to(self.device)
-            prediction, _, _ = self.model(lengths, kmers, features)
+            prediction, _, _ = self.model(lengths, kmers, offsets, features)
+            # prediction is (batch_size, num_classes)
+            prediction = torch.nn.functional.softmax(prediction, dim=1)
         return [tuple(x) for x in prediction.detach().cpu().numpy()]
 
     def call(self, read, df_events, score):
@@ -86,15 +92,17 @@ class ModCaller(StateFunction):
         template_pos = []
         inputs = []
         predictions = []
-        for pos, _, df_feature in read.feature_sites(df_events,
+        for pos, feature_begin, df_feature in read.feature_sites(df_events,
                 self.pattern, self.read_aligner.pm.k):
             if df_feature.shape[0] <= self.max_features and df_feature.shape[0] > 1:
-                length, kmers, features = self.__padded_tensor__(
-                    df_feature.shape[0], df_feature.kmer,
+                length, kmers, offsets, features = self.__padded_tensor__(
+                    df_feature.shape[0],
+                    df_feature.kmer,
+                    df_feature.index.values - feature_begin,
                     df_feature[['event_min', 'event_mean', 'event_median',
                                 'event_std', 'event_max', 'event_length']])
                 template_pos.append(pos)
-                inputs.append((length, kmers, features))
+                inputs.append((length, kmers, offsets, features))
             if len(inputs) >= self.batch_size:
                 predictions.extend(self.__predict__(inputs[:self.batch_size]))
                 del inputs[:self.batch_size]

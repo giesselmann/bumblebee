@@ -251,14 +251,11 @@ class ModDatabase():
 
     # get single feature
     def get_feature(self, feature_id, include_offset=False):
-        self.cursor.execute("SELECT class, kmer, min, mean, median, std, max, length, offset FROM sites JOIN features ON sites.rowid = features.siteid WHERE sites.rowid = {} ORDER BY enum;".format(feature_id))
+        self.cursor.execute("SELECT class, kmer, offset, min, mean, median, std, max, length, offset FROM sites JOIN features ON sites.rowid = features.siteid WHERE sites.rowid = {} ORDER BY enum;".format(feature_id))
         try:
-            if not include_offset:
-                mod_ids, kmers, features = zip(*[(x[0], x[1], x[2:-1]) for x in self.cursor])
-                return mod_ids[0], len(kmers), kmers, features
-            else:
-                mod_ids, kmers, features, offsets = zip(*[(x[0], x[1], x[2:-1], x[-1]) for x in self.cursor])
-                return mod_ids[0], len(kmers), kmers, features, offsets
+            mod_ids, kmers, offsets, features = zip(*[(x[0], x[1], x[2], x[3:])
+                for x in self.cursor])
+            return mod_ids[0], len(kmers), kmers, offsets, features
         except:
             print(feature_id)
             raise

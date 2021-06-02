@@ -1,7 +1,8 @@
-# vR94_450Bps_DNA_CG_5mC
-model: BaseModEncoder
+# R94_450Bps_DNA_CG_5mC
+model: BaseModEncoder_v2
 params:
     num_features: 6
+    feature_window: 20
     num_kmers: 4096
     embedding_dim: 64
     padding_idx: 0

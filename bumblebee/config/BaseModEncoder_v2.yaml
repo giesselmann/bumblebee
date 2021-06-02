@@ -1,5 +1,4 @@
 model: BaseModEncoder_v2
-include_offset: True
 params:
     num_features: 6
     feature_window: 20

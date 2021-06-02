@@ -89,8 +89,7 @@ def main(args):
     log.info("Loading training dataset")
     ds_train = ModDataset(args.db, args.mod_ids,
                 max_features=args.max_features,
-                min_score=args.min_score,
-                include_offset=config.get('include_offset'))
+                min_score=args.min_score)
     dl_train = torch.utils.data.DataLoader(ds_train,
             batch_size=args.batch_size,
             shuffle=True,
@@ -102,8 +101,7 @@ def main(args):
     ds_eval = ModDataset(args.db, args.mod_ids,
                 train=False,
                 max_features=args.max_features,
-                min_score=args.min_score,
-                include_offset=config.get('include_offset'))
+                min_score=args.min_score)
     dl_eval = torch.utils.data.DataLoader(ds_eval,
             batch_size=args.batch_size,
             shuffle=False,
@@ -131,8 +129,8 @@ def main(args):
     summary(model,
         input_data=[_batch['lengths'],
                     _batch['kmers'],
-                    _batch['features'],
-                    _batch['offsets']],
+                    _batch['offsets'],
+                    _batch['features']],
         device="cpu", depth=1)
     model.to(device)
     def avg_fn(avg_mdl, mdl, step):
@@ -145,9 +143,8 @@ def main(args):
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     optimizer = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
-    lr_scheduler = WarmupScheduler(optimizer, config['params']['d_model'], warmup_steps=4000)
-    #swa_scheduler = torch.optim.swa_utils.SWALR(optimizer,
-    #    swa_lr=args.swa_lr, anneal_epochs=1)
+    lr_scheduler = WarmupScheduler(optimizer, config['params']['d_model'],
+        warmup_steps=4000)
     # load checkpoint
     chkpt_file = os.path.join(args.prefix, 'latest.chkpt')
     if os.path.isfile(chkpt_file):
@@ -158,7 +155,6 @@ def main(args):
         swa_model.load_state_dict(checkpoint['swa_model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-        #swa_scheduler.load_state_dict(checkpoint['swa_scheduler'])
         log.info("Loaded latest checkpoint: Epoch {} at step {}".format(
             last_epoch+1, step_total))
     else:
@@ -179,13 +175,13 @@ def main(args):
         labels = labels.to(device)
         lengths = batch['lengths']
         kmers = batch['kmers'].to(device)
+        offsets = batch['offsets'].to(device)
         features = batch['features'].to(device)
-        offsets = batch['offsets'].to(device) if 'offsets' in batch else None
         # zero gradients
         for _ in range(args.echo + 1):
             optimizer.zero_grad()
             # forward pass
-            logits, model_loss, metrics = model(lengths, kmers, features, offsets)
+            logits, model_loss, metrics = model(lengths, kmers, offsets, features)
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
             loss = criterion(logits, labels)
@@ -203,14 +199,14 @@ def main(args):
             labels = labels.to(device)
             lengths = batch['lengths']
             kmers = batch['kmers'].to(device)
+            offsets = batch['offsets'].to(device)
             features = batch['features'].to(device)
-            offsets = batch['offsets'].to(device) if 'offsets' in batch else None
             # forward pass
             if swa:
-                logits, model_loss, metrics = swa_model(lengths, kmers, features, offsets)
+                logits, model_loss, metrics = swa_model(lengths, kmers, offsets, features)
             else:
                 model.eval()
-                logits, model_loss, metrics = model(lengths, kmers, features, offsets)
+                logits, model_loss, metrics = model(lengths, kmers, offsets, features)
                 model.train()
             prediction = torch.argmax(logits, dim=1)
             accuracy = torch.sum(prediction == labels).item() / args.batch_size
@@ -237,7 +233,6 @@ def main(args):
                 # swa
                 if epoch > args.swa_start:
                     swa_model.update_parameters(model)
-                    #swa_scheduler.step()
                 # learning rate
                 lr_scheduler.step()
                 # eval step
@@ -270,7 +265,6 @@ def main(args):
                 "swa_model": swa_model.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "lr_scheduler": lr_scheduler.state_dict()
-                #"swa_scheduler": swa_scheduler.state_dict()
                 }, chkpt_file)
 
     # close & cleanup
@@ -297,5 +291,5 @@ def argparser():
     parser.add_argument("--swa_start", default=5, type=int)
     parser.add_argument("--batch_size", default=64, type=int)
     parser.add_argument("--echo", default=0, type=int)
-    parser.add_argument("--clip_grad_norm", default=2.5, type=float)
+    parser.add_argument("--clip_grad_norm", default=1.5, type=float)
     return parser
