@@ -37,50 +37,53 @@ from bumblebee.nn import TransformerACTEncoder
 
 
 class BaseModLSTM_v1(torch.nn.Module):
-    def __init__(self, max_features,
-            num_features=6,
-            k=6, embedding_dim=32, padding_idx=0,
-            rnn_type='LSTM', d_model=64, num_layer=1,
-            dropout=0.1,
-            num_classes=2):
+    def __init__(self, max_features, config={}):
         super(BaseModLSTM_v1, self).__init__()
+        num_features = config.get("num_features") or 6
+        feature_window = config.get("feature_window") or 20
+        num_kmers = config.get('num_kmers') or 4096
+        embedding_dim = config.get('embedding_dim') or 32
+        padding_idx = config.get("padding_idx") or 0
+        dropout = config.get("dropout") or 0.1
+        input_nn_dims = config.get("input_nn_dims") or [64, 128]
+        d_model = config.get("d_model") or 128
+        num_layer = config.get("num_layer") or 3
+        rnn_type = config.get("rnn_type") or "LSTM"
+        num_classes = config.get("num_classes") or 2
         self.d_model = d_model
         self.num_layer = num_layer
         self.kmer_embedding = torch.nn.Embedding(
-            num_embeddings=4**k+1,
-            embedding_dim=embedding_dim,
-            padding_idx=padding_idx
-        )
-        self.rnn = getattr(torch.nn, rnn_type)(
-            input_size=embedding_dim + num_features,
-            hidden_size=d_model,
-            num_layers=num_layer,
-            dropout=dropout,
-            batch_first=True,
-            bidirectional=True
-        )
-        self.dense = torch.nn.Linear(2*d_model, num_classes)
+                num_embeddings=num_kmers + 1,
+                embedding_dim=embedding_dim,
+                padding_idx=padding_idx)
+        self.input_nn = ResidualNetwork(num_features,# + embedding_dim,
+                d_model - embedding_dim,
+                input_nn_dims,
+                dropout=dropout)
+        self.offset_embedding = torch.nn.Embedding(
+                num_embeddings=feature_window,
+                embedding_dim=d_model,
+                padding_idx=padding_idx)
+        self.rnn = BiDirLSTM(d_model, num_layer,
+                dropout=dropout,
+                rnn_type=rnn_type)
+        self.linear = torch.nn.Linear(d_model, num_classes)
 
     def forward(self, lengths, kmers, offsets, features):
-        # embed kmers
-        # (batch_size, seq_len, embedding_dim)
-        inner = self.kmer_embedding(kmers)
-        # (batch_size, seq_len, embedding_dim + num_features)
-        inner = torch.cat([inner, features], dim=-1)
-        # pack inputs
-        inner = torch.nn.utils.rnn.pack_padded_sequence(inner, lengths, batch_first=True, enforce_sorted=False)
+        # kmer embedding (batch_size, max_len, embedding_dim)
+        emb = self.kmer_embedding(kmers)
+        # generate features as
+        # (batch_size, max_len, d_model - embedding_dim)
+        inner = self.input_nn(features)
+        # concat signal features and sequence embeddings
+        inner = torch.cat([emb, inner], dim=-1)
+        # positional encoding
+        inner = inner + self.offset_embedding(offsets)
         # run LSTM
-        inner, _  = self.rnn(inner)
-        # unpack output
-        inner, _ = torch.nn.utils.rnn.pad_packed_sequence(inner, batch_first=True)
-        inner_forward = inner[range(len(inner)), lengths - 1, :self.d_model]
-        inner_reverse = inner[:, 0, self.d_model:]
-        # (batch_size, 2*d_model)
-        inner_reduced = torch.cat((inner_forward, inner_reverse), 1)
+        inner = self.rnn(inner)
         # get class label
         # (batch_size, num_classes)
-        inner = self.dense(inner_reduced)
-        out = torch.nn.functional.softmax(inner, dim=1)
+        out = self.linear(inner)
         return out, None, {}
 
 
