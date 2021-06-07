@@ -41,7 +41,10 @@ class ModDataset(torch.utils.data.Dataset):
     def worker_init_fn(worker_id):
         worker_info = torch.utils.data.get_worker_info()
         self = worker_info.dataset  # the dataset copy in this worker process
-        self.init_db()
+        if hasattr(self, 'init_db'):
+            self.init_db()
+        else:
+            self.dataset.init_db()
 
     def __init__(self, db_file, mod_ids,
                  train=True, balance=True,
