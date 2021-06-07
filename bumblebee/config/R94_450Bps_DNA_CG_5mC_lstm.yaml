@@ -1,0 +1,20 @@
+# # R94_450Bps_DNA_CG_5mC_lstm
+model: BaseModLSTM_v1
+params:
+  d_model: 512
+  dropout: 0.1
+  embedding_dim: 64
+  feature_window: 20
+  input_nn_dims:
+  - 64
+  - 128
+  - 256
+  num_classes: 2
+  num_features: 6
+  num_kmers: 4096
+  num_layer: 4
+  padding_idx: 0
+  rnn_type: LSTM
+pattern: CG
+extension: 7
+max_features: 40

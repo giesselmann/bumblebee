@@ -334,7 +334,7 @@ def argparser():
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--epochs", type=int)
     group.add_argument('--steps', type=int)
-    parser.add_argument("--swa_start", default=5, type=int)
+    parser.add_argument("--swa_start", default=0, type=int)
     parser.add_argument("--stats", action='store_true')
 
     return parser
