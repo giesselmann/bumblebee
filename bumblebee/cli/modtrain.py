@@ -90,6 +90,9 @@ def main(args):
     ds_train = ModDataset(args.db, args.mod_ids,
                 max_features=args.max_features,
                 min_score=args.min_score)
+    if args.train_fraction < 1.0:
+        ds_train = torch.utils.data.Subset(ds_train,
+            np.arange(int(args.train_fraction * len(ds_train))))
     dl_train = torch.utils.data.DataLoader(ds_train,
             batch_size=args.batch_size,
             shuffle=True,
@@ -102,6 +105,9 @@ def main(args):
                 train=False,
                 max_features=args.max_features,
                 min_score=args.min_score)
+    if args.train_fraction < 1.0:
+        ds_eval = torch.utils.data.Subset(ds_eval,
+            np.arange(int(args.train_fraction * len(ds_eval))))
     dl_eval = torch.utils.data.DataLoader(ds_eval,
             batch_size=args.batch_size,
             shuffle=False,
@@ -148,6 +154,7 @@ def main(args):
         warmup_steps=4000)
     # load checkpoint
     chkpt_file = os.path.join(args.prefix, 'latest.chkpt')
+    out_file = os.path.join(args.prefix, 'final.chkpt')
     if os.path.isfile(chkpt_file):
         checkpoint = torch.load(chkpt_file)
         step_total = checkpoint['step_total']
@@ -180,7 +187,7 @@ def main(args):
         offsets = batch['offsets'].to(device)
         features = batch['features'].to(device)
         # zero gradients
-        for _ in range(args.echo + 1):
+        for _ in range(args.batch_echo + 1):
             optimizer.zero_grad()
             # forward pass
             logits, model_loss, metrics = model(lengths, kmers, offsets, features)
@@ -218,8 +225,33 @@ def main(args):
             loss = torch.mean(loss)
             return loss.item(), accuracy, metrics
 
+    def save(fout, swa=False):
+        if not swa:
+            torch.save(model.state_dict(),
+                os.path.join(weights_dir, 'weights_{}.pt'.format(step_total)))
+        else:
+            torch.save(swa_model.state_dict(),
+                os.path.join(weights_dir, 'weights_swa_{}.pt'.format(step_total)))
+        torch.save({
+            "step_total": step_total,
+            "last_epoch": epoch,
+            "model": model.state_dict(),
+            "swa_model": swa_model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "lr_scheduler": lr_scheduler.state_dict() if args.lr_schedule else None
+            }, fout)
+
+    # compute epochs if target steps are given
+    if args.epochs:
+        max_steps = args.epochs * len(dl_train)
+        max_epochs = args.epochs
+        swa_start_step = args.swa_start * len(dl_train)
+    else:
+        max_steps = args.steps
+        max_epochs = np.ceil(args.steps / len(dl_train)).astype(int)
+        swa_start_step = args.swa_start
     # training loop
-    for epoch in range(last_epoch + 1, args.epochs):
+    for epoch in range(last_epoch + 1, max_epochs + 1):
         dl_eval_iter = iter(dl_eval)
         with tqdm.tqdm(desc='Epoch {}'.format(epoch), total=len(dl_train)) as pbar:
             for step, (labels, batch) in enumerate(dl_train):
@@ -247,6 +279,15 @@ def main(args):
                     eval_acc.append(_eval_acc)
                     writer.add_scalar('validation/loss', _eval_loss, step_total)
                     writer.add_scalar('validation/accuracy', _eval_acc, step_total)
+                # raw stats output
+                if args.stats:
+                    with open(os.path.join(output_dir, 'stats.tsv'), 'a') as fp:
+                        print('\t'.join([
+                            str(step_total),
+                            train_loss.mean(),
+                            train_acc.mean(),
+                            eval_loss.mean(),
+                            eval_acc.mean()]), file=fp)
                 # progress
                 pbar.update(1)
                 pbar.set_postfix_str("Train: {:.3f} / {:.3f} Eval: {:.3f} / {:.3f}".format(
@@ -255,21 +296,17 @@ def main(args):
                     eval_loss.mean(),
                     eval_acc.mean()))
                 step_total += 1
-            if epoch <= args.swa_start:
-                torch.save(model.state_dict(),
-                    os.path.join(weights_dir, 'weights_{}.pt'.format(step_total)))
-            else:
-                torch.save(swa_model.state_dict(),
-                    os.path.join(weights_dir, 'weights_swa_{}.pt'.format(step_total)))
-            torch.save({
-                "step_total": step_total,
-                "last_epoch": epoch,
-                "model": model.state_dict(),
-                "swa_model": swa_model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "lr_scheduler": lr_scheduler.state_dict() if args.lr_schedule else None
-                }, chkpt_file)
-
+                # break if max steps reached
+                if step_total >= max_steps:
+                    # stop epoch
+                    break
+            if step_total >= max_steps:
+                # stop training
+                break
+            # save epoch to resume training later
+            save(chkpt_file, swa=step_total > swa_start_step)
+    # final save
+    save(out_file, swa=step_total > swa_start_step)
     # close & cleanup
     writer.close()
 
@@ -283,16 +320,21 @@ def argparser():
     )
     parser.add_argument("db", type=str)
     parser.add_argument("config", type=str)
+    parser.add_argument("--mod_ids", nargs='+', required=True, type=int)
     parser.add_argument("--prefix", default='.', type=str)
     parser.add_argument("--device", default=0, type=int)
-    parser.add_argument("--mod_ids", nargs='+', required=True, type=int)
-    parser.add_argument("--max_features", default=40, type=int)
     parser.add_argument("--min_score", default=1.0, type=float)
+    parser.add_argument("--max_features", default=40, type=int)
+    parser.add_argument("--batch_size", default=64, type=int)
+    parser.add_argument("--batch_echo", default=0, type=int)
+    parser.add_argument("--train_fraction", default=1.0, type=float)
     parser.add_argument("--lr", default=1.0, type=float)
     parser.add_argument("--lr_schedule", action='store_true')
-    parser.add_argument("--epochs", default=10, type=int)
-    parser.add_argument("--swa_start", default=5, type=int)
-    parser.add_argument("--batch_size", default=64, type=int)
-    parser.add_argument("--echo", default=0, type=int)
     parser.add_argument("--clip_grad_norm", default=1.5, type=float)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--epochs", default=10, type=int)
+    group.add_argument('--steps', type=int)
+    parser.add_argument("--swa_start", default=5, type=int)
+    parser.add_argument("--stats", action='store_true')
+
     return parser
