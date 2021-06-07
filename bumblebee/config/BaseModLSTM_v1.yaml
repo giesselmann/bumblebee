@@ -12,5 +12,5 @@ params:
         - 256
     rnn_type: 'LSTM'
     d_model: 512
-    num_layer: 4
+    num_layer: 3
     num_classes: 2
