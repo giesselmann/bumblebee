@@ -332,7 +332,7 @@ def argparser():
     parser.add_argument("--lr_schedule", action='store_true')
     parser.add_argument("--clip_grad_norm", default=1.5, type=float)
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--epochs", default=10, type=int)
+    group.add_argument("--epochs", type=int)
     group.add_argument('--steps', type=int)
     parser.add_argument("--swa_start", default=5, type=int)
     parser.add_argument("--stats", action='store_true')
