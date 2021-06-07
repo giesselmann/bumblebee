@@ -284,10 +284,10 @@ def main(args):
                     with open(os.path.join(output_dir, 'stats.tsv'), 'a') as fp:
                         print('\t'.join([
                             str(step_total),
-                            train_loss.mean(),
-                            train_acc.mean(),
-                            eval_loss.mean(),
-                            eval_acc.mean()]), file=fp)
+                            str(train_loss.mean()),
+                            str(train_acc.mean()),
+                            str(eval_loss.mean()),
+                            str(eval_acc.mean())]), file=fp)
                 # progress
                 pbar.update(1)
                 pbar.set_postfix_str("Train: {:.3f} / {:.3f} Eval: {:.3f} / {:.3f}".format(
