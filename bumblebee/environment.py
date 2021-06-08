@@ -153,7 +153,7 @@ class EnvReadEvents():
                 self.matches / (self.seq_step_idx or 1) < 0.5 or
                 done)
         info = {
-            'matches': self.matches / self.target_seq_len,
+            'matches': self.matches / (self.seq_step_idx or 1),
             'shifts': self.shifts / self.episode_ev_len,
             'complete': self.seq_step_idx / self.target_seq_len,
             'false_stops': self.false_stops / self.target_seq_len
