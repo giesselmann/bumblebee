@@ -47,7 +47,7 @@ agent:
     exploration_rate_min: 0.03
     memory_size: 50000      # replay memory
     batch_size: 32
-    learn_every: 8
+    learn_every: 4
     sync_every: 1000        # sync online and target
     gamma: 0.9
 
@@ -60,9 +60,12 @@ params:
     input_nn_layer:
         - 64
         - 128
-    d_model: 128
+        - 256
+    d_model: 512
     num_heads: 4
     num_layer: 3
     output_nn_layer:
+        - 256
         - 128
         - 64
+        - 32
