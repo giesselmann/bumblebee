@@ -1,0 +1,68 @@
+# \CONFIG\-------------------------------------------------------------------------
+#
+#  CONTENTS      : BaseEncoder_v1
+#
+#  DESCRIPTION   : Nanopore Basecalling
+#
+#  RESTRICTIONS  : none
+#
+#  REQUIRES      : none
+#
+# ---------------------------------------------------------------------------------
+# Copyright 2021 Pay Giesselmann, Max Planck Institute for Molecular Genetics
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Written by Pay Giesselmann
+# ---------------------------------------------------------------------------------
+state_length: 50
+alphabet: ACGT
+
+# RF env
+env:
+    min_seq_length: 500
+    max_seq_length: 5000
+    max_events: 200
+    min_score: 1.0
+    clip: 15
+
+
+# RF agent
+agent:
+    burnin: 1000           # min. experiences before training
+    pretrain_rate: 0.0
+    pretrain_rate_decay: 0.99999
+    exploration_rate: 1.0
+    exploration_rate_decay: 0.99999975
+    exploration_rate_min: 0.03
+    memory_size: 50000      # replay memory
+    batch_size: 32
+    learn_every: 8
+    sync_every: 1000        # sync online and target
+    gamma: 0.9
+
+
+# Trading model
+model: 'BaseTransformer'
+params:
+    num_features: 6
+    dropout: 0.1
+    input_nn_layer:
+        - 64
+        - 128
+    d_model: 128
+    num_heads: 4
+    num_layer: 3
+    output_nn_layer:
+        - 128
+        - 64
