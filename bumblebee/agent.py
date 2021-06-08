@@ -88,6 +88,9 @@ class Agent():
         # act
         self.num_actions = len(alphabet) + 3
         self.alphabet_size = len(alphabet)
+        # pretrain
+        self.pretrain_rate = config.get('pretrain_rate') or 0.0
+        self.pretrain_rate_decay = config.get('pretrain_rate_decay') or 0.9999
         # explore
         self.exploration_rate = config.get('exploration_rate') or 1.0
         self.exploration_rate_decay =  config.get('exploration_rate_decay') or 0.99999
@@ -112,18 +115,21 @@ class Agent():
                     diagonal=1) == 1).to(device)
 
     def __info__(self):
-        return {'exploration_rate': self.exploration_rate}
+        return {'exploration_rate': self.exploration_rate,
+                'pretrain_rate': self.pretrain_rate}
 
     def state_dict(self):
         return {'optimizer': self.optimizer.state_dict(),
                 'net': self.net.state_dict(),
                 'exploration_rate': self.exploration_rate,
+                'pretrain_rate': self.pretrain_rate,
                 'total_step': self.total_step}
 
     def load_state_dict(self, state_dict):
         self.optimizer.load_state_dict(state_dict['optimizer'])
         self.net.load_state_dict(state_dict['net'])
         self.exploration_rate = state_dict['exploration_rate']
+        self.pretrain_rate = state_dict['pretrain_rate']
         self.total_step = state_dict['total_step']
         log.debug("Loaded state dict.")
 
@@ -135,35 +141,31 @@ class Agent():
                     input_data=state_t,
                     device=self.device,
                     depth=1)
-        # Choose random action
+        # EXPLORE
         # 0 : SHIFT
         # 1 : SEQ START
         # 2 : SEQ STOP
         # 3 : ALPHABET
-        rnd_action_idx = np.random.choice(self.num_actions,
-            p=[0.01, 0, 0.01] +
-            [(1-0.02)/self.alphabet_size]*self.alphabet_size)
-        # PRE-TRAIN
-        if self.total_step < self.pre_train and next_action is not None:
-            if np.random.rand() < self.exploration_rate:
-                action_idx = rnd_action_idx
-            else:
-                action_idx = next_action
+        if np.random.rand() < self.exploration_rate:
+            action_idx = np.random.choice(self.num_actions,
+                p=[0.01, 0, 0.01] +
+                [(1-0.02)/self.alphabet_size]*self.alphabet_size)
+        # PRETRAIN
+        elif np.random.rand() < self.pretrain_rate and next_action is not None:
+            action_idx = next_action
+        # EXPLOIT
         else:
-            # EXPLORE
-            if np.random.rand() < self.exploration_rate:
-                action_idx = rnd_action_idx
-            # EXPLOIT
-            else:
-                state = states2tensor([state], device=self.device)
-                with torch.no_grad():
-                    action_values = self.net(*state,
-                            mask=self.mask,
-                            model="online")
-                    action_idx = torch.argmax(action_values, axis=1).item()
-            # decrease exploration_rate
-            self.exploration_rate *= self.exploration_rate_decay
-            self.exploration_rate = max(self.exploration_rate_min, self.exploration_rate)
+            state = states2tensor([state], device=self.device)
+            with torch.no_grad():
+                action_values = self.net(*state,
+                        mask=self.mask,
+                        model="online")
+                action_idx = torch.argmax(action_values, axis=1).item()
+        # decrease exploration_rate
+        self.exploration_rate *= self.exploration_rate_decay
+        self.exploration_rate = max(self.exploration_rate_min, self.exploration_rate)
+        # decrease pretrain rate
+        self.pretrain_rate *= self.pretrain_rate_decay
         # increment step
         self.curr_step += 1
         self.total_step += 1

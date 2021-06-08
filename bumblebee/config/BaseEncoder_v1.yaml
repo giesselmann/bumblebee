@@ -31,8 +31,8 @@ alphabet: ACGT
 # RF env
 env:
     min_seq_length: 500
-    max_seq_length: 2000
-    max_events: 100
+    max_seq_length: 5000
+    max_events: 200
     min_score: 1.0
     clip: 15
 
@@ -40,15 +40,16 @@ env:
 # RF agent
 agent:
     burnin: 1000           # min. experiences before training
-    pre_train: 50000
-    exploration_rate: 0.1
+    pretrain_rate: 1.0
+    pretrain_rate_decay: 0.9999975
+    exploration_rate: 0.2
     exploration_rate_decay: 0.99999975
     exploration_rate_min: 0.01
     memory_size: 50000      # replay memory
     batch_size: 32
     learn_every: 8
     sync_every: 1000        # sync online and target
-    gamma: 0.99
+    gamma: 0.9
 
 
 # Trading model
@@ -65,7 +66,7 @@ params:
     num_heads: 8
     num_layer: 3
     output_nn_layer:
-        - 256
+        - 512
         - 256
         - 128
         - 64
