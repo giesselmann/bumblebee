@@ -344,7 +344,7 @@ def argparser():
     parser.add_argument("--train_fraction", default=1.0, type=float)
     parser.add_argument("--lr", default=1.0, type=float)
     parser.add_argument("--lr_schedule", default=None,
-        choices=['warmup', 'cyclic'])
+        choices=['warmup', 'cyclic', 'plateau'])
     parser.add_argument("--clip_grad_norm", default=1.5, type=float)
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--epochs", type=int)
