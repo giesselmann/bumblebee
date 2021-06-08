@@ -149,9 +149,16 @@ def main(args):
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
     optimizer = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
-    if args.lr_schedule:
+    if args.lr_schedule == 'warmup':
         lr_scheduler = WarmupScheduler(optimizer, config['params']['d_model'],
         warmup_steps=4000)
+    elif args.lr_schedule == 'cyclic':
+        lr_scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer,
+            max_lr=args.lr,
+            base_lr=args.lr/100,
+            step_size_up=4000,
+            step_size_down=1000,
+            cycle_momentum=False)
     # load checkpoint
     chkpt_file = os.path.join(args.prefix, 'latest.chkpt')
     out_file = os.path.join(args.prefix, 'final.chkpt')
@@ -329,7 +336,8 @@ def argparser():
     parser.add_argument("--batch_echo", default=0, type=int)
     parser.add_argument("--train_fraction", default=1.0, type=float)
     parser.add_argument("--lr", default=1.0, type=float)
-    parser.add_argument("--lr_schedule", action='store_true')
+    parser.add_argument("--lr_schedule", default=None,
+        choices=['warmup', 'cyclic'])
     parser.add_argument("--clip_grad_norm", default=1.5, type=float)
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--epochs", type=int)
