@@ -32,7 +32,7 @@ alphabet: ACGT
 env:
     min_seq_length: 500
     max_seq_length: 2000
-    max_events: 1000
+    max_events: 500
     min_score: 1.0
     clip: 15
 

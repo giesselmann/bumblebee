@@ -115,7 +115,7 @@ class EnvReadEvents():
         done = False
         if action == 0:
             # SHIFT
-            reward = 0.1
+            reward = 0.0
             self.event_step_idx = min(
                 self.event_step_idx + 10,
                 self.episode_ev_len - self.state_length)

@@ -141,7 +141,7 @@ class Agent():
             # 2 : SEQ STOP
             # 3 : ALPHABET
             action_idx = np.random.choice(self.num_actions,
-                p=[0.1, 0, 0.01] + [(1-0.11)/self.alphabet_size]*self.alphabet_size)
+                p=[0.01, 0, 0.01] + [(1-0.02)/self.alphabet_size]*self.alphabet_size)
         # EXPLOIT
         else:
             state = states2tensor([state], device=self.device)
