@@ -159,6 +159,12 @@ def main(args):
             step_size_up=4000,
             step_size_down=1000,
             cycle_momentum=False)
+    elif args.lr_schedule == 'plateau':
+        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+            mode='max',
+            patience=10000,
+            threshold=0.001,
+            min_lr=args.lr/100)
     # load checkpoint
     chkpt_file = os.path.join(args.prefix, 'latest.chkpt')
     out_file = os.path.join(args.prefix, 'final.chkpt')
@@ -275,7 +281,9 @@ def main(args):
                 if step_total > swa_start_step:
                     swa_model.update_parameters(model)
                 # learning rate
-                if args.lr_schedule:
+                if args.lr_schedule and args.lr_schedule == 'plateau':
+                    lr_scheduler.step(eval_acc.mean())
+                elif args.lr_schedule:
                     lr_scheduler.step()
                 # eval step
                 if step % eval_rate == 0:
