@@ -110,6 +110,7 @@ def main(args):
     if os.path.isfile(chkpt_file):
         checkpoint = torch.load(chkpt_file)
         agent.load_state_dict(checkpoint['agent'])
+        env.load_state_dict(checkpoint['env'])
         step = checkpoint['step']
         log.info("Resume training at step {}.".format(step))
 
@@ -136,9 +137,11 @@ def main(args):
                 step += 1
                 # save checkpoint
                 if step % args.save_every == 0:
-                    agent_state = agent.state_dict()
-                    torch.save({'agent': agent_state,
-                            'step': step}, chkpt_file)
+                    torch.save({
+                            'agent': agent.state_dict(),
+                            'env':env.state_dict()
+                            'step': step},
+                        chkpt_file)
             for key, value in env_info.items():
                 writer.add_scalar("env/{}".format(key), value, step)
 

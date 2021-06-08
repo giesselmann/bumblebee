@@ -153,7 +153,6 @@ class BaseTransformer(torch.nn.Module):
         return action
 
     def _reset_parameters(self):
-        r"""Initiate parameters in the transformer model."""
         for p in self.parameters():
             if p.dim() > 1:
                 torch.nn.init.xavier_uniform_(p)

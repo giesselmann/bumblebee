@@ -53,6 +53,8 @@ class EnvReadEvents():
         self.min_seq_length = config.get('min_seq_length') or 500
         self.max_seq_length =  config.get('max_seq_length') or 10000
         self.max_events = config.get('max_events')
+        self.teacher_force = config.get('teacher_force') or 0.0
+        self.teacher_force_decay = config.get('teacher_force_decay') or 0.9999
         self.alphabet = alphabet
         self.encode = {c:i+1 for i, c in enumerate('^$' + self.alphabet)}
         self.num_actions = len(self.encode) + 1
@@ -74,6 +76,12 @@ class EnvReadEvents():
             if algn is not None:
                 read, df_events, _ = algn
                 yield EnvReadEventsEpisode(read, df_events)
+
+    def state_dict(self):
+        return {'teacher_force': self.teacher_force}
+
+    def load_state_dict(self, state_dict):
+        self.teacher_force = state_dict['teacher_force']
 
     def __encode_sequence__(self, sequence):
         return np.array([self.encode.get(c) or 0 for c in sequence], dtype=np.int64)
@@ -145,8 +153,12 @@ class EnvReadEvents():
                     # False stop token
                     reward -= 1
                     self.false_stops += 1
-            self.predicted_seq[self.seq_step_idx+self.state_length] = action
+            if np.random.rand() < self.teacher_force:
+                self.predicted_seq[self.seq_step_idx+self.state_length] = self.target_seq[self.seq_step_idx]
+            else:
+                self.predicted_seq[self.seq_step_idx+self.state_length] = action
             self.seq_step_idx = min(self.seq_step_idx + 1, self.target_seq_len)
+        self.teacher_force *= self.teacher_force_decay
         next_state = self.__get_state__()
         next_action = self.__get_next_action__()
         done = (self.seq_step_idx == self.target_seq_len or
