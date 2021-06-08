@@ -108,7 +108,7 @@ class EnvReadEvents():
             self.episode_events = self.episode_events[:self.max_events]
         # padding
         self.episode_events = np.concatenate([self.episode_events,
-            np.zeros((self.state_length, len(self.event_columns), dtype=np.float32))])
+            np.zeros((self.state_length, len(self.event_columns)), dtype=np.float32)])
         self.target_seq = self.__encode_sequence__(episode.read.ref_span.seq[
             events.sequence_offset.min():
             events.sequence_offset.max() + self.pm.k] + '$')
