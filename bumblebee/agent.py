@@ -217,7 +217,7 @@ class Agent():
         self.net.target.load_state_dict(self.net.online.state_dict())
 
     def learn(self):
-        if self.curr_step % (self.sync_every * self.learn_every) == 0:
+        if self.curr_step % (self.sync_every) == 0:
             self.sync_Q_target()
         if self.curr_step < self.burnin:
             return None, None, self.__info__()
