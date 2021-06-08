@@ -137,7 +137,7 @@ class Agent():
         # SUMMARY
         if self.curr_step == 0:
             state_t = states2tensor([state], device=self.device)
-            summary(self.net.target,
+            summary(self.net.online,
                     input_data=state_t,
                     device=self.device,
                     depth=1)
