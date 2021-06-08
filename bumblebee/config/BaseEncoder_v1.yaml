@@ -32,7 +32,7 @@ alphabet: ACGT
 env:
     min_seq_length: 500
     max_seq_length: 2000
-    max_events: 500
+    max_events: 1000
     min_score: 1.0
     clip: 15
 
@@ -47,7 +47,7 @@ agent:
     batch_size: 32
     learn_every: 8
     sync_every: 1000        # sync online and target
-    gamma: 0.9
+    gamma: 0.99
 
 
 # Trading model
@@ -57,10 +57,10 @@ params:
     dropout: 0.1
     embedding_dim: 32
     input_nn_layer:
-        - 32
         - 64
         - 128
-    d_model: 256
+        - 256
+    d_model: 512
     num_heads: 8
     num_layer: 3
     output_nn_layer:
