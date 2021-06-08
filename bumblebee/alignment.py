@@ -56,7 +56,7 @@ def decode_md(seq, cigar, md):
     ref_seq = np.fromiter(''.join(['-' * int(x) if x.isdigit() else x.strip('^') for x in ops]).encode('ASCII'), dtype=np.uint8)
     seq_masked = np.frombuffer(seq.encode('ASCII'), dtype=np.uint8)[cigar_ops_mask(cigar, include='M=X', exclude='SI')]
     ref_seq[ref_mask] = seq_masked[seq_mask]
-    return ref_seq.tostring().decode('utf-8')
+    return ref_seq.tostring().decode('utf-8').upper()
 
 
 def reverse_complement(seq):
@@ -85,7 +85,7 @@ class AlignmentIndex():
                         # TODO implement ref lookup from fasta
                         seq = ''
                     else:
-                        seq = mapping.seq
+                        seq = mapping.seq.upper()
                     try:
                         ref_span = decode_md(seq, mapping.cigarstring, mapping.tags['MD'][1])
                     except KeyError:
@@ -96,5 +96,5 @@ class AlignmentIndex():
                     yield ReferenceSpan(qname=mapping.query_name,
                                         rname=bam.get_reference_name(mapping.refID),
                                         pos=mapping.pos,
-                                        seq=ref_span, 
+                                        seq=ref_span,
                                         is_reverse=mapping.is_reverse)

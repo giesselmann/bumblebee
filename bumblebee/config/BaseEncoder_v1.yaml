@@ -1,6 +1,6 @@
 # \CONFIG\-------------------------------------------------------------------------
 #
-#  CONTENTS      : BaseModEncoder_v2
+#  CONTENTS      : BaseEncoder_v1
 #
 #  DESCRIPTION   : Nanopore Basecalling
 #
@@ -25,24 +25,46 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-model: BaseModEncoder_v2
+state_length: 50
+alphabet: ACGT
+
+# RF env
+env:
+    min_seq_length: 500
+    max_seq_length: 2000
+    max_events: 500
+    min_score: 1.0
+    clip: 15
+
+
+# RF agent
+agent:
+    burnin: 10000           # min. experiences before training
+    exploration_rate: 1.0
+    exploration_rate_decay: 0.9999975
+    exploration_rate_min: 0.05
+    memory_size: 50000      # replay memory
+    batch_size: 32
+    learn_every: 8
+    sync_every: 1000        # sync online and target
+    gamma: 0.9
+
+
+# Trading model
+model: 'BaseEncoder'
 params:
     num_features: 6
-    feature_window: 20
-    num_kmers: 4096
-    embedding_dim: 64
-    padding_idx: 0
     dropout: 0.1
-    input_nn_dims:
+    embedding_dim: 32
+    input_nn_layer:
+        - 32
+        - 64
         - 128
-        - 128
-        - 256
-    d_model: 512
-    num_heads: 4
+    d_model: 256
+    num_heads: 8
     num_layer: 3
-    output_nn_dims:
-        - 512
+    output_nn_layer:
+        - 256
         - 256
         - 128
         - 64
-    num_classes: 2

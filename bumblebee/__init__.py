@@ -67,7 +67,7 @@ def main():
     )
     parser.add_argument('-v', '--version',
         action='version', version='%(prog)s {}'.format(__version__))
-    parser.add_argument('--log', type=log_level, metavar='level', default='debug',
+    parser.add_argument('--log', type=log_level, metavar='level', default='info',
         choices=['error', 'warning', 'info', 'debug'], help='Log level')
 
     subparsers = parser.add_subparsers(

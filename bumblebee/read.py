@@ -29,7 +29,7 @@ import os, re, string
 import random
 import itertools
 import parasail
-import pkg_resources
+import pkg_resources as pkg
 import numpy as np
 import pandas as pd
 from scipy import ndimage
@@ -56,13 +56,16 @@ class Pattern():
 
 
 class ReadNormalizer():
-    def __init__(self, norm_q=2.5e-2, bins=100, clip=1.2, edge_threshold=0.3):
+    def __init__(self, norm_q=2.5e-2, bins=100,
+            clip=1.2, edge_threshold=0.3,
+            max_event_len=40):
         assert clip >= 1.0
         self.norm_q = norm_q
         self.bins = bins
         self.clip = clip
         self.edge_filter = np.array([0, 3, -3])
         self.edge_threshold = edge_threshold
+        self.max_event_len = max_event_len
         pm_hist, _ = np.histogram(np.random.normal(0, clip/3, 1000), bins, range=(-clip, clip), density=True)
         cdf = pm_hist.cumsum()
         self.cdf = cdf / cdf[-1] * 2 - 1
@@ -92,11 +95,13 @@ class ReadNormalizer():
         return df
 
     def __event_compression__(self, df):
+        def std(x):
+            return np.std(x, ddof=0)
         df_event = df.groupby(by='event_id', as_index=False).agg(
             event_min=('signal', 'min'),
             event_mean=('signal', 'mean'),
             event_median=('signal', 'median'),
-            event_std=('signal', 'std'),
+            event_std=('signal', std),
             event_max=('signal', 'max'),
             event_ticks=('signal', 'count')
         )
@@ -120,6 +125,8 @@ class ReadNormalizer():
     def events(self, read):
         df_edges = self.__edges__(self.norm(read.raw_signal))
         df_events = self.__event_compression__(df_edges)
+        df_events['event_length'] = np.clip(df_events.event_ticks,
+            0, self.max_event_len) / self.max_event_len
         return df_events
 
 
@@ -127,14 +134,12 @@ class ReadNormalizer():
 
 class ReadAligner():
     def __init__(self, normalizer,
-                 alphabet_size=32,
-                 max_event_len=40):
+                 alphabet_size=32):
         self.normalizer = normalizer
         self.alphabet_size = alphabet_size
-        self.max_event_len = max_event_len
         assert alphabet_size <= len(string.ascii_letters)
         self.alphabet = string.ascii_letters[:alphabet_size]
-        self.pm = PoreModel(pkg_resources.resource_filename('bumblebee',
+        self.pm = PoreModel(pkg.resource_filename('bumblebee',
             'data/r9.4_450bps.model'))
         self.__init_matrix__(self.alphabet)
 
@@ -183,8 +188,6 @@ class ReadAligner():
             df_events.sequence_offset.astype(np.int32)]
         df_events['kmer'] = [self.pm.idx(k) for k in kmer]
         # clip and normalize event lengths
-        df_events['event_length'] = np.clip(df_events.event_ticks,
-            0, self.max_event_len) / self.max_event_len
         df_events.set_index('sequence_offset', inplace=True, drop=False)
         return score, df_events
 
