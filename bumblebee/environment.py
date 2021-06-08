@@ -85,8 +85,7 @@ class EnvReadEvents():
         # pandas slice [begin, end]
         ev_slice = np.s_[self.event_step_idx:
             self.event_step_idx+self.state_length-1]
-        events = self.episode_events.loc[ev_slice,
-            self.event_columns].to_numpy().astype(np.float32)
+        events = self.episode_events[ev_slice]
         sequence_token = self.predicted_seq[seq_slice]
         state = (events, sequence_token)
         return state
