@@ -43,7 +43,7 @@ agent:
     pretrain_rate: 0.0
     pretrain_rate_decay: 0.99999
     exploration_rate: 1.0
-    exploration_rate_decay: 0.9999975
+    exploration_rate_decay: 0.99999
     exploration_rate_min: 0.03
     memory_size: 50000      # replay memory
     batch_size: 32

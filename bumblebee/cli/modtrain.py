@@ -162,8 +162,9 @@ def main(args):
     elif args.lr_schedule == 'plateau':
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
             mode='max',
+            factor=0.5,
             patience=10000,
-            cooldown=10000)
+            cooldown=20000)
     # load checkpoint
     chkpt_file = os.path.join(args.prefix, 'latest.chkpt')
     out_file = os.path.join(args.prefix, 'final.chkpt')
