@@ -79,32 +79,30 @@ class EnvReadEvents():
         return np.array([self.encode.get(c) or 0 for c in sequence], dtype=np.int64)
 
     def __get_state__(self):
-        # numpy slice [begin, end)
         seq_slice = np.s_[self.seq_step_idx:
             self.seq_step_idx+self.state_length]
-        # pandas slice [begin, end]
         ev_slice = np.s_[self.event_step_idx:
-            self.event_step_idx+self.state_length-1]
-        events = self.episode_events[ev_slice]
+            self.event_step_idx+self.state_length]
+        events = self.episode_events[ev_slice, :]
         sequence_token = self.predicted_seq[seq_slice]
         state = (events, sequence_token)
         return state
 
     def __get_next_action__(self):
-        if self.seq_step_idx > self.event_step_idx:
+        if self.seq_step_idx > self.event_step_idx + self.state_length/2:
             action = 0
         else:
-            action = self.predicted_seq[self.seq_step_idx]
+            action = self.target_seq[self.seq_step_idx] if self.seq_step_idx < self.target_seq_len else 2
         return action
 
     def reset(self, episode):
         self.seq_step_idx = 0
         self.event_step_idx = 0
         events = episode.events.reset_index(drop=True)
+        if self.max_events:
+            events = events[:self.max_events]
         self.episode_events = events.loc[:,
             self.event_columns].to_numpy().astype(np.float32)
-        if self.max_events:
-            self.episode_events = self.episode_events[:self.max_events]
         # padding
         self.episode_events = np.concatenate([self.episode_events,
             np.zeros((self.state_length, len(self.event_columns)), dtype=np.float32)])
@@ -115,11 +113,11 @@ class EnvReadEvents():
             dtype=np.int64)
         self.predicted_seq[:self.state_length] = self.__encode_sequence__(('^' * self.state_length))
         self.target_seq_len = len(self.target_seq)
-        self.episode_ev_len = len(self.episode_events)
+        self.episode_ev_len = self.episode_events.shape[0]
         self.matches = 0
         self.shifts = 0
         self.false_stops = 0
-        return self.__get_state__()
+        return self.__get_state__(), self.__get_next_action__()
 
     def step(self, action):
         # actions are SHIFT, START, STOP, Tokens[...]
