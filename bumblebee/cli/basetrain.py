@@ -139,7 +139,7 @@ def main(args):
                 if step % args.save_every == 0:
                     torch.save({
                             'agent': agent.state_dict(),
-                            'env':env.state_dict()
+                            'env': env.state_dict(),
                             'step': step},
                         chkpt_file)
             for key, value in env_info.items():
