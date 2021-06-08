@@ -151,7 +151,7 @@ class EnvReadEvents():
         next_action = self.__get_next_action__()
         done = (self.seq_step_idx == self.target_seq_len or
                     (self.seq_step_idx > 20 and
-                    self.matches / (self.seq_step_idx or 1) < 0.5) or
+                    self.matches / self.seq_step_idx < 0.5) or
                 done)
         info = {
             'matches': self.matches / (self.seq_step_idx or 1),
