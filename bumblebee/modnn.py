@@ -123,8 +123,7 @@ class BaseModLSTM_v2(torch.nn.Module):
         r3 = self.rnn3(inner, lengths)
         r4 = self.rnn4(inner, lengths)
         # concat and reduce to num_classes
-        inner = self.linear2(torch.cat([r1, r2, r3, r4], dim=-1))
-        out = torch.nn.functional.softmax(inner, dim=1)
+        out = self.linear2(torch.cat([r1, r2, r3, r4], dim=-1))
         return out, None, {}
 
 

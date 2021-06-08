@@ -149,10 +149,13 @@ class EnvReadEvents():
             self.seq_step_idx = min(self.seq_step_idx + 1, self.target_seq_len)
         next_state = self.__get_state__()
         next_action = self.__get_next_action__()
-        done = self.seq_step_idx == self.target_seq_len or done
+        done = (self.seq_step_idx == self.target_seq_len or
+                self.matches / (self.seq_step_idx or 1) < 0.5 or
+                done)
         info = {
             'matches': self.matches / self.target_seq_len,
             'shifts': self.shifts / self.episode_ev_len,
+            'complete': self.seq_step_idx / self.target_seq_len,
             'false_stops': self.false_stops / self.target_seq_len
             }
         return (next_state,
