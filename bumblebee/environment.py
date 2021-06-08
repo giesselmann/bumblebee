@@ -115,7 +115,7 @@ class EnvReadEvents():
         done = False
         if action == 0:
             # SHIFT
-            reward = 0.0
+            reward = np.clip((self.seq_step_idx - self.event_step_idx)/10, -2, 2)
             self.event_step_idx = min(
                 self.event_step_idx + 10,
                 self.episode_ev_len - self.state_length)
