@@ -40,8 +40,8 @@ env:
 # RF agent
 agent:
     burnin: 1000           # min. experiences before training
-    pretrain_rate: 1.0
-    pretrain_rate_decay: 0.9999975
+    pretrain_rate: 0.8
+    pretrain_rate_decay: 0.99999
     exploration_rate: 0.2
     exploration_rate_decay: 0.99999975
     exploration_rate_min: 0.01

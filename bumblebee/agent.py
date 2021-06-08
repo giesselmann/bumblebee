@@ -146,12 +146,15 @@ class Agent():
         # 1 : SEQ START
         # 2 : SEQ STOP
         # 3 : ALPHABET
-        if np.random.rand() < self.exploration_rate:
+        choice = np.random.choice(['explore', 'pre', 'exploit'],
+            p=[self.exploration_rate, self.pretrain_rate,
+                (1-(self.exploration_rate + self.pretrain_rate))])
+        if choice == 'explore':
             action_idx = np.random.choice(self.num_actions,
                 p=[0.01, 0, 0.01] +
                 [(1-0.02)/self.alphabet_size]*self.alphabet_size)
         # PRETRAIN
-        elif np.random.rand() < self.pretrain_rate and next_action is not None:
+        elif choice == 'pre' and next_action is not None:
             action_idx = next_action
         # EXPLOIT
         else:
