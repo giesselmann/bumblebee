@@ -126,7 +126,7 @@ class EnvReadEvents():
             # SHIFT
             reward = np.clip((self.seq_step_idx - self.event_step_idx)/10, -2, 2)
             self.event_step_idx = min(
-                self.event_step_idx + 10,
+                self.event_step_idx + 1,
                 self.episode_ev_len - self.state_length)
             self.shifts += 1
             done = self.event_step_idx == self.episode_ev_len - self.state_length
