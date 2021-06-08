@@ -119,14 +119,15 @@ def main(args):
     # train it!
     for epoch in range(args.epochs):
         for episode in tqdm.tqdm(env.episodes(), desc='Reads'):
-            state = env.reset(episode)
+            state, action = env.reset(episode)
             done = False
             while not done:
                 action = agent.act(state)
-                next_state, reward, done, env_info = env.step(action)
+                next_state, reward, done, next_action, env_info = env.step(action)
                 agent.cache(state, next_state, action, reward, done)
                 q, loss, agent_info = agent.learn()
                 state = next_state
+                action = next_action
                 if loss is not None:
                     writer.add_scalar('agent/loss', loss, step)
                     writer.add_scalar('agent/q', q, step)

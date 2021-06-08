@@ -91,15 +91,27 @@ class EnvReadEvents():
         state = (events, sequence_token)
         return state
 
+    def __get_next_action__(self):
+        if self.seq_step_idx > self.event_step_idx:
+            action = 0
+        else:
+            action = self.predicted_seq[self.seq_step_idx]
+        return action
+
     def reset(self, episode):
         self.seq_step_idx = 0
         self.event_step_idx = 0
-        self.episode_events = episode.events.reset_index(drop=True)
+        events = episode.events.reset_index(drop=True)
+        self.episode_events = events.loc[:,
+            self.event_columns].to_numpy().astype(np.float32)
         if self.max_events:
             self.episode_events = self.episode_events[:self.max_events]
+        # padding
+        self.episode_events = np.concatenate([self.episode_events,
+            np.zeros((self.state_length, len(self.event_columns), dtype=np.float32))])
         self.target_seq = self.__encode_sequence__(episode.read.ref_span.seq[
-            self.episode_events.sequence_offset.min():
-            self.episode_events.sequence_offset.max() + self.pm.k] + '$')
+            events.sequence_offset.min():
+            events.sequence_offset.max() + self.pm.k] + '$')
         self.predicted_seq = np.zeros(len(self.target_seq) + self.state_length,
             dtype=np.int64)
         self.predicted_seq[:self.state_length] = self.__encode_sequence__(('^' * self.state_length))
@@ -120,6 +132,7 @@ class EnvReadEvents():
                 self.event_step_idx + 10,
                 self.episode_ev_len - self.state_length)
             self.shifts += 1
+            done = self.event_step_idx == self.episode_ev_len - self.state_length
         else:
             # PREDICT
             if action == self.target_seq[self.seq_step_idx]:
@@ -138,6 +151,7 @@ class EnvReadEvents():
             self.predicted_seq[self.seq_step_idx+self.state_length] = action
             self.seq_step_idx = min(self.seq_step_idx + 1, self.target_seq_len)
         next_state = self.__get_state__()
+        next_action = self.__get_next_action__()
         done = self.seq_step_idx == self.target_seq_len or done
         info = {
             'matches': self.matches / self.target_seq_len,
@@ -147,4 +161,5 @@ class EnvReadEvents():
         return (next_state,
                 reward,
                 done,
+                next_action,
                 info)

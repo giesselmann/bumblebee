@@ -32,7 +32,7 @@ alphabet: ACGT
 env:
     min_seq_length: 500
     max_seq_length: 2000
-    max_events: 500
+    max_events: 100
     min_score: 1.0
     clip: 15
 
@@ -40,7 +40,8 @@ env:
 # RF agent
 agent:
     burnin: 10000           # min. experiences before training
-    exploration_rate: 1.0
+    pre_train: 10000
+    exploration_rate: 0.2
     exploration_rate_decay: 0.9999975
     exploration_rate_min: 0.05
     memory_size: 50000      # replay memory

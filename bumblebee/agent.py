@@ -102,6 +102,7 @@ class Agent():
         self.loss_fn = torch.nn.SmoothL1Loss()
         # learn
         self.burnin = config.get('burnin') or 1e4
+        self.pre_train = config.get('pre_train') or 0
         self.learn_every = config.get('learn_every') or 1
         self.sync_every = config.get('sync_every') or 2e3
         self.gamma = config.get('gamma') or 0.8
@@ -126,7 +127,7 @@ class Agent():
         self.total_step = state_dict['total_step']
         log.debug("Loaded state dict.")
 
-    def act(self, state):
+    def act(self, state, next_action=None):
         # SUMMARY
         if self.curr_step == 0:
             state_t = states2tensor([state], device=self.device)
@@ -134,22 +135,27 @@ class Agent():
                     input_data=state_t,
                     device=self.device,
                     depth=1)
-        # EXPLORE
-        if np.random.rand() < self.exploration_rate:
-            # 0 : SHIFT
-            # 1 : SEQ START
-            # 2 : SEQ STOP
-            # 3 : ALPHABET
-            action_idx = np.random.choice(self.num_actions,
-                p=[0.01, 0, 0.01] + [(1-0.02)/self.alphabet_size]*self.alphabet_size)
-        # EXPLOIT
+        # PRE-TRAIN
+        if self.total_step < self.pre_train and next_action is not None:
+            action_idx = next_action
         else:
-            state = states2tensor([state], device=self.device)
-            with torch.no_grad():
-                action_values = self.net(*state,
-                        mask=self.mask,
-                        model="online")
-                action_idx = torch.argmax(action_values, axis=1).item()
+            # EXPLORE
+            if np.random.rand() < self.exploration_rate:
+                # 0 : SHIFT
+                # 1 : SEQ START
+                # 2 : SEQ STOP
+                # 3 : ALPHABET
+                action_idx = np.random.choice(self.num_actions,
+                    p=[0.01, 0, 0.01] +
+                    [(1-0.02)/self.alphabet_size]*self.alphabet_size)
+            # EXPLOIT
+            else:
+                state = states2tensor([state], device=self.device)
+                with torch.no_grad():
+                    action_values = self.net(*state,
+                            mask=self.mask,
+                            model="online")
+                    action_idx = torch.argmax(action_values, axis=1).item()
         # decrease exploration_rate
         self.exploration_rate *= self.exploration_rate_decay
         self.exploration_rate = max(self.exploration_rate_min, self.exploration_rate)
