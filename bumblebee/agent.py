@@ -135,19 +135,24 @@ class Agent():
                     input_data=state_t,
                     device=self.device,
                     depth=1)
+        # Choose random action
+        # 0 : SHIFT
+        # 1 : SEQ START
+        # 2 : SEQ STOP
+        # 3 : ALPHABET
+        rnd_action_idx = np.random.choice(self.num_actions,
+            p=[0.01, 0, 0.01] +
+            [(1-0.02)/self.alphabet_size]*self.alphabet_size)
         # PRE-TRAIN
         if self.total_step < self.pre_train and next_action is not None:
-            action_idx = next_action
+            if np.random.rand() < self.exploration_rate:
+                action_idx = rnd_action_idx
+            else:
+                action_idx = next_action
         else:
             # EXPLORE
             if np.random.rand() < self.exploration_rate:
-                # 0 : SHIFT
-                # 1 : SEQ START
-                # 2 : SEQ STOP
-                # 3 : ALPHABET
-                action_idx = np.random.choice(self.num_actions,
-                    p=[0.01, 0, 0.01] +
-                    [(1-0.02)/self.alphabet_size]*self.alphabet_size)
+                action_idx = rnd_action_idx
             # EXPLOIT
             else:
                 state = states2tensor([state], device=self.device)
@@ -156,9 +161,9 @@ class Agent():
                             mask=self.mask,
                             model="online")
                     action_idx = torch.argmax(action_values, axis=1).item()
-        # decrease exploration_rate
-        self.exploration_rate *= self.exploration_rate_decay
-        self.exploration_rate = max(self.exploration_rate_min, self.exploration_rate)
+            # decrease exploration_rate
+            self.exploration_rate *= self.exploration_rate_decay
+            self.exploration_rate = max(self.exploration_rate_min, self.exploration_rate)
         # increment step
         self.curr_step += 1
         self.total_step += 1

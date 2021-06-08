@@ -39,11 +39,11 @@ env:
 
 # RF agent
 agent:
-    burnin: 10000           # min. experiences before training
-    pre_train: 10000
-    exploration_rate: 0.2
-    exploration_rate_decay: 0.9999975
-    exploration_rate_min: 0.05
+    burnin: 1000           # min. experiences before training
+    pre_train: 50000
+    exploration_rate: 0.1
+    exploration_rate_decay: 0.99999975
+    exploration_rate_min: 0.01
     memory_size: 50000      # replay memory
     batch_size: 32
     learn_every: 8
