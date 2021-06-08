@@ -148,8 +148,8 @@ def main(args):
     # loss and optimizer
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
-    optimizer = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
     if args.lr_schedule == 'warmup':
+        optimizer = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
         lr_scheduler = WarmupScheduler(optimizer, config['params']['d_model'],
         warmup_steps=4000)
     elif args.lr_schedule == 'cyclic':
