@@ -133,18 +133,18 @@ class BaseTransformer(torch.nn.Module):
 
     def forward(self, events, sequence, mask=None):
         # sequence embedding
-        emb = self.embedding(sequence).permute(1, 0, 2)
+        tgt = self.embedding(sequence)
+        tgt = self.pos_encoder(tgt).permute(1, 0, 2)
         # event feature network
         # (batch_size, state_length, d_model)
         inner = self.input_nn(events)
-        # concat emb and signal features
         # positional encoding
         inner = self.pos_encoder(inner)
         # transformer encoder needs (state_length, batch_size, d_model)
         # Encoder is (C, N, L)
         memory = self.transformer_encoder(inner.permute(1, 0, 2),
             mask=mask)
-        inner = self.transformer_decoder(emb, memory,
+        inner = self.transformer_decoder(tgt, memory,
             tgt_mask=mask).permute(1, 0, 2)
         # (batch_size, state_length, num_actions)
         inner = self.output_nn(inner)
