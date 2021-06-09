@@ -196,8 +196,6 @@ class BaseModEncoder(torch.nn.Module):
         # (batch_size, num_classes)
         inner = torch.mul(inner, ~mask[:,:,None])
         out = torch.sum(inner, dim=1) / lengths[:,None]
-        # TODO check normalization, softmax can give nan
-        # out = torch.nn.functional.softmax(out, dim=1)
         return out, None, {}
 
 
@@ -272,8 +270,6 @@ class BaseModEncoder_v2(torch.nn.Module):
         # (batch_size, num_classes)
         inner = torch.mul(inner, ~mask[:,:,None])
         out = torch.sum(inner, dim=1) / lengths[:,None]
-        # TODO check normalization, softmax can give nan
-        # out = torch.nn.functional.softmax(out, dim=1)
         return out, None, {}
 
 
@@ -332,3 +328,97 @@ class BaseModACTEncoder(torch.nn.Module):
         out = torch.nn.functional.softmax(inner, dim=1)
         return out, act_loss, {'ponder_time': ponder_time,
                                'remainder': remainder}
+
+
+
+
+class BaseModTransformer(torch.nn.Module):
+    def __init__(self, max_features, config={}):
+        super(BaseModTransformer, self).__init__()
+        # default config
+        num_features = config.get("num_features") or 6
+        feature_window = config.get("feature_window") or 20
+        num_kmers = config.get('num_kmers') or 4096
+        padding_idx = config.get("padding_idx") or 0
+        dropout = config.get("dropout") or 0.1
+        input_nn_dims = config.get("input_nn_dims") or [64, 128, 256]
+        d_model = config.get("d_model") or 512
+        num_heads = config.get("num_heads") or 4
+        num_layer = config.get("num_layer") or 3
+        output_nn_dims = config.get("output_nn_dims") or [512, 256, 128, 64]
+        num_classes = config.get("num_classes") or 2
+        # layer
+        self.kmer_embedding = torch.nn.Embedding(
+                num_embeddings=num_kmers + 1,
+                embedding_dim=d_model,
+                padding_idx=padding_idx)
+        self.input_nn = ResidualNetwork(num_features,
+                d_model,
+                input_nn_dims,
+                dropout=dropout)
+        self.offset_embedding = torch.nn.Embedding(
+                num_embeddings=feature_window,
+                embedding_dim=d_model,
+                padding_idx=padding_idx)
+        # encoder
+        self.encoder_layer = torch.nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=num_heads,
+                dim_feedforward=d_model*4,
+                activation='relu',
+                dropout=dropout)
+        self.transformer_encoder = torch.nn.TransformerEncoder(
+                self.encoder_layer,
+                num_layers=num_layer,
+                norm=torch.nn.LayerNorm(d_model))
+        self.decoder_layer = torch.nn.TransformerDecoderLayer(
+                d_model=d_model,
+                nhead=num_heads,
+                dim_feedforward=d_model*4,
+                activation='relu',
+                dropout=dropout)
+        self.transformer_decoder = torch.nn.TransformerDecoder(
+                self.decoder_layer,
+                num_layers=num_layer,
+                norm=torch.nn.LayerNorm(d_model))
+        self.output_nn = ResidualNetwork(d_model,
+                num_classes,
+                output_nn_dims,
+                dropout=dropout)
+        self._reset_parameters()
+
+    def forward(self, lengths, kmers, offsets, features):
+        batch_size, max_len, n_features = features.size()
+        # (batch_size, max_len)
+        mask = torch.arange(max_len)[None, :] >= lengths[:, None]
+        mask = mask.cuda(features.get_device()) if features.is_cuda else mask
+        lengths = lengths.cuda(features.get_device()) if features.is_cuda else lengths
+        # kmer embedding (batch_size, max_len, d_model)
+        target = self.kmer_embedding(kmers)
+        # positional encoding
+        target = (target + self.offset_embedding(offsets)).permute(1, 0, 2)
+        # generate features as
+        # (batch_size, max_len, d_model)
+        inner = self.input_nn(features)
+        # positional encoding
+        inner = inner + self.offset_embedding(offsets)
+        # transformer encoder needs (max_len, batch_size, d_model)
+        memory = self.transformer_encoder(inner.permute(1, 0, 2),
+                        src_key_padding_mask=mask)
+        # decoder
+        inner = self.transformer_decoder(target, memory,
+                    tgt_key_padding_mask=mask,
+                    memory_key_padding_mask=mask).permute(1, 0, 2)
+        # get class label
+        # (batch_size, max_len, num_classes)
+        inner = self.output_nn(inner)
+        # melt to
+        # (batch_size, num_classes)
+        inner = torch.mul(inner, ~mask[:,:,None])
+        out = torch.sum(inner, dim=1) / lengths[:,None]
+        return out, None, {}
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
