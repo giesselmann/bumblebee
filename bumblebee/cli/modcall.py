@@ -58,7 +58,7 @@ class ModCaller(StateFunction):
         self.max_features = config['max_features']
         self.model = model
         self.device = device
-        self.batch_size = 32
+        self.batch_size = 64
 
     def __padded_tensor__(self, length, kmers, offsets, features):
         kmers_padd = np.zeros(self.max_features, dtype=np.int64)
@@ -203,7 +203,7 @@ def main(args):
         kwargs={})
     # predict in main Process using CUDA
     pid = '(PID: {})'.format(os.getpid())
-    with tqdm.tqdm(desc='Processing') as pbar:
+    with tqdm.tqdm(desc='Processing', unit='reads') as pbar:
         while True:
             try:
                 obj = aligner_queue.get(block=True, timeout=1)

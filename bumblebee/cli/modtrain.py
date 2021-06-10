@@ -317,6 +317,9 @@ def main(args):
                     break
             if step_total >= max_steps:
                 # stop training
+                if step_total % len(dl_train) == 0:
+                    # save checkpoint if end of epoch
+                    save(chkpt_file, swa=step_total > swa_start_step)
                 break
             # save epoch to resume training later
             save(chkpt_file, swa=step_total > swa_start_step)

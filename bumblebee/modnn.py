@@ -401,9 +401,9 @@ class BaseModTransformer(torch.nn.Module):
         # (batch_size, max_len, d_model)
         inner = self.input_nn(features)
         # positional encoding
-        inner = inner + self.offset_embedding(offsets)
+        inner = (inner + self.offset_embedding(offsets)).permute(1, 0, 2)
         # transformer encoder needs (max_len, batch_size, d_model)
-        memory = self.transformer_encoder(inner.permute(1, 0, 2),
+        memory = self.transformer_encoder(inner,
                         src_key_padding_mask=mask)
         # decoder
         inner = self.transformer_decoder(target, memory,
