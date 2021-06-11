@@ -52,7 +52,7 @@ class RecordWriter(StateFunction):
         read_normalizer = ReadNormalizer()
         self.read_aligner = ReadAligner(read_normalizer)
         self.site_counter = 0
-        self.pbar = tqdm.tqdm(desc='Inserting sites')
+        self.pbar = tqdm.tqdm(desc='Inserting mappings')
 
     def __del__(self):
         self.pbar.close()
@@ -93,8 +93,10 @@ def update_contexts(context_dict,
 def main(args):
     if args.command == 'insert':
         src = SourceProcess(ReadSource,
-            args=(args.fast5, args.bam),
-            kwargs={'min_seq_length':args.min_seq_length,
+            args=(args.fast5, args.bam, args.ref),
+            kwargs={'filter_secondary': args.filter_secondary,
+                    'filter_supplementary': args.filter_supplementary,
+                    'min_seq_length':args.min_seq_length,
                     'max_seq_length':args.max_seq_length})
         worker = WorkerProcess(src.output_queue, EventAligner,
             args=(),
@@ -157,6 +159,7 @@ def argparser():
     common = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter,
         add_help=False)
     common.add_argument("db", type=str, help='Training database')
+    common.add_argument("ref", type=str, metavar='str', help='Reference file')
     common.add_argument("--pattern", default='CG', type=str, metavar='',
         help='Sequence pattern for modification detection (default: %(default)s)')
     common.add_argument("--extension", default=7, type=int, metavar='int',
@@ -167,9 +170,11 @@ def argparser():
     p_insert.add_argument("bam", type=str, help='Alignment input (file/directory)')
     p_insert.add_argument("--mod_id", default=0, type=int, metavar='int',
         help='Modification ID of input data (default: %(default)s)')
-    p_insert.add_argument("--min_seq_length", default=2000, type=int, metavar='int',
+    p_insert.add_argument("--filter_secondary", action='store_true')
+    p_insert.add_argument("--filter_supplementary", action='store_true')
+    p_insert.add_argument("--min_seq_length", default=500, type=int, metavar='int',
         help='Minimum sequence length (default: %(default)s)')
-    p_insert.add_argument("--max_seq_length", default=10000, type=int, metavar='int',
+    p_insert.add_argument("--max_seq_length", default=20000, type=int, metavar='int',
         help='Maximum sequence length (default: %(default)s)')
     p_insert.add_argument("--min_score", default=0.0, type=float, metavar='float',
         help='Min. alignment score (default: %(default)s)')
@@ -177,8 +182,6 @@ def argparser():
         help='Worker (default: %(default)s)')
 
     p_index = subparsers.add_parser('index', help='Index database', parents=[common], add_help=True)
-    p_index.add_argument("ref", type=str, metavar='str',
-        help='Reference file for eval/train split')
     p_index.add_argument("--split", default=0.1, type=float, metavar='float',
         help='Ratio for eval/train split (default: %(default)s)')
 

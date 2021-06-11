@@ -27,8 +27,10 @@
 # ---------------------------------------------------------------------------------
 import os
 import re
+import logging
 
 
+log = logging.getLogger(__name__)
 
 
 # load reference in fasta format
@@ -68,6 +70,7 @@ class Reference:
                     raise StopIteration()
 
     def __load__(self):
+        log.info("Loading reference {}".format(self.ref_file))
         self._contigs = {name:seq for name, seq in self.__fastaIter__()}
         self.is_loaded = True
 

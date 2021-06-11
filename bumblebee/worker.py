@@ -39,17 +39,20 @@ log = logging.getLogger(__name__)
 
 # parse reads from fast5 and bam input
 class ReadSource(StateFunction):
-    def __init__(self, fast5, bam,
+    def __init__(self, fast5, bam, ref,
+                 filter_secondary=False, filter_supplementary=False,
                  min_seq_length=500, max_seq_length=10000):
         super(StateFunction).__init__()
-        self.read_counter = 0
+        self.mapping_counter = 0
         self.f5_idx = Fast5Index(fast5)
-        self.algn_idx = AlignmentIndex(bam)
+        self.algn_idx = AlignmentIndex(bam, ref,
+            filter_secondary=filter_secondary,
+            filter_supplementary=filter_supplementary)
         self.min_seq_length = min_seq_length
         self.max_seq_length = max_seq_length
 
     def __del__(self):
-        log.info("Loaded {} reads from disk.".format(self.read_counter))
+        log.info("Loaded {} mappings from disk.".format(self.mapping_counter))
 
     def call(self):
         for i, ref_span in enumerate(self.algn_idx.records()):
@@ -65,7 +68,7 @@ class ReadSource(StateFunction):
                 continue
             read = Read(read_signal, ref_span=ref_span)
             yield (read, )
-            self.read_counter += 1
+            self.mapping_counter += 1
 
 
 

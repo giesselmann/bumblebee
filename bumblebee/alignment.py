@@ -25,10 +25,15 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-import os, re
+import os, re, logging
 import bamnostic as bs
 import numpy as np
 from collections import namedtuple
+
+from bumblebee.ref import Reference
+
+
+log = logging.getLogger(__name__)
 
 
 ReferenceSpan = namedtuple('ReferenceSpan', ['qname', 'rname', 'pos', 'seq', 'is_reverse'])
@@ -39,6 +44,7 @@ def decode_cigar(cigar):
     ops = [(int(op[:-1]), op[-1]) for op in re.findall('(\d*\D)',cigar)]
     return ops
 
+
 # bool mask of cigar operations
 def cigar_ops_mask(cigar, include='M=X', exclude='DN'):
     flatten = lambda l: [item for sublist in l for item in sublist]
@@ -47,8 +53,9 @@ def cigar_ops_mask(cigar, include='M=X', exclude='DN'):
                                             else [False]*l if op in exclude
                                             else [] for l, op in dec_cigar]))
 
+
 # decode MD tag
-def decode_md(seq, cigar, md):
+def get_ref_from_md(seq, cigar, md):
     flatten = lambda l: [item for sublist in l for item in sublist]
     ops = [m[0] for m in re.findall(r'(([0-9]+)|([A-Z]|\^[A-Z]+))', md)]
     ref_mask = np.array(flatten([[True] * int(x) if x.isdigit() else [False] * len(x.strip('^')) for x in ops]))
@@ -67,34 +74,49 @@ def reverse_complement(seq):
 
 
 class AlignmentIndex():
-    def __init__(self, input):
+    def __init__(self, input, ref,
+            filter_secondary=False, filter_supplementary=False):
+        self.ref = Reference(ref)
+        self.filter_secondary = filter_secondary
+        self.filter_supplementary = filter_supplementary
         if os.path.isfile(input):
             self.batch_files = [input]
         elif os.path.isdir(input):
-            self.batch_files = [os.path.join(dirpath, f) for dirpath, _, files in os.walk(input) for f in files if f.endswith('.bam')]
+            self.batch_files = [os.path.join(dirpath, f)
+                for dirpath, _, files in os.walk(input)
+                    for f in files if f.endswith('.bam')]
+        elif input == '-' or input == 'stdin':
+            pass
+            # TODO implement sam parser
         else:
-            raise FileNotFoundError("Alignment input {} is not a file or directory.".format(input))
+            log.error("Alignment input {} is not a file or directory.".format(input))
+            raise FileNotFoundError(input)
+
+    def __parse_sam_mapping__(self, mapping):
+        pass
+
+    def __parse_bam_mapping__(self, bam, mapping):
+        rname = bam.get_reference_name(mapping.refID)
+        if mapping.seq != '*' and 'MD' in mapping.tags:
+            ref_span = get_ref_from_md(mapping.seq.upper(), mapping.cigarstring, mapping.tags['MD'][1])
+        else:
+            ref_len = np.sum(cigar_ops_mask(mapping.cigarstring,
+                include='MDN=X', exclude=''))
+            ref_span = self.ref[rname][mapping.pos:mapping.pos + ref_len]
+        if mapping.is_reverse:
+            ref_span = reverse_complement(ref_span)
+        return ReferenceSpan(qname=mapping.query_name,
+                            rname=rname,
+                            pos=mapping.pos,
+                            seq=ref_span,
+                            is_reverse=mapping.is_reverse)
 
     # generator interface for fast access
     def records(self):
         for f in self.batch_files:
             with bs.AlignmentFile(f, 'rb') as bam:
-                for mapping in (b for b in bam if not (b.is_unmapped or b.is_secondary or b.is_supplementary)):
-                    # get seq for secondary mappings
-                    if mapping.is_secondary or mapping.is_supplementary:
-                        # TODO implement ref lookup from fasta
-                        seq = ''
-                    else:
-                        seq = mapping.seq.upper()
-                    try:
-                        ref_span = decode_md(seq, mapping.cigarstring, mapping.tags['MD'][1])
-                    except KeyError:
-                        # TODO implement ref lookup from fasta
-                        raise
-                    if mapping.is_reverse:
-                        ref_span = reverse_complement(ref_span)
-                    yield ReferenceSpan(qname=mapping.query_name,
-                                        rname=bam.get_reference_name(mapping.refID),
-                                        pos=mapping.pos,
-                                        seq=ref_span,
-                                        is_reverse=mapping.is_reverse)
+                for mapping in (b for b in bam if not b.is_unmapped):
+                    if not ((mapping.is_secondary and self.filter_secondary) or
+                        (mapping.is_supplementary and self.filter_supplementary)):
+                        ref_span = self.__parse_bam_mapping__(bam, mapping)
+                        yield ref_span
