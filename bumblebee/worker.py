@@ -42,11 +42,11 @@ class ReadSource(StateFunction):
     def __init__(self, fast5, bam,
                  min_seq_length=500, max_seq_length=10000):
         super(StateFunction).__init__()
+        self.read_counter = 0
         self.f5_idx = Fast5Index(fast5)
         self.algn_idx = AlignmentIndex(bam)
         self.min_seq_length = min_seq_length
         self.max_seq_length = max_seq_length
-        self.read_counter = 0
 
     def __del__(self):
         log.info("Loaded {} reads from disk.".format(self.read_counter))

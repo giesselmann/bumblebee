@@ -52,8 +52,10 @@ class RecordWriter(StateFunction):
         read_normalizer = ReadNormalizer()
         self.read_aligner = ReadAligner(read_normalizer)
         self.site_counter = 0
+        self.pbar = tqdm.tqdm(desc='Inserting sites')
 
     def __del__(self):
+        self.pbar.close()
         log.info("Wrote {} sites to database.".format(self.site_counter))
 
     def call(self, read, df_events, score):
@@ -66,6 +68,7 @@ class RecordWriter(StateFunction):
             self.db.insert_features(db_site_id, df_feature, feature_begin)
             self.site_counter += 1
         self.db.commit()
+        self.pbar.update(1)
 
 
 
@@ -96,7 +99,7 @@ def main(args):
         worker = WorkerProcess(src.output_queue, EventAligner,
             args=(),
             kwargs={'min_score':args.min_score},
-            num_worker=args.threads)
+            num_worker=args.t)
         sink = SinkProcess(worker.output_queue, RecordWriter,
             args=(args.db, args.mod_id),
             kwargs={'pattern':args.pattern,
