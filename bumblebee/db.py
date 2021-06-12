@@ -156,7 +156,8 @@ class ModDatabase():
         self.cursor = self.connection.cursor()
         self.cursor.execute("pragma journal_mode = MEMORY;")
         self.cursor.execute("pragma synchronous = OFF;")
-        self.cursor.execute("""pragma cache_size = 10000;""")
+        self.cursor.execute("pragma cache_size = 10000;")
+        self.cursor.execute("pragma threads = 2;")
         self.cursor.execute("SELECT MAX(rowid) FROM reads;")
         self.next_read_rowid = (next(self.cursor)[0] or 0) + 1
         self.cursor.execute("SELECT MAX(rowid) FROM sites;")
@@ -222,7 +223,7 @@ class ModDatabase():
                     min=row.event_min,
                     mean=row.event_mean,
                     median=row.event_median,
-                    std=row.event_std if not np.isnan(row.event_std) else 0,
+                    std=row.event_std,
                     max=row.event_max,
                     length=row.event_length,
                     kmer=row.kmer

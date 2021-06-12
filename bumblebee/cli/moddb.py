@@ -43,6 +43,23 @@ from bumblebee.worker import ReadSource, EventAligner
 log = logging.getLogger(__name__)
 
 
+class SiteExtractor(StateFunction):
+    def __init__(self, pattern='CG', extension=7):
+        self.pattern = Pattern(pattern, extension)
+        read_normalizer = ReadNormalizer()
+        self.read_aligner = ReadAligner(read_normalizer)
+
+    def call(self, read, df_events, score):
+        try:
+            template_begin, feature_begin, df_feature = zip(
+                *read.feature_sites(df_events, self.pattern, self.read_aligner.pm.k))
+            return (read, template_begin, feature_begin, df_feature, score)
+        except ValueError:  # raised if no features found in read
+            return None
+
+
+
+
 class RecordWriter(StateFunction):
     def __init__(self, db, mod_id, pattern='CG', extension=7):
         super(StateFunction).__init__()
@@ -58,14 +75,13 @@ class RecordWriter(StateFunction):
         self.pbar.close()
         log.info("Wrote {} sites to database.".format(self.site_counter))
 
-    def call(self, read, df_events, score):
+    def call(self, read, template_begin, feature_begin, df_feature, score):
         # write read_record
         db_read_id = self.db.insert_read(read.ref_span, score=score)
         # write features
-        for template_begin, feature_begin, df_feature in read.feature_sites(df_events,
-            self.pattern, self.read_aligner.pm.k):
-            db_site_id = self.db.insert_site(db_read_id, self.mod_id, template_begin)
-            self.db.insert_features(db_site_id, df_feature, feature_begin)
+        for tb, fb, df in zip(template_begin, feature_begin, df_feature):
+            db_site_id = self.db.insert_site(db_read_id, self.mod_id, tb)
+            self.db.insert_features(db_site_id, df, fb)
             self.site_counter += 1
         self.db.commit()
         self.pbar.update(1)
@@ -99,17 +115,22 @@ def main(args):
                     'min_seq_length':args.min_seq_length,
                     'max_seq_length':args.max_seq_length},
             queue_len=64)
-        worker = WorkerProcess(src.output_queue, EventAligner,
+        aligner = WorkerProcess(src.output_queue, EventAligner,
             args=(),
             kwargs={'min_score':args.min_score},
             num_worker=args.t,
             queue_len=64)
-        sink = SinkProcess(worker.output_queue, RecordWriter,
+        ext = WorkerProcess(aligner.output_queue, SiteExtractor,
+            args=(),
+            kwargs={'pattern':args.pattern,
+                    'extension':args.extension})
+        sink = SinkProcess(ext.output_queue, RecordWriter,
             args=(args.db, args.mod_id),
             kwargs={'pattern':args.pattern,
                     'extension':args.extension})
         sink.join()
-        worker.join()
+        ext.join()
+        aligner.join()
         src.join()
     else:   # index
         db = ModDatabase(args.db)

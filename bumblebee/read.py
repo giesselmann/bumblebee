@@ -226,4 +226,5 @@ class Read():
                 template_begin = self.ref_span.pos + match_begin + valid_offset
             else:
                 template_begin = self.ref_span.pos + ref_span_len - match_end - valid_offset
-            yield template_begin, feature_begin, df_feature
+            if df_feature.shape[0] > 0:
+                yield template_begin, feature_begin, df_feature
