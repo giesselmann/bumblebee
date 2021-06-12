@@ -78,7 +78,7 @@ class AlignmentStream():
     mapping = namedtuple('mapping', [
         'qname', 'flag', 'rname', 'pos',
         'mapq', 'cigar', 'rnext', 'pnext',
-        'tlen', 'seq', 'qaul', 'tags',
+        'tlen', 'seq', 'qual', 'tags',
         'is_unmapped', 'is_secondary', 'is_supplementary', 'is_reverse'])
 
     def __init__(self):
@@ -91,7 +91,6 @@ class AlignmentStream():
 
     def __next__(self):
         line = next(self.stdin)
-        log.info(line)
         fields = line.split('\t')
         flag = int(fields[1])
         pos = int(fields[3])
