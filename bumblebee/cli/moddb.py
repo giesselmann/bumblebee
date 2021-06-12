@@ -97,11 +97,13 @@ def main(args):
             kwargs={'filter_secondary': args.filter_secondary,
                     'filter_supplementary': args.filter_supplementary,
                     'min_seq_length':args.min_seq_length,
-                    'max_seq_length':args.max_seq_length})
+                    'max_seq_length':args.max_seq_length},
+            queue_len=64)
         worker = WorkerProcess(src.output_queue, EventAligner,
             args=(),
             kwargs={'min_score':args.min_score},
-            num_worker=args.t)
+            num_worker=args.t,
+            queue_len=64)
         sink = SinkProcess(worker.output_queue, RecordWriter,
             args=(args.db, args.mod_id),
             kwargs={'pattern':args.pattern,
