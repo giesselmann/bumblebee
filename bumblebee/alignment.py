@@ -170,7 +170,8 @@ class AlignmentIndex():
     # generator interface for fast access
     def records(self):
         if self.stdin:
-            for record in (b for b in AlignmentStream() if not b.is_unmapped):
+            stream = AlignmentStream()
+            for record in (b for b in stream if not b.is_unmapped):
                 if not ((record.is_secondary and self.filter_secondary) or
                     (record.is_supplementary and self.filter_supplementary)):
                     ref_span = self.__parse_sam_mapping__(record)
