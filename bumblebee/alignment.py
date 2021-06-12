@@ -83,10 +83,8 @@ class AlignmentStream():
 
     def __init__(self):
         self.stdin = open(0)
-        log.info("Created AlignmentStream")
 
     def __iter__(self):
-        log.info("Created AlignmentStream Iterator")
         return self
 
     def __next__(self):
