@@ -143,7 +143,7 @@ class AlignmentIndex():
         else:
             ref_len = np.sum(cigar_ops_mask(record.cigar,
                 include='MDN=X', exclude=''))
-            ref_span = self.ref[rname][record.pos:record.pos + ref_len]
+            ref_span = self.ref[record.rname][record.pos:record.pos + ref_len]
         if record.is_reverse:
             ref_span = reverse_complement(ref_span)
         return ReferenceSpan(qname=record.qname,
