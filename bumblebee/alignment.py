@@ -90,6 +90,7 @@ class AlignmentStream():
 
     def __next__(self):
         line = next(sys.stdin)
+        log.info(line)
         fields = line.split('\t')
         flag = int(fields[1])
         pos = int(fields[3])
