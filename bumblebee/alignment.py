@@ -25,7 +25,7 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-import sys, os, re,
+import sys, os, re
 import logging
 import bamnostic as bs
 import numpy as np
@@ -80,10 +80,12 @@ class AlignmentStream():
         'mapq', 'cigar', 'rnext', 'pnext',
         'tlen', 'seq', 'qaul', 'tags',
         'is_unmapped', 'is_secondary', 'is_supplementary', 'is_reverse'])
+
     def __init__(self):
-        pass
+        log.info("Created AlignmentStream")
 
     def __iter__(self):
+        log.info("Created AlignmentStream Iterator")
         return self
 
     def __next__(self):
@@ -94,7 +96,7 @@ class AlignmentStream():
         def parse_md(raw):
             key, type, value = raw.split(':')
             return key, (type, value)
-        return mapping(
+        return AlignmentStream.mapping(
                 qname = fields[0],
                 flag = flag,
                 rname = fields[2],
