@@ -109,7 +109,7 @@ class AlignmentStream():
                 tlen = int(fields[8]),
                 seq = fields[9],
                 qual = fields[10],
-                tags = {parse_md(field) for field in fields[11:]},
+                tags = dict([parse_md(field) for field in fields[11:]]),
                 is_unmapped = flag & 0x4,
                 is_reverse = flag & 0x10,
                 is_secondary = flag & 0x100,
