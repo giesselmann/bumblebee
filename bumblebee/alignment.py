@@ -82,6 +82,7 @@ class AlignmentStream():
         'is_unmapped', 'is_secondary', 'is_supplementary', 'is_reverse'])
 
     def __init__(self):
+        self.stdin = open(0)
         log.info("Created AlignmentStream")
 
     def __iter__(self):
@@ -89,7 +90,7 @@ class AlignmentStream():
         return self
 
     def __next__(self):
-        line = next(sys.stdin)
+        line = next(self.stdin)
         log.info(line)
         fields = line.split('\t')
         flag = int(fields[1])
