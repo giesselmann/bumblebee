@@ -123,7 +123,8 @@ def main(args):
         ext = WorkerProcess(aligner.output_queue, SiteExtractor,
             args=(),
             kwargs={'pattern':args.pattern,
-                    'extension':args.extension})
+                    'extension':args.extension},
+            num_worker=6)
         sink = SinkProcess(ext.output_queue, RecordWriter,
             args=(args.db, args.mod_id),
             kwargs={'pattern':args.pattern,
