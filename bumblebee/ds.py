@@ -65,7 +65,7 @@ class ModDataset(torch.utils.data.Dataset):
             self.total = min_feature_count * len(mod_ids)
             if self.total == 0:
                 log.error("Found 0 balanced sites ({}) for mod-IDs {}".format(
-                    ','.join([str(c) for x in feature_count]),
+                    ','.join([str(c) for c in feature_count]),
                     ','.join([str(m) for m in mod_ids])))
                 exit(0)
         else:

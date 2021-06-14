@@ -99,7 +99,7 @@ class AlignmentStream():
                 qname = fields[0],
                 flag = flag,
                 rname = fields[2],
-                pos = pos,
+                pos = pos - 1,      # sam is 1-based
                 mapq = int(fields[4]),
                 cigar = fields[5],
                 rnext = fields[6],
