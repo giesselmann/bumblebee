@@ -163,8 +163,8 @@ def main(args):
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
             mode='max',
             factor=0.5,
-            patience=10000,
-            cooldown=20000)
+            patience=len(dl_train)//4,
+            cooldown=len(dl_train))
     # load checkpoint
     chkpt_file = os.path.join(args.prefix, 'latest.chkpt')
     out_file = os.path.join(args.prefix, 'final.chkpt')
