@@ -29,8 +29,8 @@ import time
 import logging
 import random
 import torch
-import mp as mp
 import numpy as np
+import multiprocessing as mp
 
 from bumblebee.worker import ReadSource
 from bumblebee.db import ModDatabase
