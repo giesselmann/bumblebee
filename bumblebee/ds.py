@@ -25,16 +25,95 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
+import time
 import logging
 import random
 import torch
-import multiprocessing
+import mp as mp
 import numpy as np
 
+from bumblebee.worker import ReadSource
 from bumblebee.db import ModDatabase
 
 
 log = logging.getLogger(__name__)
+
+
+class SeqDataset(torch.utils.data.IterableDataset):
+    def worker_init_fn(worker_id):
+        pass
+
+    def read_source_process(fast5, bam, ref,
+            active, start_iter, read_q, num_worker):
+        read_source = ReadSource(fast5, bam, ref)
+        while active.is_set():
+            # wait for epoch start signal
+            start = start_iter.wait(0.1)
+            if not start:
+                continue
+            log.info("Starting new epoch")
+            for read in read_source():
+                read_q.put(read)
+                if not start_iter.is_set():
+                    break
+            start_iter.clear()
+            for _ in range(num_worker):
+                read_q.put(StopIteration)
+        read_q.close()
+        read_q.join_thread()
+
+    def __init__(self, fast5, bam, ref, cache_dir):
+        super(SeqDataset).__init__()
+        self.read_q = mp.Queue(16)
+        self.start_iter = mp.Event()
+        self.start_worker = mp.Event()
+        self.active = mp.Event()
+        self.active.set()
+        self.num_worker = mp.Value('i')
+        self.waiting_worker = mp.Value('i')
+        self.read_source = mp.Process(target=SeqDataset.read_source_process,
+            args=(fast5, bam, ref,
+                  self.active, self.start_iter, self.read_q,
+                  self.num_worker))
+        self.read_source.start()
+
+    def __del__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        # stop read source from main process
+        if worker_info is None:
+            self.active.clear()
+            self.read_source.join()
+
+    def __iter__(self):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is None or worker_info.id == 0:
+            # first worker or main process
+            if self.start_iter.is_set():
+                # there's a previous iterator running, stop it
+                self.start_iter.clear()
+                # empty reads in queue
+                while self.num_worker > 0:
+                    r = self.read_q.get()
+                    if r is StopIteration:
+                        self.num_worker -= 1
+            self.num_worker = worker_info.num_workers if worker_info else 1
+            # release worker
+            self.start_worker.set()
+            # wait for all other worker to reach wait
+            while self.waiting_worker < worker_info.num_workers -1:
+                time.sleep(0.1)
+            self.start_iter.set()
+        else:
+            self.start_worker.wait()
+            with self.waiting_worker.get_lock():
+                self.waiting_worker += 1
+            self.start_iter.wait()
+        return self
+
+    def __next__(self):
+        pass
+
+
 
 
 class ModDataset(torch.utils.data.Dataset):
@@ -72,7 +151,7 @@ class ModDataset(torch.utils.data.Dataset):
             min_feature_count = max(feature_count)
             self.total = sum(feature_count)
         log.info("Found {} {} sites".format(self.total, 'train' if train else 'eval'))
-        self.features = multiprocessing.Array('Q', self.total, lock=False)
+        self.features = mp.Array('Q', self.total, lock=False)
         # copy feature rowid into shared memory
         it = (id for value in feature_ids.values() for id in value[:min_feature_count])
         for i, rowid in enumerate(it):

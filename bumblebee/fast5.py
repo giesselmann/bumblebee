@@ -39,7 +39,7 @@ ReadSignal = namedtuple('ReadSignal', ['name', 'raw'])
 
 
 class Fast5Index():
-    def __init__(self, input, index=None):
+    def __init__(self, input, lazy_index=True):
         if os.path.isfile(input):
             self.batch_files = [input]
         elif os.path.isdir(input):
@@ -47,6 +47,8 @@ class Fast5Index():
         else:
             raise FileNotFoundError("Input {} is not an existing file or directory".format(input))
         self.index = None
+        if not lazy_index:
+            self.__index__()
 
     def grp2id(grp):
         return re.sub(r'^read_', '', grp)

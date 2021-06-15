@@ -46,24 +46,21 @@ from bumblebee.agent import Agent
 log = logging.getLogger(__name__)
 
 
-def main(args):
+def _init_device(device):
     # init torch
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:{}".format(args.device) if use_cuda else "cpu")
     torch.backends.cudnn.benchmark = True
     log.info("Using device {}".format(device))
+    return device
 
-    # output directory
-    output_dir = args.prefix
-    os.makedirs(output_dir, exist_ok=True)
-    weights_dir = os.path.join(args.prefix, 'weights')
-    os.makedirs(weights_dir, exist_ok=True)
 
+def _load_config(name, output_dir):
     # load config
     run_config = os.path.join(output_dir, 'config.yaml')
     pkg_config = pkg.resource_filename('bumblebee',
-        'config/{}.yaml'.format(args.config))
-    pkg_config = args.config if os.path.isfile(args.config) else pkg_config
+        'config/{}.yaml'.format(name))
+    pkg_config = name if os.path.isfile(name) else pkg_config
     if os.path.isfile(run_config):
         # resume training with existing config
         with open(run_config, 'r') as fp:
@@ -75,13 +72,47 @@ def main(args):
         with open(pkg_config, 'r') as fp:
             config = yaml.safe_load(fp)
     else:
-        log.error("Could not load model config {}".format(args.config))
+        log.error("Could not load model config {}".format(name))
         exit(-1)
 
     # copy config into output directory
     if not os.path.isfile(run_config):
         with open(run_config, 'w') as fp:
             yaml.dump(config, fp)
+
+    return config
+
+
+
+
+def main_sup(args):
+    # init torch
+    device = _init_device(args.device)
+
+    # output directory
+    output_dir = args.prefix
+    os.makedirs(output_dir, exist_ok=True)
+    weights_dir = os.path.join(args.prefix, 'weights')
+    os.makedirs(weights_dir, exist_ok=True)
+
+    config = _load_config(args.config, output_dir)
+
+    # datasets and loader
+
+
+
+
+def main_rf(args):
+    # init torch
+    device = _init_device(args.device)
+
+    # output directory
+    output_dir = args.prefix
+    os.makedirs(output_dir, exist_ok=True)
+    weights_dir = os.path.join(args.prefix, 'weights')
+    os.makedirs(weights_dir, exist_ok=True)
+
+    config = _load_config(args.config, output_dir)
 
     env = EnvReadEvents(args.fast5, args.bam,
             state_length=config['state_length'],
@@ -148,14 +179,25 @@ def main(args):
 
 
 
+def main(args):
+    if args.mode == 'supervised':
+        main_sup(args)
+    else:
+        main_rf(args)
+
+
+
+
 def argparser():
     parser = ArgumentParser(
         formatter_class=ArgumentDefaultsHelpFormatter,
         add_help=False
     )
+    parser.add_argument("mode", choices=['supervised', 'reinforcement'])
     parser.add_argument("config", type=str)
     parser.add_argument("fast5", type=str)
     parser.add_argument("bam", type=str)
+    parser.add_argument("ref", type=str)
     parser.add_argument("--prefix", default='.', type=str)
     parser.add_argument("--device", default=0, type=int)
     parser.add_argument("--min_score", default=1.0, type=float)
