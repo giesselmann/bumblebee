@@ -32,14 +32,14 @@ params:
     num_kmers: 4096
     embedding_dim: 64
     padding_idx: 0
-    dropout: 0.2
+    dropout: 0.3
     input_nn_dims:
         - 64
         - 128
         - 256
-    rnn_type: 'GRU'
+    rnn_type: 'LSTM'
     d_model: 512
-    num_layer: 4
+    num_layer: 3
     output_nn_dims:
         - 256
         - 128
