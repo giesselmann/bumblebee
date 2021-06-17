@@ -68,6 +68,12 @@ class BaseModLSTM_v1(torch.nn.Module):
                 dropout=dropout,
                 rnn_type=rnn_type)
         self.linear = torch.nn.Linear(d_model, num_classes)
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
 
     def forward(self, lengths, kmers, offsets, features):
         # kmer embedding (batch_size, max_len, embedding_dim)
@@ -125,6 +131,12 @@ class BaseModLSTM_v2(torch.nn.Module):
                 num_classes,
                 output_nn_dims,
                 dropout=dropout)
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
 
     def forward(self, lengths, kmers, offsets, features):
         # kmer embedding (batch_size, max_len, embedding_dim)
@@ -187,6 +199,12 @@ class BaseModEncoder(torch.nn.Module):
                 num_classes,
                 output_nn_dims,
                 dropout=dropout)
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
 
     def forward(self, lengths, kmers, offsets, features):
         batch_size, max_len, n_features = features.size()
@@ -261,6 +279,12 @@ class BaseModEncoder_v2(torch.nn.Module):
                 num_classes,
                 output_nn_dims,
                 dropout=dropout)
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
 
     def forward(self, lengths, kmers, offsets, features):
         batch_size, max_len, n_features = features.size()
