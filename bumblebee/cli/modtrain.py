@@ -140,7 +140,7 @@ def main(args):
         device="cpu", depth=1)
     model.to(device)
     def avg_fn(avg_mdl, mdl, step):
-        scale = min(0.99, step/1e5)
+        scale = min(0.9999, step/1e5)
         return scale * avg_mdl + (1-scale) * mdl
     swa_model = torch.optim.swa_utils.AveragedModel(model, avg_fn=avg_fn, device=device)
     swa_model.eval()
