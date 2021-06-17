@@ -147,7 +147,10 @@ def main(args):
 
     # loss and optimizer
     criterion = torch.nn.CrossEntropyLoss(reduction='none')
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
+    if args.optimizer == 'Adam':
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, amsgrad=False)
+    else:
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
     if args.lr_schedule == 'warmup':
         optimizer = Lookahead(optimizer, k=5, alpha=0.5) # Initialize Lookahead
         lr_scheduler = WarmupScheduler(optimizer, config['params']['d_model'],
@@ -346,6 +349,8 @@ def argparser():
     parser.add_argument("--batch_size", default=64, type=int)
     parser.add_argument("--batch_echo", default=0, type=int)
     parser.add_argument("--train_fraction", default=1.0, type=float)
+    parser.add_argument("--optimizer", default='Adam',
+        choices=['SGD', 'Adam'])
     parser.add_argument("--lr", default=1.0, type=float)
     parser.add_argument("--lr_schedule", default=None,
         choices=['warmup', 'cyclic', 'plateau'])
