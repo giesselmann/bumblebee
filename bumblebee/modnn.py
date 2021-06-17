@@ -406,7 +406,7 @@ class BaseModTransformer(torch.nn.Module):
                 d_model=d_model,
                 nhead=num_heads,
                 dim_feedforward=d_model*4,
-                activation='relu',
+                activation='gelu',
                 dropout=dropout)
         self.transformer_encoder = torch.nn.TransformerEncoder(
                 self.encoder_layer,
@@ -416,7 +416,7 @@ class BaseModTransformer(torch.nn.Module):
                 d_model=d_model,
                 nhead=num_heads,
                 dim_feedforward=d_model*4,
-                activation='relu',
+                activation='gelu',
                 dropout=dropout)
         self.transformer_decoder = torch.nn.TransformerDecoder(
                 self.decoder_layer,
