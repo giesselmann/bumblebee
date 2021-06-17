@@ -33,6 +33,7 @@ import numpy as np
 import multiprocessing as mp
 
 from bumblebee.worker import ReadSource
+from bumblebee.read import ReadNormalizer, ReadAligner
 from bumblebee.db import ModDatabase
 
 
@@ -41,77 +42,79 @@ log = logging.getLogger(__name__)
 
 class SeqDataset(torch.utils.data.IterableDataset):
     def worker_init_fn(worker_id):
-        pass
+        worker_info = torch.utils.data.get_worker_info()
+        log.info("Dataset init")
+        self = worker_info.dataset
+        read_normalizer = ReadNormalizer()
+        self.read_aligner = ReadAligner(read_normalizer)
 
-    def read_source_process(fast5, bam, ref,
-            active, start_iter, read_q, num_worker):
-        read_source = ReadSource(fast5, bam, ref)
-        while active.is_set():
+    def read_source_process(fast5, bam, ref, con):
+        read_source = ReadSource(fast5, bam, ref,
+            lazy_index=False)
+        while True:
             # wait for epoch start signal
-            start = start_iter.wait(0.1)
-            if not start:
-                continue
-            log.info("Starting new epoch")
-            for read in read_source():
-                read_q.put(read)
-                if not start_iter.is_set():
-                    break
-            start_iter.clear()
-            for _ in range(num_worker):
-                read_q.put(StopIteration)
-        read_q.close()
-        read_q.join_thread()
+            cmd = con.recv()
+            if cmd == 'shutdown':
+                log.info("Stopping read source")
+                return
+            if cmd == 'get':
+                log.info("Read source empty")
+                con.send(StopIteration)
+            elif cmd == 'start':
+                log.info("Starting new epoch")
+                for read in read_source():
+                    cmd = con.recv()
+                    if cmd == 'get':
+                        con.send(*read)
+                    elif cmd == 'stop':
+                        break
+                    elif cmd == 'shutdown':
+                        return
 
     def __init__(self, fast5, bam, ref, cache_dir):
         super(SeqDataset).__init__()
-        self.read_q = mp.Queue(16)
-        self.start_iter = mp.Event()
-        self.start_worker = mp.Event()
-        self.active = mp.Event()
-        self.active.set()
-        self.num_worker = mp.Value('i')
-        self.waiting_worker = mp.Value('i')
+        self.rs_con, self.w_con = mp.Pipe()
+        self.con_lock = mp.Lock()
         self.read_source = mp.Process(target=SeqDataset.read_source_process,
-            args=(fast5, bam, ref,
-                  self.active, self.start_iter, self.read_q,
-                  self.num_worker))
+            args=(fast5, bam, ref, self.rs_con))
         self.read_source.start()
+        read_normalizer = ReadNormalizer()
+        self.read_aligner = ReadAligner(read_normalizer)
 
     def __del__(self):
         worker_info = torch.utils.data.get_worker_info()
         # stop read source from main process
         if worker_info is None:
-            self.active.clear()
+            with self.con_lock:
+                self.w_con.send("shutdown")
             self.read_source.join()
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
         if worker_info is None or worker_info.id == 0:
-            # first worker or main process
-            if self.start_iter.is_set():
-                # there's a previous iterator running, stop it
-                self.start_iter.clear()
-                # empty reads in queue
-                while self.num_worker > 0:
-                    r = self.read_q.get()
-                    if r is StopIteration:
-                        self.num_worker -= 1
-            self.num_worker = worker_info.num_workers if worker_info else 1
-            # release worker
-            self.start_worker.set()
-            # wait for all other worker to reach wait
-            while self.waiting_worker < worker_info.num_workers -1:
-                time.sleep(0.1)
-            self.start_iter.set()
-        else:
-            self.start_worker.wait()
-            with self.waiting_worker.get_lock():
-                self.waiting_worker += 1
-            self.start_iter.wait()
+            with self.con_lock:
+                self.w_con.send("stop")
+                self.w_con.send("start")
+        self.current_read = None
+        self.current_score = 0.0
+        self.current_events = None
+        self.current_offset = 0
         return self
 
     def __next__(self):
-        pass
+        while True:
+            if self.current_read is None:
+                with self.con_lock:
+                    self.w_con.send("get")
+                    read = self.w_con.recv()
+                if read is StopIteration:
+                    raise StopIteration
+                else:
+                    self.current_read = read
+                    self.current_score, self.current_events = read.event_alignments(self.read_aligner)
+                    self.current_offset = self.current_events.sequence_offset.min()
+        mock = np.zeros((100, 6), dtype=np.float32)
+        return mock
 
 
 

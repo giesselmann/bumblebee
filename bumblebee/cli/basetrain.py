@@ -39,6 +39,7 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from torch.utils.tensorboard import SummaryWriter
 
 import bumblebee.basenn
+from bumblebee.ds import SeqDataset
 from bumblebee.environment import EnvReadEvents
 from bumblebee.agent import Agent
 
@@ -49,7 +50,7 @@ log = logging.getLogger(__name__)
 def _init_device(device):
     # init torch
     use_cuda = torch.cuda.is_available()
-    device = torch.device("cuda:{}".format(args.device) if use_cuda else "cpu")
+    device = torch.device("cuda:{}".format(device) if use_cuda else "cpu")
     torch.backends.cudnn.benchmark = True
     log.info("Using device {}".format(device))
     return device
@@ -98,6 +99,18 @@ def main_sup(args):
     config = _load_config(args.config, output_dir)
 
     # datasets and loader
+    ds = SeqDataset(args.fast5, args.bam, args.ref, output_dir)
+    #ds_shuf = torch.utils.data.BufferedShuffleDataset(ds, 1024)
+    dl = torch.utils.data.DataLoader(ds,
+            batch_size=1,
+            shuffle=False,
+            num_workers=8, worker_init_fn=SeqDataset.worker_init_fn,
+            persistent_workers=True,
+            prefetch_factor=4,
+            pin_memory=True,
+            drop_last=True)
+    for i, batch in tqdm.tqdm(enumerate(dl), desc='Epoch'):
+        pass
 
 
 
