@@ -386,6 +386,7 @@ class BaseModTransformer(torch.nn.Module):
         d_model = config.get("d_model") or 512
         num_heads = config.get("num_heads") or 4
         num_layer = config.get("num_layer") or 3
+        act = config.get('act') or 'relu'
         output_nn_dims = config.get("output_nn_dims") or [512, 256, 128, 64]
         num_classes = config.get("num_classes") or 2
         # layer
@@ -406,7 +407,7 @@ class BaseModTransformer(torch.nn.Module):
                 d_model=d_model,
                 nhead=num_heads,
                 dim_feedforward=d_model*4,
-                activation='gelu',
+                activation=act,
                 dropout=dropout)
         self.transformer_encoder = torch.nn.TransformerEncoder(
                 self.encoder_layer,
@@ -416,7 +417,7 @@ class BaseModTransformer(torch.nn.Module):
                 d_model=d_model,
                 nhead=num_heads,
                 dim_feedforward=d_model*4,
-                activation='gelu',
+                activation=act,
                 dropout=dropout)
         self.transformer_decoder = torch.nn.TransformerDecoder(
                 self.decoder_layer,
