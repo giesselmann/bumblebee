@@ -215,7 +215,8 @@ class BaseModLSTM_v3(torch.nn.Module):
         # run LSTM
         for rnn, nrm in zip(self.rnns, self.norms):
             inner = nrm(rnn(inner, lengths) + inner)
-        inner_forward = inner[:, lengths - 1, :self.d_model//2]
+        inner_forward = torch.squeeze(
+            inner[:, lengths - 1, :self.d_model//2], dim=1)
         inner_reverse = inner[:, 0, self.d_model//2:]
         # (batch_size, d_model)
         inner_reduced = torch.cat((inner_forward, inner_reverse), 1)

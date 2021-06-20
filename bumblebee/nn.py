@@ -158,7 +158,8 @@ class BiDirLSTM(torch.nn.Module):
     def forward(self, input, lengths):
         # pack inputs
         inner = torch.nn.utils.rnn.pack_padded_sequence(input, lengths,
-            batch_first=True, enforce_sorted=False)
+            batch_first=True,
+            enforce_sorted=False)
         # run LSTM
         inner, _  = self.rnn(inner)
         # unpack output
