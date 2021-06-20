@@ -137,7 +137,7 @@ def main(args):
                     _batch['kmers'],
                     _batch['offsets'],
                     _batch['features']],
-        device="cpu", depth=1)
+        device="cpu", depth=2)
     model.to(device)
     def avg_fn(avg_mdl, mdl, step):
         scale = min(0.9999, step/1e5)

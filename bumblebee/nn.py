@@ -138,7 +138,8 @@ class ConvolutionalNetwork(torch.nn.Module):
 
 class BiDirLSTM(torch.nn.Module):
     def __init__(self, d_model, num_layer,
-                 dropout=0.1, rnn_type='LSTM'):
+                 dropout=0.1, rnn_type='LSTM',
+                 return_states=False):
         super(BiDirLSTM, self).__init__()
         self.d_model = d_model
         self.rnn = getattr(torch.nn, rnn_type)(
@@ -150,6 +151,7 @@ class BiDirLSTM(torch.nn.Module):
             bidirectional=True
         )
         self.linear = torch.nn.Linear(d_model, d_model)
+        self.return_states = return_states
 
     def forward(self, input, lengths):
         # pack inputs
@@ -159,11 +161,14 @@ class BiDirLSTM(torch.nn.Module):
         inner, _  = self.rnn(inner)
         # unpack output
         inner, _ = torch.nn.utils.rnn.pad_packed_sequence(inner, batch_first=True)
-        inner_forward = inner[range(len(inner)), lengths - 1, :self.d_model//2]
-        inner_reverse = inner[:, 0, self.d_model//2:]
-        # (batch_size, d_model)
-        inner_reduced = torch.cat((inner_forward, inner_reverse), 1)
-        out = self.linear(inner_reduced)
+        if self.return_states:
+            out = self.linear(inner)
+        else:
+            inner_forward = inner[range(len(inner)), lengths - 1, :self.d_model//2]
+            inner_reverse = inner[:, 0, self.d_model//2:]
+            # (batch_size, d_model)
+            inner_reduced = torch.cat((inner_forward, inner_reverse), 1)
+            out = self.linear(inner_reduced)
         return out
 
 

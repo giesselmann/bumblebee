@@ -158,6 +158,74 @@ class BaseModLSTM_v2(torch.nn.Module):
 
 
 
+class BaseModLSTM_v3(torch.nn.Module):
+    def __init__(self, max_features, config={}):
+        super(BaseModLSTM_v3, self).__init__()
+        num_features = config.get("num_features") or 6
+        feature_window = config.get("feature_window") or 20
+        num_kmers = config.get('num_kmers') or 4096
+        embedding_dim = config.get('embedding_dim') or 32
+        padding_idx = config.get("padding_idx") or 0
+        dropout = config.get("dropout") or 0.1
+        input_nn_dims = config.get("input_nn_dims") or [64, 128]
+        rnn_type = config.get("rnn_type") or "LSTM"
+        d_model = config.get("d_model") or 128
+        num_layer = config.get("num_layer") or 3
+        num_blocks = config.get('num_blocks') or 1
+        output_nn_dims = config.get('output_nn_dims') or [128, 64]
+        num_classes = config.get("num_classes") or 2
+        self.d_model = d_model
+        self.kmer_embedding = torch.nn.Embedding(
+                num_embeddings=num_kmers + 1,
+                embedding_dim=embedding_dim,
+                padding_idx=padding_idx)
+        self.input_nn = ResidualNetwork(num_features,# + embedding_dim,
+                d_model - embedding_dim,
+                input_nn_dims,
+                dropout=dropout)
+        self.offset_embedding = torch.nn.Embedding(
+                num_embeddings=feature_window,
+                embedding_dim=d_model,
+                padding_idx=padding_idx)
+        self.rnns = torch.nn.ModuleList([
+                BiDirLSTM(d_model, num_layer,
+                    dropout=dropout,
+                    rnn_type=rnn_type,
+                    return_states=True)
+                for _ in range(num_blocks)])
+        self.norms = torch.nn.ModuleList([
+            torch.nn.LayerNorm(d_model)
+                for _ in range(num_blocks)])
+        self.output_nn = ResidualNetwork(d_model,
+                num_classes,
+                output_nn_dims,
+                dropout=dropout)
+
+    def forward(self, lengths, kmers, offsets, features):
+        # kmer embedding (batch_size, max_len, embedding_dim)
+        emb = self.kmer_embedding(kmers)
+        # generate features as
+        # (batch_size, max_len, d_model - embedding_dim)
+        inner = self.input_nn(features)
+        # concat signal features and sequence embeddings
+        inner = torch.cat([emb, inner], dim=-1)
+        # positional encoding
+        inner = inner + self.offset_embedding(offsets)
+        # run LSTM
+        for rnn, nrm in zip(self.rnns, self.norms):
+            inner = nrm(rnn(inner) + inner)
+        inner_forward = inner[:, lengths - 1, :self.d_model//2]
+        inner_reverse = inner[:, 0, self.d_model//2:]
+        # (batch_size, d_model)
+        inner_reduced = torch.cat((inner_forward, inner_reverse), 1)
+        # get class label
+        # (batch_size, num_classes)
+        out = self.output_nn(inner_reduced)
+        return out, None, {}
+
+
+
+
 class BaseModEncoder(torch.nn.Module):
     def __init__(self, max_features, config={}):
         super(BaseModEncoder, self).__init__()
