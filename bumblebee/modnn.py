@@ -191,7 +191,8 @@ class BaseModLSTM_v3(torch.nn.Module):
                 BiDirLSTM(d_model, num_layer,
                     dropout=dropout,
                     rnn_type=rnn_type,
-                    return_states=True)
+                    return_states=True,
+                    total_length=max_features)
                 for _ in range(num_blocks)])
         self.norms = torch.nn.ModuleList([
             torch.nn.LayerNorm(d_model)
@@ -213,7 +214,7 @@ class BaseModLSTM_v3(torch.nn.Module):
         inner = inner + self.offset_embedding(offsets)
         # run LSTM
         for rnn, nrm in zip(self.rnns, self.norms):
-            inner = nrm(rnn(inner) + inner)
+            inner = nrm(rnn(inner, lengths) + inner)
         inner_forward = inner[:, lengths - 1, :self.d_model//2]
         inner_reverse = inner[:, 0, self.d_model//2:]
         # (batch_size, d_model)

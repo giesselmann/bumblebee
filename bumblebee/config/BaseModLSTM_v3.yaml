@@ -25,7 +25,7 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-model: BaseModLSTM_v2
+model: BaseModLSTM_v3
 params:
     num_features: 6
     feature_window: 20

@@ -139,7 +139,8 @@ class ConvolutionalNetwork(torch.nn.Module):
 class BiDirLSTM(torch.nn.Module):
     def __init__(self, d_model, num_layer,
                  dropout=0.1, rnn_type='LSTM',
-                 return_states=False):
+                 return_states=False,
+                 total_length=None):
         super(BiDirLSTM, self).__init__()
         self.d_model = d_model
         self.rnn = getattr(torch.nn, rnn_type)(
@@ -152,6 +153,7 @@ class BiDirLSTM(torch.nn.Module):
         )
         self.linear = torch.nn.Linear(d_model, d_model)
         self.return_states = return_states
+        self.total_length = total_length
 
     def forward(self, input, lengths):
         # pack inputs
@@ -160,7 +162,9 @@ class BiDirLSTM(torch.nn.Module):
         # run LSTM
         inner, _  = self.rnn(inner)
         # unpack output
-        inner, _ = torch.nn.utils.rnn.pad_packed_sequence(inner, batch_first=True)
+        inner, _ = torch.nn.utils.rnn.pad_packed_sequence(inner,
+            batch_first=True,
+            total_length=self.total_length)
         if self.return_states:
             out = self.linear(inner)
         else:
