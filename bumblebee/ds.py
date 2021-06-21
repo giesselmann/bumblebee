@@ -165,6 +165,8 @@ class ModDataset(torch.utils.data.Dataset):
             random.shuffle(self.features)
             self.fpr_labels = False
         else:
+            # copy feature rowid and sample random false labels
+            # with given rate
             self.labels = mp.Array('Q', self.total, lock=False)
             replacements = {label:[x for x in mod_ids if x!=label]
                 for label in mod_ids}
@@ -172,7 +174,7 @@ class ModDataset(torch.utils.data.Dataset):
             self.fpr_labels = True
             for i, (rowid, label) in enumerate(it):
                 self.features[i] = rowid
-                self.labels[i] = random.choice(replacements[label]) if np.random.rand() < fpr_rate else label
+                self.labels[i] = random.choice(replacements[label]) if np.random.rand() < fpr_rate[label] else label
         # init if running in main process
         if not torch.utils.data.get_worker_info():
             self.init_db()
