@@ -130,7 +130,8 @@ class ModDataset(torch.utils.data.Dataset):
 
     def __init__(self, db_file, mod_ids,
                  train=True, balance=True,
-                 max_features=32, min_score=1.0):
+                 max_features=32, min_score=1.0,
+                 config={}):
         self.db_file = db_file
         self.max_features = max_features
         db = ModDatabase(db_file, require_index=True, require_split=True)
@@ -155,11 +156,23 @@ class ModDataset(torch.utils.data.Dataset):
             self.total = sum(feature_count)
         log.info("Found {} {} sites".format(self.total, 'train' if train else 'eval'))
         self.features = mp.Array('Q', self.total, lock=False)
-        # copy feature rowid into shared memory
-        it = (id for value in feature_ids.values() for id in value[:min_feature_count])
-        for i, rowid in enumerate(it):
-            self.features[i] = rowid
-        random.shuffle(self.features)
+        fpr_rate = config.get('fpr_rate')
+        if fpr_rate is None:
+            # copy feature rowid into shared memory
+            it = (id for value in feature_ids.values() for id in value[:min_feature_count])
+            for i, rowid in enumerate(it):
+                self.features[i] = rowid
+            random.shuffle(self.features)
+            self.fpr_labels = False
+        else:
+            self.labels = mp.Array('Q', self.total, lock=False)
+            replacements = {label:[x for x in mod_ids if x!=label]
+                for label in mod_ids}
+            it = ((id, key) for key, value in feature_ids.items() for id in value[:min_feature_count])
+            self.fpr_labels = True
+            for i, (rowid, label) in enumerate(it):
+                self.features[i] = rowid
+                self.labels[i] = random.choice(replacements[label]) if np.random.rand() < fpr_rate else label
         # init if running in main process
         if not torch.utils.data.get_worker_info():
             self.init_db()
@@ -173,6 +186,8 @@ class ModDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         label, length, kmers, offsets, features = self.db.get_feature(
                 self.features[index])
+        if self.fpr_labels:
+            label = self.labels[index]
         kmers_padd = np.zeros(self.max_features, dtype=np.int64)
         offsets_padd = np.zeros(self.max_features, dtype=np.int64)
         features_padd = np.zeros((self.max_features, 6), dtype=np.float32)

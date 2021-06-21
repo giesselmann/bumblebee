@@ -89,7 +89,8 @@ def main(args):
     log.info("Loading training dataset")
     ds_train = ModDataset(args.db, args.mod_ids,
                 max_features=args.max_features,
-                min_score=args.min_score)
+                min_score=args.min_score,
+                config=config.get('ds_train') or {})
     if args.train_fraction < 1.0:
         ds_train = torch.utils.data.Subset(ds_train,
             np.arange(int(args.train_fraction * len(ds_train))))
