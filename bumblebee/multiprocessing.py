@@ -48,6 +48,19 @@ class StateFunction():
 
 
 
+class StateIterator():
+    def __init__(self):
+        pass
+
+    def __call__(self, *args):
+        return self.call(*args)
+
+    def call(self):
+        raise NotImplementedError
+
+
+
+
 class SourceProcess():
     def __init__(self, src_type, args=(), kwargs={}, queue_len=32):
         self.q = mp.Queue(queue_len)
@@ -112,12 +125,19 @@ class WorkerProcess():
                     break
                 elif obj is not None:
                     try:
-                        res = worker(*obj)
+                        if isinstance(worker, StateFunction):
+                            res = worker(*obj)
+                            if res is not None:
+                                q_out.put(res)
+                        elif isinstance(worker, StateIterator):
+                            for res in worker(*obj):
+                                q_out.put(res)
+                        else:
+                            raise NotImplementedError("Worker object must be derived from StateFunction or StateIterator")
+                            break
                     except Exception as ex:
                         log.error("Exception in worker (Proceeding with remaining jobs):\n {}".format(str(ex)))
                         continue
-                    if res is not None:
-                        q_out.put(res)
                 else:
                     continue
             i = barrier.wait()

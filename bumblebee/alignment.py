@@ -117,9 +117,9 @@ class AlignmentStream():
 
 
 class AlignmentIndex():
-    def __init__(self, input, ref,
+    def __init__(self, input, ref_file,
             filter_secondary=False, filter_supplementary=False):
-        self.ref = Reference(ref)
+        self.ref = Reference(ref_file)
         self.filter_secondary = filter_secondary
         self.filter_supplementary = filter_supplementary
         self.stdin = False

@@ -39,14 +39,14 @@ log = logging.getLogger(__name__)
 
 # parse reads from fast5 and bam input
 class ReadSource(StateFunction):
-    def __init__(self, fast5, bam, ref,
+    def __init__(self, fast5, bam, ref_file,
                  filter_secondary=False, filter_supplementary=False,
                  min_seq_length=500, max_seq_length=10000,
                  lazy_index=True):
         super(StateFunction).__init__()
         self.mapping_counter = 0
         self.f5_idx = Fast5Index(fast5, lazy_index=lazy_index)
-        self.algn_idx = AlignmentIndex(bam, ref,
+        self.algn_idx = AlignmentIndex(bam, ref_file,
             filter_secondary=filter_secondary,
             filter_supplementary=filter_supplementary)
         self.min_seq_length = min_seq_length
