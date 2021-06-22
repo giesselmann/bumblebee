@@ -80,7 +80,7 @@ class ModCaller(StateIterator):
         self.max_features = config['max_features']
         self.model = model
         self.device = device
-        self.batch_size = 64
+        self.batch_size = 256
         self.ref_spans = []
         self.inputs = []
 
@@ -223,7 +223,7 @@ def main(args):
     extractor = WorkerProcess(aligner.output_queue, SiteExtractor,
         args=(config,),
         kwargs={},
-        num_worker=1)
+        num_worker=2)
     extractor_queue = extractor.output_queue
     caller = ModCaller(config, model, device)
     writer_queue =mp.Queue(32)
@@ -232,7 +232,7 @@ def main(args):
         kwargs={})
     # predict in main Process using CUDA
     pid = '(PID: {})'.format(os.getpid())
-    with tqdm.tqdm(desc='Processing', unit='alignments') as pbar:
+    with tqdm.tqdm(desc='Processing', unit='sites') as pbar:
         while True:
             try:
                 obj = extractor_queue.get(block=True, timeout=1)
