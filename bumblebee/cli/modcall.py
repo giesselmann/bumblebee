@@ -166,6 +166,7 @@ class RecordWriter(StateFunction):
 
 
 def main(args):
+    mp.set_start_method('spawn')
     use_cuda = torch.cuda.is_available()
     if use_cuda:
         torch.cuda.set_device(args.device)
@@ -223,7 +224,7 @@ def main(args):
     extractor = WorkerProcess(aligner.output_queue, SiteExtractor,
         args=(config,),
         kwargs={},
-        num_worker=2)
+        num_worker=4)
     extractor_queue = extractor.output_queue
     caller = ModCaller(config, model, device)
     writer_queue =mp.Queue(32)

@@ -61,27 +61,31 @@ class StateIterator():
 
 
 
+def source_process_runner(e, q, src_type, *args, **kwargs):
+    pid = '(PID: {})'.format(os.getpid())
+    log.debug("Started ReaderProcess {}".format(pid))
+    src = src_type(*args, **kwargs)
+    try:
+        for obj in src():
+            q.put(obj)
+            if e.is_set():
+                log.debug("Received StopEvent in ReaderProcess {}".format(pid))
+                break
+    except Exception as ex:
+        log.error("Error in ReaderProcess:\n{}".format(ex))
+    q.put(StopIteration)
+    q.close()
+    q.join_thread()
+    log.debug("Terminating ReaderProcess {}".format(pid))
+
+
+
+
 class SourceProcess():
     def __init__(self, src_type, args=(), kwargs={}, queue_len=32):
         self.q = mp.Queue(queue_len)
         self.e = mp.Event()
-        def fn(e, q, src_type, *args, **kwargs):
-            pid = '(PID: {})'.format(os.getpid())
-            log.debug("Started ReaderProcess {}".format(pid))
-            src = src_type(*args, **kwargs)
-            try:
-                for obj in src():
-                    q.put(obj)
-                    if e.is_set():
-                        log.debug("Received StopEvent in ReaderProcess {}".format(pid))
-                        break
-            except Exception as ex:
-                log.error("Error in ReaderProcess:\n{}".format(ex))
-            q.put(StopIteration)
-            q.close()
-            q.join_thread()
-            log.debug("Terminating ReaderProcess {}".format(pid))
-        self.p = mp.Process(target=fn,
+        self.p = mp.Process(target=source_process_runner,
             args=(self.e, self.q, src_type) + args,
             kwargs=kwargs)
         self.p.start()
@@ -104,54 +108,58 @@ class SourceProcess():
 
 
 
+def worker_process_runner(e, barrier, q_in, q_out, worker_type, *args, **kwargs):
+    pid = '(PID: {})'.format(os.getpid())
+    log.debug("Started Worker {}".format(pid))
+    worker = worker_type(*args, **kwargs)
+    while not e.is_set():
+        try:
+            obj = q_in.get(block=True, timeout=1)
+        except queue.Empty:
+            obj = None
+        if obj is StopIteration:
+            log.debug("Received StopIteration in WorkerProcess {}".format(pid))
+            e.set()
+            break
+        elif obj is not None:
+            try:
+                if isinstance(worker, StateFunction):
+                    res = worker(*obj)
+                    if res is not None:
+                        q_out.put(res)
+                elif isinstance(worker, StateIterator):
+                    for res in worker(*obj):
+                        q_out.put(res)
+                else:
+                    raise NotImplementedError("Worker object must be derived from StateFunction or StateIterator")
+                    break
+            except Exception as ex:
+                log.error("Exception in worker (Proceeding with remaining jobs):\n {}".format(str(ex)))
+                continue
+        else:
+            continue
+    i = barrier.wait()
+    while not q_out.empty():
+        time.sleep(0.1)
+    if i == 0:
+        q_out.put(StopIteration)
+    q_out.close()
+    q_out.join_thread()
+    log.debug("Terminating WorkerProcess {}".format(pid))
+
+
+
+
 class WorkerProcess():
     def __init__(self, input_queue, worker_type, args=(), kwargs={}, queue_len=32, num_worker=1):
         self.q_in = input_queue
         self.q_out = mp.Queue(queue_len)
         self.e = mp.Event()
         self.barrier = mp.Barrier(num_worker)
-        def fn(e, barrier, q_in, q_out, worker_type, *args, **kwargs):
-            pid = '(PID: {})'.format(os.getpid())
-            log.debug("Started Worker {}".format(pid))
-            worker = worker_type(*args, **kwargs)
-            while not e.is_set():
-                try:
-                    obj = q_in.get(block=True, timeout=1)
-                except queue.Empty:
-                    obj = None
-                if obj is StopIteration:
-                    log.debug("Received StopIteration in WorkerProcess {}".format(pid))
-                    e.set()
-                    break
-                elif obj is not None:
-                    try:
-                        if isinstance(worker, StateFunction):
-                            res = worker(*obj)
-                            if res is not None:
-                                q_out.put(res)
-                        elif isinstance(worker, StateIterator):
-                            for res in worker(*obj):
-                                q_out.put(res)
-                        else:
-                            raise NotImplementedError("Worker object must be derived from StateFunction or StateIterator")
-                            break
-                    except Exception as ex:
-                        log.error("Exception in worker (Proceeding with remaining jobs):\n {}".format(str(ex)))
-                        continue
-                else:
-                    continue
-            i = barrier.wait()
-            while not q_out.empty():
-                time.sleep(0.1)
-            if i == 0:
-                q_out.put(StopIteration)
-            q_out.close()
-            q_out.join_thread()
-            log.debug("Terminating WorkerProcess {}".format(pid))
         self.p = []
         for _ in range(num_worker):
             self.p.append(
-                mp.Process(target=fn,
+                mp.Process(target=worker_process_runner,
                     args=(self.e, self.barrier, self.q_in, self.q_out, worker_type) + args,
                     kwargs=kwargs))
             self.p[-1].start()
@@ -178,32 +186,36 @@ class WorkerProcess():
 
 
 
+def sink_process_runner(e, q_in, sink_type, *args, **kwargs):
+    pid = '(PID: {})'.format(os.getpid())
+    log.debug("Started WriterProcess {}".format(pid))
+    sink = sink_type(*args, **kwargs)
+    while not e.is_set():
+        try:
+            obj = q_in.get(block=True, timeout=1)
+        except queue.Empty:
+            obj = None
+        if obj is StopIteration:
+            log.debug("Received StopIteration in WriterProcess {}".format(pid))
+            e.set()
+            break
+        elif obj is not None:
+            try:
+                sink(*obj)
+            except Exception as ex:
+                log.error("Exception in sink (Proceeding with remaining jobs):\n{}".format(str(ex)))
+        else:
+            continue
+    log.debug("Terminating WriterProcess {}".format(pid))
+
+
+
+
 class SinkProcess():
     def __init__(self, input_queue, sink_type, args=(), kwargs={}):
         self.e = mp.Event()
         self.q_in = input_queue
-        def fn(e, q_in, sink_type, *args, **kwargs):
-            pid = '(PID: {})'.format(os.getpid())
-            log.debug("Started WriterProcess {}".format(pid))
-            sink = sink_type(*args, **kwargs)
-            while not e.is_set():
-                try:
-                    obj = q_in.get(block=True, timeout=1)
-                except queue.Empty:
-                    obj = None
-                if obj is StopIteration:
-                    log.debug("Received StopIteration in WriterProcess {}".format(pid))
-                    e.set()
-                    break
-                elif obj is not None:
-                    try:
-                        sink(*obj)
-                    except Exception as ex:
-                        log.error("Exception in sink (Proceeding with remaining jobs):\n{}".format(str(ex)))
-                else:
-                    continue
-            log.debug("Terminating WriterProcess {}".format(pid))
-        self.p = mp.Process(target=fn,
+        self.p = mp.Process(target=sink_process_runner,
             args=(self.e, self.q_in, sink_type) + args,
             kwargs=kwargs)
         self.p.start()
