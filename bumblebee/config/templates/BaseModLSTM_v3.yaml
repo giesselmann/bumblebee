@@ -48,7 +48,7 @@ params:
         - 64
     num_classes: 2
 
-ds_train:
-    fpr_rate:
-        0: 0.0
-        1: 0.5
+#ds_train:
+#    fp_rate:
+#        0: 0.0
+#        1: 0.5

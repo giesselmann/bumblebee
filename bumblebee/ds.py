@@ -156,14 +156,14 @@ class ModDataset(torch.utils.data.Dataset):
             self.total = sum(feature_count)
         log.info("Found {} {} sites".format(self.total, 'train' if train else 'eval'))
         self.features = mp.Array('Q', self.total, lock=False)
-        fpr_rate = config.get('fpr_rate')
-        if fpr_rate is None:
+        fp_rate = config.get('fp_rate')
+        if fp_rate is None:
             # copy feature rowid into shared memory
             it = (id for value in feature_ids.values() for id in value[:min_feature_count])
             for i, rowid in enumerate(it):
                 self.features[i] = rowid
             random.shuffle(self.features)
-            self.fpr_labels = False
+            self.fp_labels = False
         else:
             # copy feature rowid and sample random false labels
             # with given rate
@@ -171,10 +171,10 @@ class ModDataset(torch.utils.data.Dataset):
             replacements = {label:[x for x in mod_ids if x!=label]
                 for label in mod_ids}
             it = ((id, key) for key, value in feature_ids.items() for id in value[:min_feature_count])
-            self.fpr_labels = True
+            self.fp_labels = True
             for i, (rowid, label) in enumerate(it):
                 self.features[i] = rowid
-                self.labels[i] = random.choice(replacements[label]) if np.random.rand() < fpr_rate[label] else label
+                self.labels[i] = random.choice(replacements[label]) if np.random.rand() < fp_rate[label] else label
         # init if running in main process
         if not torch.utils.data.get_worker_info():
             self.init_db()
@@ -188,7 +188,7 @@ class ModDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         label, length, kmers, offsets, features = self.db.get_feature(
                 self.features[index])
-        if self.fpr_labels:
+        if self.fp_labels:
             label = self.labels[index]
         kmers_padd = np.zeros(self.max_features, dtype=np.int64)
         offsets_padd = np.zeros(self.max_features, dtype=np.int64)

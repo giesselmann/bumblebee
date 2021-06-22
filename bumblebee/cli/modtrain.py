@@ -64,7 +64,7 @@ def main(args):
 
     # load model config
     run_config = os.path.join(output_dir, 'config.yaml')
-    pkg_config = pkg.resource_filename('bumblebee', 'config/{}.yaml'.format(args.config))
+    pkg_config = pkg.resource_filename('bumblebee', 'config/templates/{}.yaml'.format(args.config))
     if os.path.isfile(run_config):
         # resume training with existing config
         with open(run_config, 'r') as fp:

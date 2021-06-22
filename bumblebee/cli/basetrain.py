@@ -60,7 +60,7 @@ def _load_config(name, output_dir):
     # load config
     run_config = os.path.join(output_dir, 'config.yaml')
     pkg_config = pkg.resource_filename('bumblebee',
-        'config/{}.yaml'.format(name))
+        'config//templates/{}.yaml'.format(name))
     pkg_config = name if os.path.isfile(name) else pkg_config
     if os.path.isfile(run_config):
         # resume training with existing config
