@@ -188,7 +188,7 @@ def main(args):
     if os.path.isfile(pkg_model):
         # load model weights from repository
         log.info("Loading model weights file {}".format(pkg_model))
-        state_dict = torch.load(pkg_model)
+        state_dict = torch.load(pkg_model, map_location=device)
     else:
         log.error("Could not find weights file")
         exit(-1)
