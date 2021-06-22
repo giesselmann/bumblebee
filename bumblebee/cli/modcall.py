@@ -219,7 +219,7 @@ def main(args):
     aligner = WorkerProcess(src.output_queue, EventAligner,
         args=(),
         kwargs={'min_score':args.min_score},
-        num_worker=4)
+        num_worker=args.nproc)
     extractor = WorkerProcess(aligner.output_queue, SiteExtractor,
         args=(config,),
         kwargs={},
@@ -232,7 +232,7 @@ def main(args):
         kwargs={})
     # predict in main Process using CUDA
     pid = '(PID: {})'.format(os.getpid())
-    with tqdm.tqdm(desc='Processing', unit='reads') as pbar:
+    with tqdm.tqdm(desc='Processing', unit='alignments') as pbar:
         while True:
             try:
                 obj = extractor_queue.get(block=True, timeout=1)
@@ -281,6 +281,7 @@ def argparser():
     parser.add_argument("ref", type=str, help='Alignment reference file')
     parser.add_argument("--model", default='', type=str)
     parser.add_argument("--device", default=0, type=int)
+    parser.add_argument("--nproc", default=4, type=int)
     parser.add_argument("--min_seq_length", default=500, type=int, metavar='int',
         help='Minimum sequence length (default: %(default)s)')
     parser.add_argument("--max_seq_length", default=50000, type=int, metavar='int',
