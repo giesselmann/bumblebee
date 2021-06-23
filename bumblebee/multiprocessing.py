@@ -45,6 +45,9 @@ class StateFunction():
     def call(self):
         raise NotImplementedError
 
+    def last(self):
+        return None
+
 
 
 
@@ -58,6 +61,9 @@ class StateIterator():
     def call(self):
         raise NotImplementedError
 
+    def last(self):
+        return None
+
 
 
 
@@ -65,6 +71,7 @@ def source_process_runner(e, q, src_type, *args, **kwargs):
     pid = '(PID: {})'.format(os.getpid())
     log.debug("Started ReaderProcess {}".format(pid))
     src = src_type(*args, **kwargs)
+    assert isinstance(src, StateIterator)
     try:
         for obj in src():
             q.put(obj)

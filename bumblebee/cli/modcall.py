@@ -49,25 +49,33 @@ log = logging.getLogger(__name__)
 
 
 # Extract target sites from each aligned reead
-class SiteExtractor(StateIterator):
+class SiteExtractor(StateFunction):
     def __init__(self, config):
-        super(StateIterator).__init__()
+        super(StateFunction).__init__()
         self.pattern = Pattern(config['pattern'], config['extension'])
         read_normalizer = ReadNormalizer()
         self.read_aligner = ReadAligner(read_normalizer)
         self.max_features = config['max_features']
 
     def call(self, read, df_events, score):
-        for pos, feature_begin, df_feature in read.feature_sites(df_events,
-                self.pattern, self.read_aligner.pm.k):
-            if df_feature.shape[0] <= self.max_features and df_feature.shape[0] > 1:
-                yield (read.ref_span,
-                       pos,
-                       df_feature.shape[0],
-                       df_feature.kmer,
-                       df_feature.index.values - feature_begin,
-                       df_feature[['event_min', 'event_mean', 'event_median',
-                                   'event_std', 'event_max', 'event_length']])
+        it = ((read.ref_span,
+            pos,
+            df_feature.shape[0],
+            df_feature.kmer,
+            df_feature.index.values - feature_begin,
+            df_feature[['event_min', 'event_mean', 'event_median',
+                       'event_std', 'event_max', 'event_length']])
+            for pos, feature_begin, df_feature
+            in read.feature_sites(df_events,
+                self.pattern, self.read_aligner.pm.k)
+            if df_feature.shape[0] <= self.max_features
+            and df_feature.shape[0] > 1)
+        try:
+            # will throw if iterator is empty
+            ref_span, pos, length, kmers, offsets, featurs = zip(*it)
+            return ref_span, pos, length, kmers, offsets, featurs
+        except ValueError:
+            return None
 
 
 
@@ -80,7 +88,7 @@ class ModCaller(StateIterator):
         self.max_features = config['max_features']
         self.model = model
         self.device = device
-        self.batch_size = 256
+        self.batch_size = 64
         self.ref_spans = []
         self.inputs = []
 
@@ -115,6 +123,7 @@ class ModCaller(StateIterator):
         inputs = [self.__padded_tensor__(*input)
             for input in self.inputs[:self.batch_size]]
         predictions = self.__predict__(inputs)
+        #predictions = [(0, 1) for _ in range(len(inputs))]
         del self.ref_spans[:self.batch_size]
         del self.inputs[:self.batch_size]
         for ref_span, position, prediction in zip(ref_spans,
@@ -124,14 +133,14 @@ class ModCaller(StateIterator):
     def call(self, ref_span, position, length, kmer, offsets, features):
         # split read in batches
         #log.debug("Calling read {}".format(read.name))
-        self.ref_spans.append((ref_span, position))
-        self.inputs.append((length, kmer, offsets, features))
+        self.ref_spans.extend(zip(ref_span, position))
+        self.inputs.extend(zip(length, kmer, offsets, features))
         if len(self.inputs) >= self.batch_size:
             for x in self.__process_batch__():
                 yield x
 
     def close(self):
-        if len(self.inputs) > 0:
+        while len(self.inputs) > 0:
             for x in self.__process_batch__():
                 yield x
 
@@ -216,7 +225,8 @@ def main(args):
     src = SourceProcess(ReadSource,
         args=(args.fast5, args.bam, args.ref),
         kwargs={'min_seq_length':args.min_seq_length,
-                'max_seq_length':args.max_seq_length})
+                'max_seq_length':args.max_seq_length,
+                'pbar':True})
     aligner = WorkerProcess(src.output_queue, EventAligner,
         args=(),
         kwargs={'min_score':args.min_score},
@@ -224,34 +234,32 @@ def main(args):
     extractor = WorkerProcess(aligner.output_queue, SiteExtractor,
         args=(config,),
         kwargs={},
-        num_worker=4)
+        num_worker=1)
     extractor_queue = extractor.output_queue
     caller = ModCaller(config, model, device)
-    writer_queue =mp.Queue(32)
+    writer_queue =mp.Queue(256)
     writer = SinkProcess(writer_queue, RecordWriter,
         args=(config,),
         kwargs={})
     # predict in main Process using CUDA
     pid = '(PID: {})'.format(os.getpid())
-    with tqdm.tqdm(desc='Processing', unit='sites') as pbar:
-        while True:
+    while True:
+        try:
+            obj = extractor_queue.get(block=True, timeout=1)
+        except queue.Empty:
+            obj = None
+        if obj is StopIteration:
+            log.debug("Received StopIteration in MainProcess {}".format(pid))
+            break
+        elif obj is not None:
             try:
-                obj = extractor_queue.get(block=True, timeout=1)
-            except queue.Empty:
-                obj = None
-            if obj is StopIteration:
-                log.debug("Received StopIteration in MainProcess {}".format(pid))
-                break
-            elif obj is not None:
-                try:
-                    for res in caller(*obj):
-                        writer_queue.put(res)
-                        pbar.update(1)
-                except Exception as ex:
-                    log.error("Exception in MainProcess (Proceeding with remaining jobs):\n {}".format(str(ex)))
-                    continue
-            else:
+                for res in caller(*obj):
+                    writer_queue.put(res)
+            except Exception as ex:
+                log.error("Exception in MainProcess (Proceeding with remaining jobs):\n {}".format(str(ex)))
                 continue
+        else:
+            continue
     # process remaining samples
     for res in caller.close():
         writer_queue.put(res)

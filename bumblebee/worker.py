@@ -26,24 +26,26 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import logging
+import tqdm
 
 from bumblebee.fast5 import Fast5Index
 from bumblebee.ref import Reference
 from bumblebee.alignment import AlignmentIndex
 from bumblebee.read import Read, ReadNormalizer, ReadAligner
-from bumblebee.multiprocessing import StateFunction
+from bumblebee.multiprocessing import StateFunction, StateIterator
 
 
 log = logging.getLogger(__name__)
 
 
 # parse reads from fast5 and bam input
-class ReadSource(StateFunction):
+class ReadSource(StateIterator):
     def __init__(self, fast5, bam, ref_file,
                  filter_secondary=False, filter_supplementary=False,
                  min_seq_length=500, max_seq_length=10000,
-                 lazy_index=True):
-        super(StateFunction).__init__()
+                 lazy_index=True,
+                 pbar=False):
+        super(StateIterator).__init__()
         self.mapping_counter = 0
         self.f5_idx = Fast5Index(fast5, lazy_index=lazy_index)
         self.algn_idx = AlignmentIndex(bam, ref_file,
@@ -51,8 +53,13 @@ class ReadSource(StateFunction):
             filter_supplementary=filter_supplementary)
         self.min_seq_length = min_seq_length
         self.max_seq_length = max_seq_length
+        self.pbar = None
+        if pbar:
+            self.pbar = tqdm.tqdm(desc='Processing', unit=' alignments')
 
     def __del__(self):
+        if self.pbar is not None:
+            self.pbar.close()
         log.info("Loaded {} mappings from disk.".format(self.mapping_counter))
 
     def call(self):
@@ -70,6 +77,8 @@ class ReadSource(StateFunction):
             read = Read(read_signal, ref_span=ref_span)
             yield (read, )
             self.mapping_counter += 1
+            if self.pbar is not None:
+                self.pbar.update(1)
 
 
 
