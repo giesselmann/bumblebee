@@ -81,14 +81,14 @@ class SiteExtractor(StateFunction):
 
 
 # predict modification for each read and target site
-class ModCaller(StateIterator):
+class ModCaller(StateFunction):
     def __init__(self, config, model, device):
         super(StateFunction).__init__()
         # config
         self.max_features = config['max_features']
         self.model = model
         self.device = device
-        self.batch_size = 64
+        self.batch_size = 256
         self.ref_spans = []
         self.inputs = []
 
@@ -122,13 +122,11 @@ class ModCaller(StateIterator):
         ref_spans, positions = zip(*self.ref_spans[:self.batch_size])
         inputs = [self.__padded_tensor__(*input)
             for input in self.inputs[:self.batch_size]]
-        predictions = self.__predict__(inputs)
-        #predictions = [(0, 1) for _ in range(len(inputs))]
+        #predictions = self.__predict__(inputs)
+        predictions = [(0, 1) for _ in range(len(inputs))]
         del self.ref_spans[:self.batch_size]
         del self.inputs[:self.batch_size]
-        for ref_span, position, prediction in zip(ref_spans,
-            positions, predictions):
-            yield ref_span, position, prediction
+        return ref_spans, positions, predictions
 
     def call(self, ref_span, position, length, kmer, offsets, features):
         # split read in batches
@@ -136,13 +134,12 @@ class ModCaller(StateIterator):
         self.ref_spans.extend(zip(ref_span, position))
         self.inputs.extend(zip(length, kmer, offsets, features))
         if len(self.inputs) >= self.batch_size:
-            for x in self.__process_batch__():
-                yield x
+            return self.__process_batch__()
 
-    def close(self):
+    def last(self):
         while len(self.inputs) > 0:
-            for x in self.__process_batch__():
-                yield x
+            return self.__process_batch__()
+
 
 
 
@@ -155,21 +152,21 @@ class RecordWriter(StateFunction):
     def __del__(self):
         log.info("Processed {} sites.".format(self.site_counter))
 
-    def call(self, ref_span, template_pos, predictions):
+    def call(self, ref_spans, template_pos, predictions):
         # write features
-        self.site_counter += 1
-        #log.debug("writing {} with {} sites".format(ref_span.qname, len(predictions)))
-        strand = '-' if ref_span.is_reverse else '+'
-        chr = ref_span.rname
-        value = str(np.argmax(predictions))
-        print('\t'.join([
-            chr,
-            str(template_pos),
-            str(template_pos+self.length),
-            ref_span.qname,
-            value,
-            strand] +
-            [str(p) for p in predictions]))
+        for ref_span, pos, pred in zip(ref_spans, template_pos, predictions):
+            strand = '-' if ref_span.is_reverse else '+'
+            chr = ref_span.rname
+            value = str(np.argmax(pred))
+            print('\t'.join([
+                chr,
+                str(pos),
+                str(pos+self.length),
+                ref_span.qname,
+                value,
+                strand] +
+                [str(p) for p in pred]))
+            self.site_counter += 1
 
 
 
@@ -234,7 +231,7 @@ def main(args):
     extractor = WorkerProcess(aligner.output_queue, SiteExtractor,
         args=(config,),
         kwargs={},
-        num_worker=1)
+        num_worker=2)
     extractor_queue = extractor.output_queue
     caller = ModCaller(config, model, device)
     writer_queue =mp.Queue(256)
@@ -253,15 +250,16 @@ def main(args):
             break
         elif obj is not None:
             try:
-                for res in caller(*obj):
-                    writer_queue.put(res)
+                res = caller(*obj)
+                writer_queue.put(res)
             except Exception as ex:
                 log.error("Exception in MainProcess (Proceeding with remaining jobs):\n {}".format(str(ex)))
                 continue
         else:
             continue
     # process remaining samples
-    for res in caller.close():
+    res = caller.last()
+    if res is not None:
         writer_queue.put(res)
     writer_queue.put(StopIteration)
     writer_queue.close()
