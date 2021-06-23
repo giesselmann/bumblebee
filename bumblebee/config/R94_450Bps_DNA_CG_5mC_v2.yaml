@@ -1,0 +1,21 @@
+model: BaseModLSTM_v3
+params:
+  d_model: 256
+  dropout: 0.3
+  embedding_dim: 64
+  feature_window: 20
+  input_nn_dims:
+  - 64
+  - 128
+  - 256
+  num_blocks: 3
+  num_classes: 2
+  num_features: 6
+  num_kmers: 4096
+  num_layer: 2
+  output_nn_dims:
+  - 256
+  - 128
+  - 64
+  padding_idx: 0
+  rnn_type: LSTM
