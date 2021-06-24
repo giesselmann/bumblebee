@@ -19,3 +19,6 @@ params:
   - 64
   padding_idx: 0
   rnn_type: LSTM
+pattern: CG
+extension: 7
+max_features: 40

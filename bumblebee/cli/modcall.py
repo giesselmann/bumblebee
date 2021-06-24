@@ -122,8 +122,8 @@ class ModCaller(StateFunction):
         ref_spans, positions = zip(*self.ref_spans[:self.batch_size])
         inputs = [self.__padded_tensor__(*input)
             for input in self.inputs[:self.batch_size]]
-        #predictions = self.__predict__(inputs)
-        predictions = [(0, 1) for _ in range(len(inputs))]
+        predictions = self.__predict__(inputs)
+        #predictions = [(0, 1) for _ in range(len(inputs))]
         del self.ref_spans[:self.batch_size]
         del self.inputs[:self.batch_size]
         return ref_spans, positions, predictions

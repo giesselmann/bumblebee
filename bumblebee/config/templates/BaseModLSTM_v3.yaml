@@ -41,7 +41,7 @@ params:
     rnn_type: 'LSTM'
     d_model: 256
     num_layer: 2
-    num_blocks: 3
+    num_blocks: 4
     output_nn_dims:
         - 256
         - 128

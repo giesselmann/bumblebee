@@ -119,6 +119,7 @@ def worker_process_runner(e, barrier, q_in, q_out, worker_type, *args, **kwargs)
     pid = '(PID: {})'.format(os.getpid())
     log.debug("Started Worker {}".format(pid))
     worker = worker_type(*args, **kwargs)
+    assert isinstance(worker, StateFunction) or isinstance(worker, StateIterator)
     while not e.is_set():
         try:
             obj = q_in.get(block=True, timeout=1)
@@ -137,9 +138,6 @@ def worker_process_runner(e, barrier, q_in, q_out, worker_type, *args, **kwargs)
                 elif isinstance(worker, StateIterator):
                     for res in worker(*obj):
                         q_out.put(res)
-                else:
-                    raise NotImplementedError("Worker object must be derived from StateFunction or StateIterator")
-                    break
             except Exception as ex:
                 log.error("Exception in worker (Proceeding with remaining jobs):\n {}".format(str(ex)))
                 continue
