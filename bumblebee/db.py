@@ -104,7 +104,8 @@ def __init_filter_tables__(cursor):
         rowid INTEGER PRIMARY KEY,
         chr TEXT NOT NULL,
         strand INT1,
-        pos INT4
+        pos INT4,
+        weight INT4
         )
     """
     cursor.execute(sql_cmd.format('train'))
@@ -238,8 +239,11 @@ class ModDatabase():
         self.cursor.execute("DELETE FROM eval;")
         self.connection.commit()
 
-    def insert_filter(self, chr, strand, pos, table='train'):
-        self.cursor.execute("INSERT INTO {table} (chr, strand, pos) VALUES ('{chr}', {strand}, {pos});".format(table=table, chr=chr, strand=strand, pos=pos))
+    def insert_filter(self, chr, strand, pos, weight=1, table='train'):
+        self.cursor.execute("INSERT INTO {table} (chr, strand, pos, weight) VALUES ('{chr}', {strand}, {pos}, {weight});".format(
+            table=table, chr=chr,
+            strand=strand, pos=pos,
+            weight=weight))
 
     def get_feature_ids(self, mod_id, max_features=32, train=True, min_score=1.0):
         self.cursor.execute("SELECT sites.rowid FROM reads JOIN sites ON reads.rowid = sites.readid JOIN {table} ON reads.chr = {table}.chr AND reads.strand = {table}.strand AND sites.pos = {table}.pos WHERE sites.class = {mod_id} AND reads.score >= {min_score} AND sites.count <= {max_features} AND sites.count > 0;".format(

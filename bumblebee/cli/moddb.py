@@ -158,12 +158,13 @@ def main(args):
         # get validation samples from all context frequencies
         val_ids = set(np.linspace(0, len(context_positions), int(args.split * len(context_positions)), endpoint=False, dtype=int))
         for i, (context, positions) in tqdm.tqdm(enumerate(context_positions), desc='Writing', total=len(context_positions)):
+            weight = len(positions)
             if i in val_ids:
                 for p in positions:
-                    db.insert_filter(*p, table='eval')
+                    db.insert_filter(*p, weight=weight, table='eval')
             else:
                 for p in positions:
-                    db.insert_filter(*p, table='train')
+                    db.insert_filter(*p, weight=weight, table='train')
         db.commit()
         del db
         db = ModDatabase(args.db, require_index=True)
