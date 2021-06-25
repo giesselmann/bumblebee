@@ -246,7 +246,7 @@ class ModDatabase():
             weight=weight))
 
     def get_feature_ids(self, mod_id, min_score=1.0, max_features=32, min_weight=1, max_weight=None, train=True):
-        self.cursor.execute("SELECT sites.rowid FROM reads JOIN sites ON reads.rowid = sites.readid JOIN {table} ON reads.chr = {table}.chr AND reads.strand = {table}.strand AND sites.pos = {table}.pos WHERE sites.class = {mod_id} AND reads.score >= {min_score} AND sites.count <= {max_features} AND sites.count > 0 AND {table}.weight >= {min_weight} AND {table}.weight <= {max_weight};".format(
+        self.cursor.execute("SELECT sites.rowid, {table}.weight FROM reads JOIN sites ON reads.rowid = sites.readid JOIN {table} ON reads.chr = {table}.chr AND reads.strand = {table}.strand AND sites.pos = {table}.pos WHERE sites.class = {mod_id} AND reads.score >= {min_score} AND sites.count <= {max_features} AND sites.count > 0 AND {table}.weight >= {min_weight} AND {table}.weight <= {max_weight};".format(
             table='train' if train else 'eval',
             mod_id=mod_id,
             min_score=min_score,
@@ -254,7 +254,7 @@ class ModDatabase():
             min_weight=min_weight,
             max_weight=max_weight or sys.maxsize - 1
         ))
-        return [x[0] for x in self.cursor]
+        return [tuple(x) for x in self.cursor]
 
     # get single feature
     def get_feature(self, feature_id):

@@ -90,6 +90,8 @@ def main(args):
     ds_train = ModDataset(args.db, args.mod_ids,
                 max_features=args.max_features,
                 min_score=args.min_score,
+                min_weight=args.min_weight,
+                max_weight=args.max_weight,
                 config=config.get('ds_train') or {})
     if args.train_fraction < 1.0:
         ds_train = torch.utils.data.Subset(ds_train,
@@ -132,7 +134,7 @@ def main(args):
         exit(-1)
 
     # model summary
-    _, _batch = next(iter(dl_eval))
+    _, _, _batch = next(iter(dl_eval))
     summary(model,
         input_data=[_batch['lengths'],
                     _batch['kmers'],
@@ -197,7 +199,7 @@ def main(args):
     writer = SummaryWriter(output_dir, purge_step=step_total, max_queue=50)
 
     # train step
-    def train_step(labels, batch):
+    def train_step(labels, weights, batch):
         labels = labels.to(device)
         lengths = batch['lengths']
         kmers = batch['kmers'].to(device)
@@ -213,6 +215,8 @@ def main(args):
             loss = criterion(logits, labels)
             if model_loss is not None:
                 loss += model_loss
+            scale = 1/weights
+            loss *= scale / torch.sum(scale) * args.batch_size
             loss = torch.mean(loss)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
@@ -220,7 +224,7 @@ def main(args):
         return loss.item(), accuracy, metrics
 
     # eval step
-    def eval_step(labels, batch, swa=False):
+    def eval_step(labels, weights, batch, swa=False):
         with torch.no_grad():
             labels = labels.to(device)
             lengths = batch['lengths']
@@ -271,9 +275,10 @@ def main(args):
     for epoch in range(last_epoch + 1, max_epochs + 1):
         dl_eval_iter = iter(dl_eval)
         with tqdm.tqdm(desc='Epoch {}'.format(epoch), total=len(dl_train)) as pbar:
-            for step, (labels, batch) in enumerate(dl_train):
+            for step, (labels, weights, batch) in enumerate(dl_train):
                 # train step
-                _train_loss, _train_acc, metrics = train_step(labels, batch)
+                _train_loss, _train_acc, metrics = train_step(labels,
+                    weights, batch)
                 train_loss.append(_train_loss)
                 train_acc.append(_train_acc)
                 writer.add_scalar('training/loss', _train_loss, step_total)
@@ -291,8 +296,9 @@ def main(args):
                     lr_scheduler.step()
                 # eval step
                 if step % eval_rate == 0:
-                    labels, batch = next(dl_eval_iter)
-                    _eval_loss, _eval_acc, kwout = eval_step(labels, batch,
+                    labels, weights, batch = next(dl_eval_iter)
+                    _eval_loss, _eval_acc, kwout = eval_step(labels,
+                        weights, batch,
                         swa=step_total > swa_start_step)
                     eval_loss.append(_eval_loss)
                     eval_acc.append(_eval_acc)
@@ -347,6 +353,8 @@ def argparser():
     parser.add_argument("--device", default=0, type=int)
     parser.add_argument("--min_score", default=1.0, type=float)
     parser.add_argument("--max_features", default=40, type=int)
+    parser.add_argument("--min_weight", default=1, type=int)
+    parser.add_argument("--max_weight", default=10000, type=int)
     parser.add_argument("--batch_size", default=64, type=int)
     parser.add_argument("--batch_echo", default=0, type=int)
     parser.add_argument("--train_fraction", default=1.0, type=float)

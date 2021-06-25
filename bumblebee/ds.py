@@ -131,7 +131,7 @@ class ModDataset(torch.utils.data.Dataset):
     def __init__(self, db_file, mod_ids,
                  train=True, balance=True,
                  max_features=32, min_score=1.0,
-                 min_weight=1, max_weight=10000j,
+                 min_weight=1, max_weight=None,
                  config={}):
         self.db_file = db_file
         self.max_features = max_features
@@ -143,7 +143,7 @@ class ModDataset(torch.utils.data.Dataset):
             train=train,
             min_score=min_score,
             min_weight=min_weight, max_weight=max_weight) for mod_id in mod_ids}
-        feature_count = [len(feature_ids) for feature_ids in feature_ids.values()]
+        feature_count = [len(fids) for fids in feature_ids.values()]
         # truncate to smallest class
         if balance:
             min_feature_count = min(feature_count)
@@ -158,12 +158,14 @@ class ModDataset(torch.utils.data.Dataset):
             self.total = sum(feature_count)
         log.info("Found {} {} sites".format(self.total, 'train' if train else 'eval'))
         self.features = mp.Array('Q', self.total, lock=False)
+        self.weights = mp.Array('Q', self.total, lock=False)
         fp_rate = config.get('fp_rate')
         if fp_rate is None:
             # copy feature rowid into shared memory
             it = (id for value in feature_ids.values() for id in value[:min_feature_count])
-            for i, rowid in enumerate(it):
-                self.features[i] = rowid
+            for i, id_weight in enumerate(it):
+                self.features[i] = id_weight[0]
+                self.weights[i] = id_weight[1]
             random.shuffle(self.features)
             self.fp_labels = False
         else:
@@ -174,8 +176,9 @@ class ModDataset(torch.utils.data.Dataset):
                 for label in mod_ids}
             it = ((id, key) for key, value in feature_ids.items() for id in value[:min_feature_count])
             self.fp_labels = True
-            for i, (rowid, label) in enumerate(it):
-                self.features[i] = rowid
+            for i, (id_weight, label) in enumerate(it):
+                self.features[i] = id_weight[0]
+                self.weights[i] = id_weight[1]
                 self.labels[i] = random.choice(replacements[label]) if np.random.rand() < fp_rate[label] else label
         # init if running in main process
         if not torch.utils.data.get_worker_info():
@@ -190,6 +193,7 @@ class ModDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         label, length, kmers, offsets, features = self.db.get_feature(
                 self.features[index])
+        weight = self.weights[index]
         if self.fp_labels:
             label = self.labels[index]
         kmers_padd = np.zeros(self.max_features, dtype=np.int64)
@@ -198,59 +202,8 @@ class ModDataset(torch.utils.data.Dataset):
         kmers_padd[:length] = kmers
         offsets_padd[:length] = [offset + 1 for offset in offsets]
         features_padd[:length, :] = features
-        return (label, {'lengths': length,
-                        'kmers': kmers_padd,
-                        'offsets': offsets_padd,
-                        'features': features_padd})
-
-
-
-
-
-# dataset yielding batches of (class, lengths, kmers, features)
-class BatchedModDataset(torch.utils.data.Dataset):
-    def __init__(self, db, mod_ids,
-                train=True, balance=True,
-                batch_size=32, max_features=32,
-                min_score=1.0):
-        self.db = db
-        self.mod_ids = mod_ids
-        self.train = train
-        self.batch_size = batch_size
-        self.max_features = max_features
-        # init batch ids
-        print("Preparing {} dataset:".format('training' if train else 'evaluation'))
-        print("\tRead feature ids...")
-        self.feature_ids = {mod_id:db.get_feature_ids(mod_id, max_features=max_features, train=train, min_score=min_score) for mod_id in mod_ids}
-        # balance dataset
-        if balance:
-            min_feature_count = min([len(feature_ids) for feature_ids in self.feature_ids.values()])
-            self.feature_ids = {mod_id:feature_ids[:min_feature_count] for mod_id, feature_ids in self.feature_ids.items()}
-        self.feature_ids = [x for feature_ids in self.feature_ids.values() for x in feature_ids]
-        random.shuffle(self.feature_ids)
-        print("\tWrite batch ids...")
-        self.feature_ids = self.feature_ids[:len(self.feature_ids)-len(self.feature_ids)%batch_size]
-        self.db.set_feature_batch(self.__feature_batch_iter__(), train=train)
-
-    def __feature_batch_iter__(self):
-        for i, feature_id in enumerate(self.feature_ids):
-            yield feature_id, i // self.batch_size
-
-    def __len__(self):
-        return len(self.feature_ids) // self.batch_size
-
-    def __getitem__(self, index):
-        labels, lengths, kmers, features = self.db.get_feature_batch(index, train=self.train)
-        # zero padd kmers and features
-        kmers_padd = np.zeros((self.batch_size, self.max_features), dtype=np.int64)
-        features_padd = np.zeros((self.batch_size, self.max_features, 6), dtype=np.float32)
-        for i, l in enumerate(lengths):
-            kmers_padd[i, 0:l] = kmers[i]
-            features_padd[i, 0:l, :] = np.array(features[i], dtype=np.float32)
-        return (np.array(labels), {'lengths': np.array(lengths),
-                                    'kmers': kmers_padd,
-                                    'features': features_padd})
-
-    def shuffle(self):
-        random.shuffle(self.feature_ids)
-        self.db.set_feature_batch(self.__feature_batch_iter__(), train=self.train)
+        return (label, weight,
+                {'lengths': length,
+                 'kmers': kmers_padd,
+                 'offsets': offsets_padd,
+                 'features': features_padd})
