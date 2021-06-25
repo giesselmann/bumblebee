@@ -131,6 +131,7 @@ class ModDataset(torch.utils.data.Dataset):
     def __init__(self, db_file, mod_ids,
                  train=True, balance=True,
                  max_features=32, min_score=1.0,
+                 min_weight=1, max_weight=10000j,
                  config={}):
         self.db_file = db_file
         self.max_features = max_features
@@ -140,7 +141,8 @@ class ModDataset(torch.utils.data.Dataset):
         feature_ids = {mod_id:db.get_feature_ids(mod_id,
             max_features=max_features,
             train=train,
-            min_score=min_score) for mod_id in mod_ids}
+            min_score=min_score,
+            min_weight=min_weight, max_weight=max_weight) for mod_id in mod_ids}
         feature_count = [len(feature_ids) for feature_ids in feature_ids.values()]
         # truncate to smallest class
         if balance:

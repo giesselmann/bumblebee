@@ -233,10 +233,10 @@ class ModDatabase():
                 print(row)
 
     def reset_split(self):
+        # delete existing filter
+        self.cursor.execute("DROP TABLE IF EXISTS train;")
+        self.cursor.execute("DROP TABLE IF EXISTS eval;")
         __init_filter_tables__(self.cursor)
-        # delete existing rows
-        self.cursor.execute("DROP TABLE train;")
-        self.cursor.execute("DROP TABLE eval;")
         self.connection.commit()
 
     def insert_filter(self, chr, strand, pos, weight=1, table='train'):
