@@ -201,6 +201,7 @@ def main(args):
     # train step
     def train_step(labels, weights, batch):
         labels = labels.to(device)
+        weights = weights.to(device)
         lengths = batch['lengths']
         kmers = batch['kmers'].to(device)
         offsets = batch['offsets'].to(device)
@@ -227,6 +228,7 @@ def main(args):
     def eval_step(labels, weights, batch, swa=False):
         with torch.no_grad():
             labels = labels.to(device)
+            weights = weights.to(device)
             lengths = batch['lengths']
             kmers = batch['kmers'].to(device)
             offsets = batch['offsets'].to(device)
