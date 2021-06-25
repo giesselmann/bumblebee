@@ -25,7 +25,7 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
-import os
+import os, sys
 import logging
 import sqlite3
 import itertools
@@ -235,8 +235,8 @@ class ModDatabase():
     def reset_split(self):
         __init_filter_tables__(self.cursor)
         # delete existing rows
-        self.cursor.execute("DELETE FROM train;")
-        self.cursor.execute("DELETE FROM eval;")
+        self.cursor.execute("DROP TABLE train;")
+        self.cursor.execute("DROP TABLE eval;")
         self.connection.commit()
 
     def insert_filter(self, chr, strand, pos, weight=1, table='train'):
@@ -245,17 +245,19 @@ class ModDatabase():
             strand=strand, pos=pos,
             weight=weight))
 
-    def get_feature_ids(self, mod_id, max_features=32, train=True, min_score=1.0):
-        self.cursor.execute("SELECT sites.rowid FROM reads JOIN sites ON reads.rowid = sites.readid JOIN {table} ON reads.chr = {table}.chr AND reads.strand = {table}.strand AND sites.pos = {table}.pos WHERE sites.class = {mod_id} AND reads.score >= {min_score} AND sites.count <= {max_features} AND sites.count > 0;".format(
+    def get_feature_ids(self, mod_id, min_score=1.0, max_features=32, min_weight=1, max_weight=None, train=True):
+        self.cursor.execute("SELECT sites.rowid FROM reads JOIN sites ON reads.rowid = sites.readid JOIN {table} ON reads.chr = {table}.chr AND reads.strand = {table}.strand AND sites.pos = {table}.pos WHERE sites.class = {mod_id} AND reads.score >= {min_score} AND sites.count <= {max_features} AND sites.count > 0 AND {table}.weight >= {min_weight} AND {table}.weight <= {max_weight};".format(
             table='train' if train else 'eval',
             mod_id=mod_id,
             min_score=min_score,
-            max_features=max_features
+            max_features=max_features,
+            min_weight=min_weight,
+            max_weight=max_weight or sys.maxsize - 1
         ))
         return [x[0] for x in self.cursor]
 
     # get single feature
-    def get_feature(self, feature_id, include_offset=False):
+    def get_feature(self, feature_id):
         self.cursor.execute("SELECT class, kmer, offset, min, mean, median, std, max, length FROM sites JOIN features ON sites.rowid = features.siteid WHERE sites.rowid = {} ORDER BY enum;".format(feature_id))
         try:
             mod_ids, kmers, offsets, features = zip(*[(x[0], x[1], x[2], x[3:])
