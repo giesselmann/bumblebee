@@ -1,6 +1,6 @@
 # \CONFIG\-------------------------------------------------------------------------
 #
-#  CONTENTS      : R94_450Bps_DNA_CG_5mC_v2
+#  CONTENTS      : R94_450Bps_DNA_CG_5mC_v3
 #
 #  DESCRIPTION   : Nanopore Basecalling
 #
@@ -35,7 +35,7 @@ params:
   - 64
   - 128
   - 256
-  num_blocks: 3
+  num_blocks: 4
   num_classes: 2
   num_features: 6
   num_kmers: 4096
