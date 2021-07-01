@@ -36,8 +36,8 @@ params:
         - 64
         - 128
         - 256
-    d_model: 256
-    num_heads: 4
+    d_model: 384
+    num_heads: 6
     num_layer: 4
     act: 'relu'
     output_nn_dims:
