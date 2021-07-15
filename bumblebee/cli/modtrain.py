@@ -216,8 +216,9 @@ def main(args):
             loss = criterion(logits, labels)
             if model_loss is not None:
                 loss += model_loss
-            scale = 1/weights
-            loss *= scale / torch.sum(scale) * args.batch_size
+            if args.weighted:
+                scale = 1/weights
+                loss *= scale / torch.sum(scale) * args.batch_size
             loss = torch.mean(loss)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
@@ -357,6 +358,7 @@ def argparser():
     parser.add_argument("--max_features", default=40, type=int)
     parser.add_argument("--min_weight", default=1, type=int)
     parser.add_argument("--max_weight", default=10000, type=int)
+    parser.add_argument("--weighted", action='store_true')
     parser.add_argument("--batch_size", default=64, type=int)
     parser.add_argument("--batch_echo", default=0, type=int)
     parser.add_argument("--train_fraction", default=1.0, type=float)
