@@ -156,7 +156,7 @@ def worker_process_runner(e, barrier, q_in, q_out, worker_type, *args, **kwargs)
 
 
 class WorkerProcess():
-    def __init__(self, input_queue, worker_type, args=(), kwargs={}, queue_len=32, num_worker=1):
+    def __init__(self, input_queue, worker_type, args=(), kwargs={}, queue_len=64, num_worker=1):
         self.q_in = input_queue
         self.q_out = mp.Queue(queue_len)
         self.e = mp.Event()

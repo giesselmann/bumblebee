@@ -31,7 +31,7 @@ import tqdm
 from bumblebee.fast5 import Fast5Index
 from bumblebee.ref import Reference
 from bumblebee.alignment import AlignmentIndex
-from bumblebee.read import Read, ReadNormalizer, ReadAligner
+from bumblebee.read import Read, ReadNormalizer, ReadAligner, Pattern
 from bumblebee.multiprocessing import StateFunction, StateIterator
 
 
@@ -100,3 +100,43 @@ class EventAligner(StateFunction):
         else:
             #log.debug("Aligned read {} with score {}".format(read.name, score))
             return read, df_events, score
+
+
+
+
+# align read signal to reference sequence and extract feature sites
+class SiteExtractor(StateFunction):
+    def __init__(self, min_score=0.0, config={}):
+        super(StateFunction).__init__()
+        self.min_score = min_score
+        read_normalizer = ReadNormalizer()
+        self.read_aligner = ReadAligner(read_normalizer)
+        self.pattern = Pattern(config['pattern'], config['extension'])
+        self.max_features = config['max_features']
+
+    def call(self, read):
+        score, df_events = read.event_alignments(self.read_aligner)
+        if score < self.min_score or df_events.shape[0] == 0:
+            log.debug("Droping read {} with alignment score {:.3f}".format(
+                read.name, score))
+            return None
+        else:
+            #log.debug("Aligned read {} with score {}".format(read.name, score))
+            it = ((read.ref_span,
+                pos,
+                df_feature.shape[0],
+                df_feature.kmer,
+                df_feature.index.values - feature_begin,
+                df_feature[['event_min', 'event_mean', 'event_median',
+                           'event_std', 'event_max', 'event_length']])
+                for pos, feature_begin, df_feature
+                in read.feature_sites(df_events,
+                    self.pattern, self.read_aligner.pm.k)
+                if df_feature.shape[0] <= self.max_features
+                and df_feature.shape[0] > 1)
+            try:
+                # will throw if iterator is empty
+                ref_span, pos, length, kmers, offsets, featurs = zip(*it)
+                return ref_span, pos, length, kmers, offsets, featurs
+            except ValueError:
+                return None

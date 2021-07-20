@@ -42,40 +42,40 @@ import bumblebee.modnn
 from bumblebee.read import Pattern, ReadNormalizer, ReadAligner
 from bumblebee.multiprocessing import StateFunction, StateIterator
 from bumblebee.multiprocessing import SourceProcess, WorkerProcess, SinkProcess
-from bumblebee.worker import ReadSource, EventAligner
+from bumblebee.worker import ReadSource, EventAligner, SiteExtractor
 
 
 log = logging.getLogger(__name__)
 
 
 # Extract target sites from each aligned reead
-class SiteExtractor(StateFunction):
-    def __init__(self, config):
-        super(StateFunction).__init__()
-        self.pattern = Pattern(config['pattern'], config['extension'])
-        read_normalizer = ReadNormalizer()
-        self.read_aligner = ReadAligner(read_normalizer)
-        self.max_features = config['max_features']
-
-    def call(self, read, df_events, score):
-        it = ((read.ref_span,
-            pos,
-            df_feature.shape[0],
-            df_feature.kmer,
-            df_feature.index.values - feature_begin,
-            df_feature[['event_min', 'event_mean', 'event_median',
-                       'event_std', 'event_max', 'event_length']])
-            for pos, feature_begin, df_feature
-            in read.feature_sites(df_events,
-                self.pattern, self.read_aligner.pm.k)
-            if df_feature.shape[0] <= self.max_features
-            and df_feature.shape[0] > 1)
-        try:
-            # will throw if iterator is empty
-            ref_span, pos, length, kmers, offsets, featurs = zip(*it)
-            return ref_span, pos, length, kmers, offsets, featurs
-        except ValueError:
-            return None
+#class SiteExtractor(StateFunction):
+#    def __init__(self, config):
+#        super(StateFunction).__init__()
+#        self.pattern = Pattern(config['pattern'], config['extension'])
+#        read_normalizer = ReadNormalizer()
+#        self.read_aligner = ReadAligner(read_normalizer)
+#        self.max_features = config['max_features']
+#
+#    def call(self, read, df_events, score):
+#        it = ((read.ref_span,
+#            pos,
+#            df_feature.shape[0],
+#            df_feature.kmer,
+#            df_feature.index.values - feature_begin,
+#            df_feature[['event_min', 'event_mean', 'event_median',
+#                       'event_std', 'event_max', 'event_length']])
+#            for pos, feature_begin, df_feature
+#            in read.feature_sites(df_events,
+#                self.pattern, self.read_aligner.pm.k)
+#            if df_feature.shape[0] <= self.max_features
+#            and df_feature.shape[0] > 1)
+#        try:
+#            # will throw if iterator is empty
+#            ref_span, pos, length, kmers, offsets, featurs = zip(*it)
+#            return ref_span, pos, length, kmers, offsets, featurs
+#        except ValueError:
+#            return None
 
 
 
@@ -224,15 +224,20 @@ def main(args):
         kwargs={'min_seq_length':args.min_seq_length,
                 'max_seq_length':args.max_seq_length,
                 'pbar':True})
-    aligner = WorkerProcess(src.output_queue, EventAligner,
+    aligner = WorkerProcess(src.output_queue, SiteExtractor,
         args=(),
-        kwargs={'min_score':args.min_score},
+        kwargs={'min_score':args.min_score,
+                'config':config},
         num_worker=args.nproc)
-    extractor = WorkerProcess(aligner.output_queue, SiteExtractor,
-        args=(config,),
-        kwargs={},
-        num_worker=2)
-    extractor_queue = extractor.output_queue
+    #aligner = WorkerProcess(src.output_queue, EventAligner,
+    #    args=(),
+    #    kwargs={'min_score':args.min_score},
+    #    num_worker=args.nproc)
+    #extractor = WorkerProcess(aligner.output_queue, SiteExtractor,
+    #    args=(config,),
+    #    kwargs={},
+    #    num_worker=4)
+    extractor_queue = aligner.output_queue
     caller = ModCaller(config, model, device)
     writer_queue =mp.Queue(256)
     writer = SinkProcess(writer_queue, RecordWriter,
@@ -255,6 +260,13 @@ def main(args):
             except Exception as ex:
                 log.error("Exception in MainProcess (Proceeding with remaining jobs):\n {}".format(str(ex)))
                 continue
+            # debug queue sizes
+            #log.info("SrcQ: {}, AlgnQ: {}, ExtQ: {}, WQ: {}".format(
+            #    src.output_queue.qsize(),
+            #    aligner.output_queue.qsize(),
+            #    extractor.output_queue.qsize(),
+            #    writer_queue.qsize()
+            #))
         else:
             continue
     # process remaining samples
