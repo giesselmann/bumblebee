@@ -25,7 +25,9 @@
 #
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
+import sys
 import logging
+import tqdm
 import textwrap
 from argparse import RawDescriptionHelpFormatter, ArgumentParser
 from bumblebee.cli import pm
@@ -48,7 +50,9 @@ def log_level(string):
 
 
 
-def setup_logger(level=logging.INFO):
+
+def setup_logger(level='info'):
+    level = log_level(level)
     handler = logging.StreamHandler()
     handler.setLevel(level)
     formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
@@ -67,8 +71,6 @@ def main():
     )
     parser.add_argument('-v', '--version',
         action='version', version='%(prog)s {}'.format(__version__))
-    parser.add_argument('--log', type=log_level, metavar='level', default='info',
-        choices=['error', 'warning', 'info', 'debug'], help='Log level')
 
     subparsers = parser.add_subparsers(
         title='subcommands',
@@ -90,7 +92,10 @@ def main():
 
     for module in modules:
         mod = globals()[module]
-        p = subparsers.add_parser(module, parents=[mod.argparser()])
+        mod_parser = mod.argparser()
+        mod_parser.add_argument('--log', metavar='log', default='info',
+            choices=['error', 'warning', 'info', 'debug'], help='Log level')
+        p = subparsers.add_parser(module, parents=[mod_parser])
         p.set_defaults(func=mod.main)
 
     args = parser.parse_args()

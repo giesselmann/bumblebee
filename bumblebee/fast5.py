@@ -45,6 +45,7 @@ class Fast5Index():
         elif os.path.isdir(input):
             self.batch_files = [os.path.join(dirpath, f) for dirpath, _, files in os.walk(input) for f in files if f.endswith('.fast5')]
         else:
+            log.error("Fast5 input {} is not an existing file or directory.".format(input))
             raise FileNotFoundError("Input {} is not an existing file or directory".format(input))
         self.index = None
         if not lazy_index:
@@ -68,6 +69,7 @@ class Fast5Index():
             with h5py.File(f, 'r') as fp:
                 read_ids = [Fast5Index.grp2id(grp) for grp in fp.keys()]
                 self.index.update(((read_id,f) for read_id in read_ids))
+        log.debug("Indexed fast5 input")
 
     # random access by read ID
     def __getitem__(self, key):

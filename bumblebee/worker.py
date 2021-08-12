@@ -42,17 +42,19 @@ log = logging.getLogger(__name__)
 class ReadSource(StateIterator):
     def __init__(self, fast5, bam, ref_file,
                  filter_secondary=False, filter_supplementary=False,
-                 min_seq_length=500, max_seq_length=10000,
+                 min_seq_length=500, max_seq_length=None,
                  lazy_index=True,
                  pbar=False):
         super(StateIterator).__init__()
         self.mapping_counter = 0
+        # TODO constructor can raise FileNotFoundError
         self.f5_idx = Fast5Index(fast5, lazy_index=lazy_index)
+        # TODO can raise
         self.algn_idx = AlignmentIndex(bam, ref_file,
             filter_secondary=filter_secondary,
             filter_supplementary=filter_supplementary)
-        self.min_seq_length = min_seq_length
-        self.max_seq_length = max_seq_length
+        self.seq_len_flt = (lambda x: x < min_seq_length or x > max_seq_length) if max_seq_length else (
+                            lambda x: x < min_seq_length)
         self.pbar = None
         if pbar:
             self.pbar = tqdm.tqdm(desc='Processing', unit=' alignments')
@@ -64,8 +66,7 @@ class ReadSource(StateIterator):
 
     def call(self):
         for i, ref_span in enumerate(self.algn_idx.records()):
-            if (len(ref_span.seq) < self.min_seq_length or
-                len(ref_span.seq) > self.max_seq_length):
+            if self.seq_len_flt(len(ref_span.seq)):
                 log.debug("Droping read {} with length {}".format(
                     ref_span.qname, len(ref_span.seq)))
                 continue

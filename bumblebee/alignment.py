@@ -132,7 +132,7 @@ class AlignmentIndex():
         elif input == '-' or input == 'stdin':
             self.stdin = True
         else:
-            log.error("Alignment input {} is not a file, directory or stdin.".format(input))
+            log.error("Alignment input {} is not an existing file, directory or stdin.".format(input))
             raise FileNotFoundError(input)
 
     def __parse_sam_mapping__(self, record):

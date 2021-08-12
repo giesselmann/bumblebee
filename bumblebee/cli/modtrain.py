@@ -217,8 +217,9 @@ def main(args):
             if model_loss is not None:
                 loss += model_loss
             if args.weighted:
-                scale = 1/weights
-                loss *= scale / torch.sum(scale) * args.batch_size
+                scale = 1 / (torch.log(weights) + 1)
+                #loss *= scale / torch.sum(scale) * args.batch_size
+                loss *= scale
             loss = torch.mean(loss)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad_norm)
@@ -229,7 +230,7 @@ def main(args):
     def eval_step(labels, weights, batch, swa=False):
         with torch.no_grad():
             labels = labels.to(device)
-            weights = weights.to(device)
+            #weights = weights.to(device)
             lengths = batch['lengths']
             kmers = batch['kmers'].to(device)
             offsets = batch['offsets'].to(device)

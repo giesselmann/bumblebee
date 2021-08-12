@@ -33,6 +33,7 @@ import tqdm
 import math
 import torch
 import queue
+import signal
 import numpy as np
 import pkg_resources as pkg
 import multiprocessing as mp
@@ -46,36 +47,6 @@ from bumblebee.worker import ReadSource, EventAligner, SiteExtractor
 
 
 log = logging.getLogger(__name__)
-
-
-# Extract target sites from each aligned reead
-#class SiteExtractor(StateFunction):
-#    def __init__(self, config):
-#        super(StateFunction).__init__()
-#        self.pattern = Pattern(config['pattern'], config['extension'])
-#        read_normalizer = ReadNormalizer()
-#        self.read_aligner = ReadAligner(read_normalizer)
-#        self.max_features = config['max_features']
-#
-#    def call(self, read, df_events, score):
-#        it = ((read.ref_span,
-#            pos,
-#            df_feature.shape[0],
-#            df_feature.kmer,
-#            df_feature.index.values - feature_begin,
-#            df_feature[['event_min', 'event_mean', 'event_median',
-#                       'event_std', 'event_max', 'event_length']])
-#            for pos, feature_begin, df_feature
-#            in read.feature_sites(df_events,
-#                self.pattern, self.read_aligner.pm.k)
-#            if df_feature.shape[0] <= self.max_features
-#            and df_feature.shape[0] > 1)
-#        try:
-#            # will throw if iterator is empty
-#            ref_span, pos, length, kmers, offsets, featurs = zip(*it)
-#            return ref_span, pos, length, kmers, offsets, featurs
-#        except ValueError:
-#            return None
 
 
 
@@ -172,10 +143,12 @@ class RecordWriter(StateFunction):
 
 
 def main(args):
-    mp.set_start_method('spawn')
-    use_cuda = torch.cuda.is_available()
+    #mp.set_start_method('spawn')
+    use_cuda = torch.cuda.is_available() and args.device is not None
     if use_cuda:
         torch.cuda.set_device(args.device)
+    else:
+        torch.set_num_threads(args.threads)
     device = torch.device("cuda:{}".format(args.device) if use_cuda else "cpu")
     log.info("Using device {}".format(device))
     # load config
@@ -213,62 +186,67 @@ def main(args):
             for key, value in state_dict.items() if 'module.' in key})
     else:
         model.load_state_dict(state_dict)
-    log.info("Loaded model")
 
     model.to(device)
     model.eval()
+    log.info("Loaded model")
 
+    # save default signal handlers
+    SIGINT_default_handler = signal.getsignal(signal.SIGINT)
+    SIGTERM_default_handler = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    
     # init worker pipeline
     src = SourceProcess(ReadSource,
         args=(args.fast5, args.bam, args.ref),
         kwargs={'min_seq_length':args.min_seq_length,
                 'max_seq_length':args.max_seq_length,
-                'pbar':True})
+                'pbar': True})
     aligner = WorkerProcess(src.output_queue, SiteExtractor,
         args=(),
         kwargs={'min_score':args.min_score,
                 'config':config},
         num_worker=args.nproc)
-    #aligner = WorkerProcess(src.output_queue, EventAligner,
-    #    args=(),
-    #    kwargs={'min_score':args.min_score},
-    #    num_worker=args.nproc)
-    #extractor = WorkerProcess(aligner.output_queue, SiteExtractor,
-    #    args=(config,),
-    #    kwargs={},
-    #    num_worker=4)
     extractor_queue = aligner.output_queue
     caller = ModCaller(config, model, device)
-    writer_queue =mp.Queue(256)
+    writer_queue =mp.Queue(64)
     writer = SinkProcess(writer_queue, RecordWriter,
         args=(config,),
         kwargs={})
+
+    # restore default signal handler
+    def signal_handler(signal, frame):
+        log.debug("Received interrupt, shutting down.")
+        src.terminate()
+        aligner.terminate()
+        writer.terminate()
+        exit(-1)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     # predict in main Process using CUDA
-    pid = '(PID: {})'.format(os.getpid())
+    # main loop
     while True:
         try:
-            obj = extractor_queue.get(block=True, timeout=1)
-        except queue.Empty:
-            obj = None
-        if obj is StopIteration:
-            log.debug("Received StopIteration in MainProcess {}".format(pid))
-            break
-        elif obj is not None:
             try:
+                obj = extractor_queue.get(block=True, timeout=1)
+            except queue.Empty:
+                obj = None
+            if obj is StopIteration:
+                # reader process is done
+                log.debug("Received StopIteration in MainProcess")
+                break
+            elif obj is not None:
                 res = caller(*obj)
                 writer_queue.put(res)
-            except Exception as ex:
-                log.error("Exception in MainProcess (Proceeding with remaining jobs):\n {}".format(str(ex)))
+            else:
                 continue
-            # debug queue sizes
-            #log.info("SrcQ: {}, AlgnQ: {}, ExtQ: {}, WQ: {}".format(
-            #    src.output_queue.qsize(),
-            #    aligner.output_queue.qsize(),
-            #    extractor.output_queue.qsize(),
-            #    writer_queue.qsize()
-            #))
-        else:
+        except Exception as ex:
+            log.error("Exception in MainProcess (Proceeding with remaining jobs):\n {}".format(str(ex)))
             continue
+
     # process remaining samples
     res = caller.last()
     if res is not None:
@@ -298,12 +276,13 @@ def argparser():
     parser.add_argument("fast5", type=str, help='Raw signal input (file/directory)')
     parser.add_argument("bam", type=str, help='Alignment input (file/directory)')
     parser.add_argument("ref", type=str, help='Alignment reference file')
-    parser.add_argument("--model", default='', type=str)
-    parser.add_argument("--device", default=0, type=int)
-    parser.add_argument("--nproc", default=4, type=int)
+    parser.add_argument("--model", default='', type=str, help='Modification model')
+    parser.add_argument("--nproc", default=4, type=int, help='Signal alignment processes')
+    parser.add_argument("--device", default=None, type=int, help='CUDA device if available')
+    parser.add_argument("--threads", default=16, type=int, help='Threads if running on CPU')
     parser.add_argument("--min_seq_length", default=500, type=int, metavar='int',
         help='Minimum sequence length (default: %(default)s)')
-    parser.add_argument("--max_seq_length", default=50000, type=int, metavar='int',
+    parser.add_argument("--max_seq_length", default=None, type=int, metavar='int',
         help='Maximum sequence length (default: %(default)s)')
     parser.add_argument("--min_score", default=1.0, type=float, metavar='float',
         help='Min. signal alignment score (default: %(default)s)')

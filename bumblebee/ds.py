@@ -193,7 +193,7 @@ class ModDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         label, length, kmers, offsets, features = self.db.get_feature(
                 self.features[index])
-        weight = self.weights[index]
+        weight = float(self.weights[index])
         if self.fp_labels:
             label = self.labels[index]
         kmers_padd = np.zeros(self.max_features, dtype=np.int64)
