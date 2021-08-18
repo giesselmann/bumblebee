@@ -49,8 +49,6 @@ from bumblebee.worker import ReadSource, EventAligner, SiteExtractor
 log = logging.getLogger(__name__)
 
 
-
-
 # predict modification for each read and target site
 class ModCaller(StateFunction):
     def __init__(self, config, model, device):
@@ -143,6 +141,7 @@ class RecordWriter(StateFunction):
 
 
 def main(args):
+    log.debug("Enter main (PID: {})".format(os.getpid()))
     #mp.set_start_method('spawn')
     use_cuda = torch.cuda.is_available() and args.device is not None
     if use_cuda:
@@ -278,7 +277,7 @@ def argparser():
     parser.add_argument("ref", type=str, help='Alignment reference file')
     parser.add_argument("--model", default='', type=str, help='Modification model')
     parser.add_argument("--nproc", default=4, type=int, help='Signal alignment processes')
-    parser.add_argument("--device", default=None, type=int, help='CUDA device if available')
+    parser.add_argument("--device", default=None, type=int, help='CUDA device ID if available')
     parser.add_argument("--threads", default=16, type=int, help='Threads if running on CPU')
     parser.add_argument("--min_seq_length", default=500, type=int, metavar='int',
         help='Minimum sequence length (default: %(default)s)')

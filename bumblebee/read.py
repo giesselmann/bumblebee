@@ -26,6 +26,7 @@
 # Written by Pay Giesselmann
 # ---------------------------------------------------------------------------------
 import os, re, string
+import logging
 import random
 import itertools
 import parasail
@@ -36,6 +37,8 @@ from scipy import ndimage
 
 from bumblebee.poremodel import PoreModel
 
+
+log = logging.getLogger(__name__)
 
 
 class Pattern():
@@ -133,8 +136,7 @@ class ReadNormalizer():
 
 
 class ReadAligner():
-    def __init__(self, normalizer,
-                 alphabet_size=32):
+    def __init__(self, normalizer, alphabet_size=32):
         self.normalizer = normalizer
         self.alphabet_size = alphabet_size
         assert alphabet_size <= len(string.ascii_letters)
@@ -164,18 +166,44 @@ class ReadAligner():
         quantiles = np.linspace(-self.normalizer.clip, self.normalizer.clip, len(self.alphabet))
         inds = np.digitize(x, quantiles).astype(np.int32) - 1
         return ''.join([self.alphabet[x] for x in inds])
-
+        
+    def __align__(self, ref_chars, read_chars, gap_open=2, gap_extension=6):
+        # query is genomic sequence span, reference is all read events
+        # query_len <= ref_len
+        result = parasail.sg_dx_trace_striped_32(ref_chars, read_chars, gap_open, gap_extension, self.matrix)
+        # mask of chars in mapped ref sequence
+        ref_msk = np.array([c != '-' for c in result.traceback.ref])
+        # ids of chars in mapped query sequence
+        read_idx = np.cumsum([c != '-' for c in result.traceback.query])
+        ref_pos = read_idx[ref_msk] - 1
+        return result.score / result.len_query, ref_pos
+        
+    def __tiled_align__(self, ref_chars, read_chars, gap_open=2, gap_extension=6):
+        tile_size = 5000
+        ref_pos = np.zeros(len(read_chars)) - 1
+        scores = [], lengths = []
+        for offset in range(0, len(ref_chars), tile_size):
+            tile = ref_chars[offset:offset+tile_size]
+            result = parasail.sg_dx_trace_striped_32(tile, read_chars, gap_open, gap_extension, self.matrix)
+            ref_msk = np.array([c != '-' for c in result.traceback.ref])
+            tile_msk = np.array([c != '-' for c in result.traceback.query])
+            tile_idx = np.cumsum(tile_msk)
+            
+            
+            # (len(read_chars), 1)
+            tile_pos = tile_idx[ref_msk] - 1
+            scores.append(result.score)
+            lenghts.append(result.len_query)
+        return np.sum(scores) / np.sum(lenghts), ref_pos
+        
     def __event_align__(self, ref_signal, read_signal):
         ref_chars = self.__sig2char__(ref_signal, self.alphabet)
         read_chars = self.__sig2char__(read_signal, self.alphabet)
-        gap_open = 2
-        gap_extension = 6
-        # query is genomic sequence span, reference is all read events
-        result = parasail.sg_dx_trace_striped_32(ref_chars, read_chars, gap_open, gap_extension, self.matrix)
-        ref_idx = np.cumsum([c != '-' for c in result.traceback.query])
-        ref_msk = np.array([c != '-' for c in result.traceback.ref])
-        sim_pos = ref_idx[ref_msk] - 1
-        return result.score / result.len_query, sim_pos
+        if len(read_chars) < 10000:
+            score, ref_pos = self.__align__(ref_chars, read_chars)
+        else:
+            score, ref_pos = self.__tiled_align__(ref_chars, read_chars)
+        return score, ref_pos
 
     def event_alignments(self, read):
         df_events = self.normalizer.events(read)

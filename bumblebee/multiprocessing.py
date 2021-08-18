@@ -163,9 +163,9 @@ def worker_process_runner(e_term, e_end, barrier, q_in, q_out, worker_type, *arg
                 continue
         else:
             break
-    # synchronize all worker
-    i = barrier.wait()
     if e_end.is_set():
+        # synchronize all worker
+        i = barrier.wait()
         # wait for empty output queue
         while not q_out.empty():
             time.sleep(0.1)
